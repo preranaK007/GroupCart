@@ -343,7 +343,7 @@ export class CartLedger {
         : `Everyone approved cart revision ${updated.revision}. Text “checkout” to finish a simulated checkout.`;
   }
 
-  completeMockCheckout(): string {
+  completeMockCheckout(payerMemberId?: string): string {
     const snapshot = this.snapshot();
     if (!snapshot.items.length) return "There isn’t a cart to check out yet.";
     const pending = snapshot.members.filter((member) => !member.approved).map((member) => member.name);
@@ -356,7 +356,10 @@ export class CartLedger {
     this.ctx.db.prepare(
       "UPDATE households SET revision = revision + 1, checked_out_revision = ? WHERE id = ?",
     ).run(snapshot.revision, this.ctx.householdId);
-    return `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    const reply = `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    // Splitwise: demo checkouts are always simulated (no network), so the summary is ready now.
+    const splitwiseNote = this.m.splitwise.summary(this.m.splitwise.recordCheckout(snapshot, payerMemberId, "mock"));
+    return splitwiseNote ? `${reply}\n\n${splitwiseNote}` : reply;
   }
 
   /** Reply to a pending “which one should I remove?” question. */

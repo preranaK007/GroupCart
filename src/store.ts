@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { maskHandle, normalizeHandle } from "./config.js";
 import type { KrogerCartAvailabilityIssue } from "./kroger.js";
+import { parseListCommand } from "./lists.js";
 import { CartLedger } from "./store/cartLedger.js";
 import { StoreContext, type StoreModules } from "./store/context.js";
+import { GoogleCalendarAccounts } from "./store/googleCalendarAccounts.js";
 import { KrogerCheckout } from "./store/krogerCheckout.js";
 import { ListCommands } from "./store/listCommands.js";
 import { ListText } from "./store/listText.js";
@@ -14,9 +17,12 @@ import { ProductSearch } from "./store/productSearch.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
 import { SharingSessions } from "./store/sharing.js";
+import { SPLITWISE_COMMAND_PATTERN, SPLITWISE_RETRY_PATTERN, SplitwiseLog } from "./store/splitwiseLog.js";
 import type {
   CartSnapshot,
   CartStoreOptions,
+  CheckoutHooks,
+  GoogleCalendarAccount,
   ListReminderClaim,
   Member,
   MemberConfig,
@@ -24,17 +30,33 @@ import type {
   ProductQuoter,
   ProductSearchFn,
   RecurringListSnapshot,
+  SplitwiseExpenseRecord,
+  SplitwiseExpenseStatus,
 } from "./store/types.js";
 
 export type {
   CartSnapshot,
   CartStoreOptions,
+  CheckoutHooks,
+  CompletedCheckout,
+  GoogleCalendarAccount,
   ListReminderClaim,
   Member,
   MemberConfig,
   ProductQuoter,
   RecurringListSnapshot,
+  SplitwiseExpenseRecord,
+  SplitwiseExpenseStatus,
 } from "./store/types.js";
+
+/**
+ * Phrases the store owns outright: cart commands, sharing sessions, and recurring-list commands. index.ts sends
+ * these straight to the store so no feature command handler (src/platform.ts runCommands) can intercept them.
+ */
+export function isStoreCommand(text: string): boolean {
+  const normalized = text.trim();
+  return CART_COMMAND_PATTERN.test(normalized) || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
+}
 
 const CANCEL_PATTERN = /^(cancel|never mind|nevermind)$/i;
 /** Commands that stay available while a Kroger checkout is mid-flight. */
@@ -73,17 +95,46 @@ export class CartStore {
     m.lists = new RecurringLists(this.#ctx, m);
     m.listCommands = new ListCommands(this.#ctx, m);
     m.listText = new ListText(this.#ctx, m);
+    m.splitwise = new SplitwiseLog(this.#ctx);
+    m.calendarAccounts = new GoogleCalendarAccounts(this.#ctx);
     this.#m = m;
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
-    const insert = this.#ctx.db.prepare(
+    const { db, householdId } = this.#ctx;
+    const insert = db.prepare(
       "INSERT INTO members (id, household_id, handle, name) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET name = excluded.name",
     );
+    const update = db.prepare("UPDATE members SET handle = ?, name = ? WHERE id = ?");
+    // Rows were keyed by the raw configured handle. Reuse any existing row whose handle normalizes to one of the
+    // member's handles so member ids (and their cart items, shares, and approvals) survive normalization or reordering.
+    const existing = this.getMembers();
+    const claimed = new Set<string>();
     for (const member of configuredMembers) {
-      insert.run(this.#memberId(member.handle), this.#ctx.householdId, member.handle, member.name);
+      const handle = normalizeHandle(member.handle);
+      const handles = new Set([handle, ...(member.aliases ?? []).map(normalizeHandle)]);
+      const matches = existing.filter((row) => !claimed.has(row.id) && handles.has(normalizeHandle(row.handle)));
+      const row = matches.find((candidate) => candidate.handle === handle) ?? matches[0];
+      if (!row) {
+        insert.run(this.#memberId(handle), householdId, handle, member.name);
+        continue;
+      }
+      claimed.add(row.id);
+      if (row.handle !== handle || row.name !== member.name) update.run(handle, member.name, row.id);
+      for (const duplicate of matches.filter((candidate) => candidate !== row)) {
+        console.warn(`GroupCart database has a separate member row for ${maskHandle(duplicate.handle)}, now listed under ${member.name}; it is kept so existing cart history stays valid.`);
+      }
     }
     return this.getMembers();
+  }
+
+  /** Shared SQLite handle for feature modules outside src/store/ (they create their own tables). */
+  get database(): DatabaseSync {
+    return this.#ctx.db;
+  }
+
+  get household(): string {
+    return this.#ctx.householdId;
   }
 
   getMembers(): Member[] {
@@ -93,7 +144,52 @@ export class CartStore {
   memberForHandle(handle: string): Member | undefined {
     return this.#ctx.db.prepare(
       "SELECT id, handle, name FROM members WHERE household_id = ? AND handle = ?",
-    ).get(this.#ctx.householdId, handle) as Member | undefined;
+    ).get(this.#ctx.householdId, normalizeHandle(handle)) as Member | undefined;
+  }
+
+  /** Records a handled message id (e.g. a group membership event); returns false if it was already processed. */
+  markMessageProcessed(messageId: string, reply: string | null): boolean {
+    return Number(this.#ctx.db.prepare(
+      "INSERT OR IGNORE INTO processed_messages (message_id, reply_text, processed_at) VALUES (?, ?, ?)",
+    ).run(messageId, reply, new Date().toISOString()).changes) > 0;
+  }
+
+  /**
+   * When GroupCart last asked this member something they still have to answer (a numbered product or list pick,
+   * milk kind, which item to remove, a clear confirmation, or whose Kroger account to use), as an ISO time; null
+   * when nothing is pending. Feature modules use it to leave bare numbers and “cancel” to the store.
+   */
+  pendingQuestionAt(memberId: string): string | null {
+    const queries = [
+      "SELECT created_at AS at FROM pending_product_choices WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_product_batches WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_clarifications WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_item_cancellations WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_cart_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_selections WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_kroger_checkouts WHERE requester_id = ? AND status = 'choosing_account'",
+    ];
+    let latest: string | null = null;
+    for (const sql of queries) {
+      const row = this.#ctx.db.prepare(sql).get(memberId) as { at: string } | undefined;
+      if (row?.at && (!latest || row.at > latest)) latest = row.at;
+    }
+    return latest;
+  }
+
+  hasPendingChoice(memberId: string): boolean {
+    return this.pendingQuestionAt(memberId) !== null;
+  }
+
+  /** Previously recorded reply for an idempotent command (undefined when the message is new). */
+  recordedReply(messageId: string): string | null | undefined {
+    return this.#ctx.existingReply(messageId);
+  }
+
+  /** Records a reply produced outside the cart flow (e.g. the "calendar" command) for idempotency. */
+  recordCommandReply(messageId: string, reply: string): void {
+    this.#ctx.saveMessageReply(messageId, reply);
   }
 
   /** Demo / sample-catalog conversation (also the fallback for live-mode commands). */
@@ -108,7 +204,9 @@ export class CartStore {
       const normalized = text.trim();
       let reply: string | null;
       const sharingCommand = parseSharingCommand(normalized);
-      const listReply = sharingCommand ? undefined : listCommands.catalogListTurn(memberId, normalized);
+      // Splitwise status is a plain command: it never feeds a pending list selection.
+      const splitwiseCommand = SPLITWISE_COMMAND_PATTERN.test(normalized);
+      const listReply = sharingCommand || splitwiseCommand ? undefined : listCommands.catalogListTurn(memberId, normalized);
 
       if (sharingCommand) {
         reply = sharingCommand.action === "start"
@@ -136,7 +234,10 @@ export class CartStore {
       } else if (/^(approve|approve cart|confirm cart)$/i.test(normalized)) {
         reply = cart.approveCurrentRevision(memberId);
       } else if (/^(checkout|finish checkout)$/i.test(normalized)) {
-        reply = cart.completeMockCheckout();
+        reply = cart.completeMockCheckout(memberId);
+      } else if (splitwiseCommand) {
+        // Splitwise status (retry needs the network, so only the async live path runs it).
+        reply = this.#m.splitwise.statusReply();
       } else {
         reply = cart.catalogItemText(memberId, normalized);
       }
@@ -180,8 +281,15 @@ export class CartStore {
     const listCommand = listCommands.listCommandFor(memberId, normalized);
     const isCommand = CART_COMMAND_PATTERN.test(normalized)
       || isHelpRequest(normalized)
+      || SPLITWISE_COMMAND_PATTERN.test(normalized)
       || (/^yes$/i.test(normalized) && cart.hasPendingClearAll(memberId))
       || listCommand !== undefined;
+
+    // Splitwise retry needs the network, so it only runs here (status is answered by processIncomingText).
+    if (SPLITWISE_RETRY_PATTERN.test(normalized)) {
+      const retryReply = await this.#m.splitwise.retryReply();
+      if (retryReply !== undefined) return this.#ctx.saveAndReturnReply(messageId, retryReply);
+    }
 
     // Kroger checkout.
     if (/^(checkout|finish checkout)$/i.test(normalized)) {
@@ -267,10 +375,10 @@ export class CartStore {
     }
   }
 
-  completeMockCheckout(): { ok: boolean; message: string } {
+  completeMockCheckout(payerMemberId?: string): { ok: boolean; message: string } {
     this.#ctx.db.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.#m.cart.completeMockCheckout();
+      const result = this.#m.cart.completeMockCheckout(payerMemberId);
       const ok = result.startsWith("Mock checkout complete");
       this.#ctx.db.exec("COMMIT");
       return { ok, message: result };
@@ -324,6 +432,53 @@ export class CartStore {
     this.#ctx.db.prepare(
       "INSERT INTO app_state (key, value) VALUES ('photon_cursor', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
     ).run(String(cursor));
+  }
+
+  // --- Splitwise expense log (src/store/splitwiseLog.ts; hooks implemented by src/splitwise.ts) ---
+  setCheckoutHooks(hooks: CheckoutHooks | undefined): void {
+    this.#m.splitwise.setHooks(hooks);
+  }
+
+  /** Inserts the log row for a checkout; returns false if one already exists (idempotent). */
+  insertSplitwiseExpense(record: SplitwiseExpenseRecord): boolean {
+    return this.#m.splitwise.insert(record);
+  }
+
+  getSplitwiseExpense(checkoutKey: string): SplitwiseExpenseRecord | undefined {
+    return this.#m.splitwise.get(checkoutKey);
+  }
+
+  latestSplitwiseExpense(): SplitwiseExpenseRecord | undefined {
+    return this.#m.splitwise.latest();
+  }
+
+  /** Atomically moves a row from one of `from` to 'sending'; only one caller can win. */
+  claimSplitwiseExpense(checkoutKey: string, from: SplitwiseExpenseStatus[]): boolean {
+    return this.#m.splitwise.claim(checkoutKey, from);
+  }
+
+  updateSplitwiseExpense(
+    checkoutKey: string,
+    patch: { status: SplitwiseExpenseStatus; expenseId?: string | null; expenseUrl?: string | null; error?: string | null },
+  ): void {
+    this.#m.splitwise.update(checkoutKey, patch);
+  }
+
+  // --- Google Calendar (src/store/googleCalendarAccounts.ts; used by src/googleCalendar.ts) ---
+  googleCalendarAccount(memberId: string): GoogleCalendarAccount | undefined {
+    return this.#m.calendarAccounts.account(memberId);
+  }
+
+  saveGoogleCalendarAccount(memberId: string, refreshToken: string, scope: string): void {
+    this.#m.calendarAccounts.save(memberId, refreshToken, scope);
+  }
+
+  markGoogleCalendarNeedsReconnect(memberId: string, reason: string): void {
+    this.#m.calendarAccounts.markNeedsReconnect(memberId, reason);
+  }
+
+  deleteGoogleCalendarAccount(memberId: string): void {
+    this.#m.calendarAccounts.delete(memberId);
   }
 
   close(): void {

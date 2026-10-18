@@ -1,3 +1,4 @@
+import { registeredHelp } from "../platform.js";
 import type { StoreContext } from "./context.js";
 
 export function helpMessage(ctx: StoreContext): string {
@@ -8,6 +9,7 @@ export function helpMessage(ctx: StoreContext): string {
     "Share: text “start sharing with Maya and Jordan” (household member names). From then on, every item any of you adds is split evenly among you until someone texts “stop sharing”. Items already in the cart keep their split.",
     "Review: “cart” shows items, total, budget, and each person’s share.",
     dashboardMessage(ctx),
+    `Calendar: “calendar” links the household calendar (${ctx.dashboardUrl.replace(/\/$/, "")}/calendar) and lists the next times everyone is free for a pickup or delivery.`,
     "Remove: say “remove bread” or “I don’t want bread anymore.” For all your items, say “clear mine.”",
     "Clear everyone’s cart: “clear all,” then “confirm clear all” (or “cancel clear all”).",
     "Undo: “undo” reverts the latest cart change; repeat to step back through recent changes.",
@@ -15,6 +17,9 @@ export function helpMessage(ctx: StoreContext): string {
     ctx.krogerCartEnabled
       ? "Approve/Kroger cart: everyone texts “approve,” then “checkout” checks availability at the configured store before asking whose Kroger account to use. If something appears unavailable, GroupCart suggests alternatives but never substitutes automatically; choose one with “replace 1 with 2,” or drop the item for everyone with “remove 1” (“remove unavailable” drops them all). Anyone can text “cancel checkout” during that review. Any changed list needs everyone’s approval again. After sign-in, available UPC items are added to Kroger; you finish ordering there. No order or payment is placed by GroupCart."
       : "Approve/checkout: in the local demo, checkout is simulated. Live Kroger cart transfer requires configured Kroger app credentials and Cart API access. GroupCart never places an order or charges anyone.",
+    "Splitwise: after checkout, GroupCart logs the total as one Splitwise expense paid by the shopper, with each person owing their share. Text “splitwise” (or “settle”) for the latest status, or “splitwise retry” if logging failed.",
+    // Lines registered by feature modules (chores, bills, web chat, ...) through src/platform.ts.
+    ...registeredHelp(),
     "Not sure what to say? Text “help” or “commands” anytime.",
   ].join("\n\n");
 }

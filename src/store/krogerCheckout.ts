@@ -371,8 +371,11 @@ export class KrogerCheckout {
       this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
       this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
       const message = `Added ${snapshot.items.length} item${snapshot.items.length === 1 ? "" : "s"} to ${accountName}’s Kroger cart. No order was placed or payment charged. Open Kroger to review the cart and finish checkout there.`;
+      // Splitwise: Kroger confirmed, so log the checkout (savepoint-isolated), then send it after commit.
+      const checkoutKey = this.m.splitwise.recordCheckout(snapshot, memberId, "kroger");
       this.ctx.db.exec("COMMIT");
-      return { ok: true, message };
+      const splitwiseNote = await this.m.splitwise.finishCheckoutLog(checkoutKey);
+      return { ok: true, message: splitwiseNote ? `${message}\n\n${splitwiseNote}` : message };
     } catch (error) {
       this.ctx.db.exec("ROLLBACK");
       throw error;

@@ -65,7 +65,8 @@ export type CartStoreOptions = {
   reminderHour?: number;
 };
 
-export type MemberConfig = { handle: string; name: string };
+/** `handle` is the member's primary (id-defining) handle; `aliases` are extra handles for the same person. */
+export type MemberConfig = { handle: string; name: string; aliases?: string[] };
 export type Member = { id: string; handle: string; name: string };
 export type ItemRow = {
   id: string;
@@ -120,3 +121,56 @@ export type CartSnapshot = {
 
 export type PendingKrogerCheckout = { requesterId: string; revision: number; selectedMemberId: string | null; status: string };
 export type ProductSearchFn = (query: string) => Promise<{ total: number; products: KrogerProduct[] }>;
+
+// --- Google Calendar (per-member free/busy connection; src/store/googleCalendarAccounts.ts) ---
+export type GoogleCalendarAccount = { memberId: string; refreshToken: string; scope: string; status: "connected" | "needs_reconnect"; lastError: string | null; connectedAt: string };
+
+// --- Splitwise expense log (src/store/splitwiseLog.ts, implemented by src/splitwise.ts) ---
+// A completed checkout handed to the checkout hooks. Shares come from the same
+// deterministic split as snapshot(), so they sum to totalCents.
+export type CompletedCheckout = {
+  checkoutKey: string;
+  householdId: string;
+  revision: number;
+  source: "mock" | "kroger";
+  payer: { id: string; name: string } | null;
+  totalCents: number;
+  items: Array<{ name: string; quantity: number; totalCents: number }>;
+  shares: Array<{ memberId: string; name: string; shareCents: number }>;
+  completedAt: string;
+};
+
+export type SplitwiseExpenseStatus = "pending" | "sending" | "logged" | "simulated" | "failed";
+
+export type SplitwiseExpenseRecord = {
+  checkoutKey: string;
+  revision: number;
+  source: "mock" | "kroger";
+  payerMemberId: string | null;
+  payerName: string | null;
+  totalCents: number;
+  currency: string;
+  description: string;
+  shares: Array<{ memberId: string; name: string; paidCents: number; owedCents: number; splitwiseUser: string | null }>;
+  request: Record<string, string> | null;
+  status: SplitwiseExpenseStatus;
+  mode: "live" | "simulated";
+  note: string | null;
+  expenseId: string | null;
+  expenseUrl: string | null;
+  error: string | null;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// Implemented by SplitwiseService. record() runs inside the checkout transaction
+// (isolated by a savepoint so it can never roll the checkout back); finish()
+// runs after commit and may call the network; neither may break checkout.
+export type CheckoutHooks = {
+  record(checkout: CompletedCheckout): void;
+  summary(checkoutKey: string): string | undefined;
+  finish(checkoutKey: string): Promise<string | undefined>;
+  status(): string;
+  retry(): Promise<string>;
+};

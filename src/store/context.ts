@@ -1,11 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { CartLedger } from "./cartLedger.js";
+import type { GoogleCalendarAccounts } from "./googleCalendarAccounts.js";
 import type { KrogerCheckout } from "./krogerCheckout.js";
 import type { ListCommands } from "./listCommands.js";
 import type { ListText } from "./listText.js";
 import type { ProductSearch } from "./productSearch.js";
 import type { RecurringLists } from "./recurringLists.js";
 import type { SharingSessions } from "./sharing.js";
+import type { SplitwiseLog } from "./splitwiseLog.js";
 import type { Member } from "./types.js";
 
 /** The feature modules behind CartStore. Each one can call the others through this registry. */
@@ -17,6 +19,10 @@ export type StoreModules = {
   lists: RecurringLists;
   listCommands: ListCommands;
   listText: ListText;
+  /** Splitwise expense log and checkout hooks (our integration). */
+  splitwise: SplitwiseLog;
+  /** Per-member Google Calendar connections (our integration). */
+  calendarAccounts: GoogleCalendarAccounts;
 };
 
 /** Database handle, household settings, and the reply/member helpers every module shares. */
