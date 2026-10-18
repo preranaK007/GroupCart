@@ -397,6 +397,9 @@ const script = String.raw`
       html += '</div>';
     });
     grid.innerHTML = html;
+    // --- Household events hook (src/ui/eventsPanel.ts draws events after each render) ---
+    document.dispatchEvent(new CustomEvent("gc:calendar-rendered", { detail: { data, startHour, endHour, ppm } }));
+    // --- end Household events hook ---
     const firstDay = grid.querySelector(".cal-day");
     grid.classList.toggle("narrow", Boolean(firstDay) && firstDay.clientWidth / lanes < 44);
     if (firstRender) {
@@ -499,9 +502,13 @@ body { margin:0; background:var(--gc-bg); color:var(--gc-text); font:14px/1.45 "
 @media (max-width:640px) { .gc-bar { padding:0 16px; gap:10px; } .gc-brand span:last-child { display:none; } .gc-main { padding:14px 16px 32px; } }
 `;
 
+// --- Household events on the calendar (src/ui/eventsPanel.ts) ---
+import { withHouseEvents } from "./ui/eventsPanel.js";
+// --- end Household events ---
+
 export function renderCalendarPage(): string {
   const page = renderCalendarBody();
-  return renderPage({ title: "Calendar", active: "calendar", styles: page.styles, body: page.body, script: page.script });
+  return renderPage(withHouseEvents({ title: "Calendar", active: "calendar", styles: page.styles, body: page.body, script: page.script }));
 }
 
 /** Standalone document (no shared shell); kept for reference/testing. */

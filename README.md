@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) shows the shared cart (with any active sharing session and the recurring weekly/biweekly/monthly lists, read-only), People (`/people`) shows everyone's profile, Settings (`/settings`) shows connections, and Chores (`/chores`), Bills (`/bills`), and Calendar (`/calendar`) are described below. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) has two tabs: Cart (the shared cart, with any active sharing session) and Lists (the recurring weekly/biweekly/monthly lists, read-only, plus one-off lists like "Party run"), People (`/people`) shows everyone's profile, Settings (`/settings`) shows connections, and Chores (`/chores`), Bills (`/bills`), and Calendar (`/calendar`) are described below. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
 
 ## Connect your Spectrum dedicated line
 
@@ -120,6 +120,12 @@ Open [http://127.0.0.1:3000/chores](http://127.0.0.1:3000/chores). A Mon–Sun w
 - **API:** `GET /api/chores?week=YYYY-MM-DD`; JSON `POST /api/chores` (create), `/api/chores/done`, `/undo`, `/skip`, `/assign`, `/delete`, `/restore`, `/away`.
 
 The local demo seeds sample chores and history (dishes, trash, vacuum, bathroom, plants, recycling, fridge) once; live mode starts empty. Data lives in `chore_*` tables in the same SQLite file.
+
+## One-off lists and household events
+
+Besides the recurring lists, the household can keep **one-off lists** for a single trip or occasion: `new list party run: chips, soda`, `add salsa to party run`, `remove soda from party run`, `party run to cart` (adds the open items to the cart as the sender, split by their sharing session), and `one-off lists`. They also live in the Lists tab on Groceries, where items can be checked off and, in the demo, moved to the cart. One-off list commands never claim the recurring-list phrases (`lists`, `weekly …`, `load weekly list`) or `start/stop sharing`.
+
+**Events and plans:** `add event house meeting Sunday 7pm`, `events`, `cancel event house meeting`, `plan house meeting 1h` (GroupCart suggests times from everyone's calendars; reply `1`–`3` to book). Casual messages such as “hey we all want to watch a movie” or “game night this week?” start a vote on a few free times; reply with numbers (`1 3`, `can’t do 2`), and `book 2` decides. Movie ideas: `add movie Dune`, `vote Dune`; RSVP with `I’m in` / `can’t make it`. A bare number goes to the plan vote unless GroupCart asked you a grocery question (product pick, milk kind, list selection) more recently. Booked events show on the Calendar page and the Home “Upcoming” card; GroupCart reminds the group a day and an hour before (through the same household group as other notifications). Connector tools: `list_lists`, `add_to_list`, `move_list_to_cart`, `list_events`, `add_event`, `suggest_event_times`, `plan_activity`, `vote`, `book_event`, `rsvp_event`. The demo seeds a one-off list, a few events, a game night, and a movie-night vote.
 
 ## Profiles, sign-in, and web chat
 

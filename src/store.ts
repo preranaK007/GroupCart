@@ -154,6 +154,34 @@ export class CartStore {
     ).run(messageId, reply, new Date().toISOString()).changes) > 0;
   }
 
+  /**
+   * When GroupCart last asked this member something they still have to answer (a numbered product or list pick,
+   * milk kind, which item to remove, a clear confirmation, or whose Kroger account to use), as an ISO time; null
+   * when nothing is pending. Feature modules use it to leave bare numbers and “cancel” to the store.
+   */
+  pendingQuestionAt(memberId: string): string | null {
+    const queries = [
+      "SELECT created_at AS at FROM pending_product_choices WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_product_batches WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_clarifications WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_item_cancellations WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_cart_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_selections WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_kroger_checkouts WHERE requester_id = ? AND status = 'choosing_account'",
+    ];
+    let latest: string | null = null;
+    for (const sql of queries) {
+      const row = this.#ctx.db.prepare(sql).get(memberId) as { at: string } | undefined;
+      if (row?.at && (!latest || row.at > latest)) latest = row.at;
+    }
+    return latest;
+  }
+
+  hasPendingChoice(memberId: string): boolean {
+    return this.pendingQuestionAt(memberId) !== null;
+  }
+
   /** Previously recorded reply for an idempotent command (undefined when the message is new). */
   recordedReply(messageId: string): string | null | undefined {
     return this.#ctx.existingReply(messageId);

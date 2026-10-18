@@ -60,11 +60,14 @@ test("sharing sessions decide the split, and checkout logs that split to Splitwi
   store.close();
 });
 
-test("splitwise status never feeds a pending recurring-list selection", () => {
+test("splitwise status never feeds a pending recurring-list selection; pending questions are visible to features", () => {
   const { store, alex } = newStore("splitwise-pending");
+  assert.equal(store.pendingQuestionAt(alex.id), null);
   assert.match(store.processIncomingText(id(), alex.id, "weekly: milk") ?? "", /which kind of milk/);
+  assert.equal(store.hasPendingChoice(alex.id), true, "other features leave bare numbers to the store now");
   assert.match(store.processIncomingText(id(), alex.id, "splitwise") ?? "", /Splitwise logging isn’t set up/);
   assert.match(store.processIncomingText(id(), alex.id, "1") ?? "", /Whole milk/);
+  assert.equal(store.pendingQuestionAt(alex.id), null);
   store.close();
 });
 

@@ -51,15 +51,12 @@ export function choresDueCard(): string {
   });
 }
 
+// --- Upcoming events card: real card lives in src/ui/eventsPanel.ts ---
+import { homeUpcomingCard } from "./eventsPanel.js";
 export function upcomingCard(): string {
-  return card({
-    id: "homeUpcoming",
-    title: "Upcoming",
-    icon: "calendar",
-    actions: button({ label: "Open", variant: "text", size: "sm", href: "/calendar" }),
-    body: emptyState({ icon: "clock", title: "No events", text: "Household events will show up here." }),
-  });
+  return homeUpcomingCard();
 }
+// --- end Upcoming events card ---
 
 // Bills branch: the live Balances card (net balances + next bill) lives in ./billsHome.ts.
 export { homeBalancesCard as balancesCard } from "./billsHome.js";

@@ -16,6 +16,7 @@ import { SplitwiseService } from "./splitwise.js";
 import { setupConnector } from "./connector.js";
 import { setupBills } from "./bills.js";
 import { setupChores } from "./chores.js";
+import { setupListsAndEvents } from "./listsEvents.js";
 import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 
@@ -75,6 +76,9 @@ setupBills({ store, liveMode });
 // --- Chores: rotations, nudges, /chores page, connector tools (src/chores.ts) ---
 setupChores({ store, demoMode: !liveMode });
 // --- end Chores ---
+// --- Lists & events: one-off named lists, household events and plans (src/listsEvents.ts) ---
+setupListsAndEvents({ store, calendar, demoMode: !liveMode, kroger: krogerClient });
+// --- end Lists & events ---
 
 // --- Shared member-message processing: the iMessage group loop and the web chat both use this, so a message
 // --- sent from the website is handled exactly like the same text from that member in the group.

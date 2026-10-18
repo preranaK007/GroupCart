@@ -2,9 +2,9 @@ import { chip, icon, infoTip, renderPage } from "./shell.js";
 
 /**
  * Groceries page (route "/groceries"): the shared cart. Rendered once; all data comes from GET /api/cart,
- * polled every 2.5 s. Sharing sessions and the recurring weekly/biweekly/monthly lists come from upstream's
- * store (`sharingSessions` in the snapshot, `lists` from store.listsSnapshot()) and are read-only here; they are
- * managed in the group chat. Demo-only controls (sample requests, catalog search,
+ * polled every 2.5 s. Active sharing sessions (upstream's `sharingSessions` in the snapshot) show as chips in
+ * the Split card; they are managed in the group chat. The recurring weekly/biweekly/monthly lists are shown
+ * read-only in the Lists tab (src/ui/listsPanel.ts). Demo-only controls (sample requests, catalog search,
  * approve, mock checkout) are hidden in live mode, and the server rejects
  * them there as well.
  */
@@ -95,16 +95,6 @@ const body = `
       <p class="gc-status" id="approvalStatus" role="status" aria-live="polite"></p>
     </section>
 
-    <section class="gc-card" id="recurringPanel" aria-labelledby="recurringTitle">
-      <div class="gc-card-head">
-        <h2 class="gc-card-title" id="recurringTitle">Recurring lists</h2>
-        <span class="gc-meta">Whole household</span>
-        <span class="gc-spacer"></span>
-        ${infoTip("Weekly, every-two-weeks, and monthly lists. Manage them in the group: “weekly: milk, eggs”, “load weekly list”, “weekly list on saturdays”.")}
-      </div>
-      <ul class="gc-list" id="recurringLists"></ul>
-    </section>
-
     <section class="gc-card" id="krogerPanel" aria-labelledby="krogerTitle">
       <div class="gc-card-head">
         <h2 class="gc-card-title" id="krogerTitle">Kroger</h2>
@@ -145,7 +135,6 @@ const styles = `
 .cart-how-note:empty { display:none; }
 .cart-sessions { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:var(--gc-space-3); }
 .cart-sessions:empty { display:none; }
-.cart-list-items { margin:4px 0 0; padding-left:18px; color:var(--gc-text-2); font-size:var(--gc-fs-sm); }
 .cart-price-sub { font-size:var(--gc-fs-xs); color:var(--gc-muted); text-align:right; font-weight:400; }
 @media (max-width: 760px) {
   .cart-compose { grid-template-columns:minmax(0,1fr); }
@@ -187,24 +176,6 @@ function renderSessions() {
   $("sessions").innerHTML = (latest.sharingSessions || []).map((session) =>
     '<span title="Since ' + esc(window.GC.time(new Date(session.startedAt))) + '. Text “stop sharing” to end it.">' + chip("Sharing: " + session.participantNames.join(", "), "accent", "users") + '</span>'
   ).join("");
-}
-
-function renderRecurringLists() {
-  const lists = latest.lists || [];
-  const shortDate = (iso) => new Date(iso).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
-  $("recurringLists").innerHTML = lists.map((list) => {
-    const status = !list.active ? chip("Not started", "neutral")
-      : !list.remindersEnabled ? chip("Paused", "neutral")
-      : list.dueNow ? chip("Due now", "warning", "clock")
-      : list.nextReminderAt ? chip("Next " + shortDate(list.nextReminderAt), "neutral", "clock") : "";
-    const loaded = list.lastLoadedAt ? " · loaded " + shortDate(list.lastLoadedAt) + (list.lastLoadedByName ? " by " + list.lastLoadedByName : "") : "";
-    const items = list.items.length
-      ? '<ul class="cart-list-items">' + list.items.map((item) => '<li>' + esc(item.quantity + " × " + item.name) + '</li>').join("") + '</ul>'
-      : '<div class="gc-list-sub">Empty. Text “' + esc(list.command) + ': …” to add items.</div>';
-    return '<li class="gc-list-item"><div class="gc-list-main"><div class="gc-list-title">' + esc(list.title) + '</div>'
-      + '<div class="gc-list-sub">' + status + '<span>' + esc("Due " + list.schedule + loaded) + '</span></div>' + items + '</div>'
-      + '<div class="gc-amount">' + (list.items.length ? "≈ " + dollars(list.estimatedCents) : "") + '</div></li>';
-  }).join("") || '<li class="gc-empty"><p class="gc-empty-text">No recurring lists.</p></li>';
 }
 
 function renderBudget() {
@@ -297,7 +268,6 @@ async function refresh() {
   renderBudget();
   renderItems();
   renderSessions();
-  renderRecurringLists();
   renderPeople();
   renderKroger();
   renderMemberSelect();
@@ -367,6 +337,10 @@ refresh().catch((error) => { $("mode").innerHTML = chip("Offline", "warning", "a
 setInterval(() => refresh().catch(showSyncError), 2500);
 `;
 
+// --- One-off lists tab (src/ui/listsPanel.ts) ---
+import { withListsTabs } from "./listsPanel.js";
+// --- end One-off lists tab ---
+
 export function renderCartPage(): string {
-  return renderPage({ title: "Groceries", active: "groceries", body, styles, actions, script });
+  return renderPage(withListsTabs({ title: "Groceries", active: "groceries", body, styles, actions, script }));
 }
