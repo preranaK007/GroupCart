@@ -52,6 +52,30 @@ export type ToolSpec = {
 
 export type ToolCaller = { memberId: string; memberName: string };
 
+/**
+ * A tool handler may return raw MCP content instead of a plain value, e.g. to hand bill
+ * screenshots to the caller's own Claude for reading (no server-side API key needed):
+ *   return { mcpContent: [{ type: "text", text: "..." }, { type: "image", data: base64, mimeType: "image/png" }] };
+ */
+export type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export type ToolResultWithContent = { mcpContent: McpContent[] };
+
+/**
+ * Remote access (LAN or tunnel). By default only loopback requests may use the web app; the connector
+ * serves /mcp remotely with its own token auth. A profiles/sign-in module can authorize other remote
+ * requests (e.g. a signed-in roommate's session cookie) by installing an authorizer.
+ */
+export type RemoteAuthorizer = (request: IncomingMessage, url: URL) => boolean;
+let remoteAuthorizer: RemoteAuthorizer | null = null;
+
+export function setRemoteAuthorizer(authorizer: RemoteAuthorizer | null): void {
+  remoteAuthorizer = authorizer;
+}
+
+export function isRemoteAuthorized(request: IncomingMessage, url: URL): boolean {
+  return remoteAuthorizer ? remoteAuthorizer(request, url) : false;
+}
+
 export type FeedEntry = { id: number; at: string; text: string };
 
 const commands: Array<{ name: string; handler: CommandHandler }> = [];
