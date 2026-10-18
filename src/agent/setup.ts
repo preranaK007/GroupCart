@@ -106,7 +106,9 @@ export function setupCoordinator(options: {
     if (request.method !== "POST" || !isSameOriginMutation(request)) { sendJson(response, 405, { error: "POST JSON from the GroupCart page." }); return true; }
     const body = await readJsonBody(request, 1_024);
     try {
-      sendJson(response, 200, typeof body.connect === "string" ? coordinator.connect(body.connect) : body.disconnect === true ? coordinator.disconnect() : coordinator.status());
+      if (typeof body.onlyWhenAsked === "boolean") coordinator.setOnlyWhenAsked(body.onlyWhenAsked);
+      const status = typeof body.connect === "string" ? coordinator.connect(body.connect) : body.disconnect === true ? coordinator.disconnect() : coordinator.status();
+      sendJson(response, 200, { ...status, onlyWhenAsked: coordinator.onlyWhenAsked });
     } catch (error) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Couldn't update the coordinator." });
     }

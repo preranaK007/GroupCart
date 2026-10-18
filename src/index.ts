@@ -104,6 +104,8 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
   if (coordinator?.status().active) {
     // A product number (or "cancel") answering GroupCart's own Kroger question goes straight to GroupCart.
     if (answersCartQuestion(message)) return runGroupCartCommand(message);
+    // "Only when asked": a message that doesn't name Claude gets GroupCart's own commands, and no free-text search.
+    if (coordinator.onlyWhenAsked && !coordinator.isAskedDirectly(message)) return runGroupCartCommand(message, { commandsOnly: true });
     await coordinator.handleMessage(message);
     return null;
   }
@@ -119,7 +121,7 @@ function answersCartQuestion(message: CommandContext): boolean {
 }
 
 /** GroupCart's built-in command handling: feature commands, then the cart (also the coordinator's run_groupcart_command). */
-async function runGroupCartCommand(message: CommandContext): Promise<string | null> {
+async function runGroupCartCommand(message: CommandContext, options: { commandsOnly?: boolean } = {}): Promise<string | null> {
   const recorded = store.recordedReply(message.messageId);
   if (recorded !== undefined) return recorded;
   const purchaseReply = store.processPurchaseCommand(message.messageId, message.memberId, message.text);
@@ -131,6 +133,8 @@ async function runGroupCartCommand(message: CommandContext): Promise<string | nu
     store.recordCommandReply(message.messageId, commandReply);
     return commandReply;
   }
+  // Commands only: chatter isn't searched at Kroger (cart phrases like "cart" or "approve" still count).
+  if (options.commandsOnly && !store.ownsMessage(message.text, message.memberId)) return null;
   // "claude we need eggs" is addressed to Claude; the cart should search for "we need eggs", not "claude eggs".
   const text = message.text.replace(/^\s*@?claude\b[\s,:!-]*/i, "");
   if (!text.trim()) return null;

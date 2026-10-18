@@ -186,3 +186,16 @@ test("groceries go through GroupCart's Kroger flow: with post, GroupCart's own r
   await tool("run_groupcart_command").handler({ text: "cart" }, { memberId: "m-ben", memberName: "Ben", via: "Claude" });
   assert.equal(groupCartPosts.length, 1, "without post, nothing is posted");
 });
+
+test("only when asked: Claude takes messages that name it or reply to it, nothing else", () => {
+  const { coordinator } = setup([]);
+  coordinator.connect("m-ana");
+  assert.equal(coordinator.onlyWhenAsked, false);
+  coordinator.setOnlyWhenAsked(true);
+  assert.equal(coordinator.onlyWhenAsked, true);
+  assert.equal(coordinator.isAskedDirectly(message("m-ben", "claude we need eggs")), true);
+  assert.equal(coordinator.isAskedDirectly(message("m-ben", "we need eggs")), false);
+  assert.equal(coordinator.isAskedDirectly({ ...message("m-ben", "lol"), replyTo: { messageId: 3, name: "Claude", text: "Done", fromBot: true } }), true);
+  coordinator.setOnlyWhenAsked(false);
+  assert.equal(coordinator.onlyWhenAsked, false);
+});

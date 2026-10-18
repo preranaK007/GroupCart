@@ -98,6 +98,24 @@ export class HouseholdCoordinator {
     return this.status();
   }
 
+  /**
+   * "Only when asked" (temporary, for demos): Claude takes a message only when it names Claude or replies to one of
+   * Claude's messages; everything else goes to GroupCart's own commands.
+   */
+  get onlyWhenAsked(): boolean {
+    return Boolean(this.#options.db.prepare("SELECT 1 FROM coordinator_settings WHERE key = 'only_when_asked'").get());
+  }
+
+  setOnlyWhenAsked(on: boolean): void {
+    if (on) this.#options.db.prepare("INSERT OR IGNORE INTO coordinator_settings (key, value) VALUES ('only_when_asked', '1')").run();
+    else this.#options.db.prepare("DELETE FROM coordinator_settings WHERE key = 'only_when_asked'").run();
+  }
+
+  /** The message names Claude, or replies to one of Claude's messages. */
+  isAskedDirectly(message: CommandContext): boolean {
+    return /\bclaude\b/i.test(message.text) || (message.replyTo?.fromBot === true && message.replyTo.name === COORDINATOR_NAME);
+  }
+
   // ---------------------------------------------------------------------------
   // Turns
   // ---------------------------------------------------------------------------
