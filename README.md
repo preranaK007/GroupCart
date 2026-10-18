@@ -139,6 +139,18 @@ Groceries has two more tabs. **Pantry** is a grid of what's at home, grouped Out
 - **API:** `GET /api/kitchen?week=YYYY-MM-DD`, `GET /api/kitchen/tonight`; JSON `POST /api/kitchen/pantry/{status,add,delete,to-cart}`, `/api/kitchen/meals/{plan,accept,discard,swap,night,nights,shop}`, `/api/kitchen/recipes`, `/api/kitchen/recipes/delete`. Cart adds from the page are demo-only.
 
 The demo seeds a pantry (with run-out history) and this week's dinners. Data lives in `meal_*` and `pantry_*` tables.
+## House
+
+Open [http://127.0.0.1:3000/house](http://127.0.0.1:3000/house). The top row holds pinned info tiles: Wi-Fi, door codes, trash day, and the landlord's number (tap to call). Passwords and codes stay masked until you tap the eye (or copy them); the page fetches them only then, so they never sit in the page. House rules, emergency info, and notes sit as small pills underneath. Tap any tile to edit, pin or unpin, or move it. Below are **Repairs** (status chips and photo thumbnails; open one for its photo, status Open → Reported → Fixed, who's on it, and its timeline), **Guests & quiet hours**, and **Polls** (vote bars). Home shows at most one line from House under the date (extra quiet hours tonight, guests today, or open repairs), and quiet hours appear as a light hatched band on the Calendar.
+
+- **Info:** `wifi`, `door code` (or `gate code`, `lockbox code`), `house rules`, `landlord`, `trash day`, `emergency`. `wifi` and `door code` answer in the group (it's the household's own chat), with a tip to tap-to-reveal on the House page next time.
+- **Repairs:** `broken: kitchen faucet leaking`, `leaky faucet`, or `the dishwasher won't drain`; send a photo with a "broken …" caption, or right after (within 5 minutes). `reported faucet` (or `told the landlord about the faucet`), `I'll handle the faucet` / `assign faucet to Maya`, `fixed faucet`, `repairs`. Requests open 7+ days get one reminder a week (9 AM–9 PM, not during quiet hours).
+- **Guests:** `having friends over Fri 8pm`, `my sister is staying Sat–Sun`, `my parents are visiting this weekend`. GroupCart adds a 🧳 household event (so it shows on the Calendar and Home and gets the usual event reminders) and posts a heads-up; others reply `ok` or `concern: exam Saturday`.
+- **Quiet hours:** a household default (weeknights 11 PM–8 AM; change it on the page or with `set quiet hours 11pm-7am weeknights`), plus one-night requests like `quiet hours tonight from 10pm` or `exam tomorrow, quiet please after 9`. `quiet hours` shows them; `cancel quiet hours` drops tonight's extra window.
+- **Polls:** `poll: takeout tonight? thai, pizza, sushi` or `poll: thermostat 68 or 70?` (no options means yes/no). Vote with a number; a bare number goes to the poll only while it is the newest question you were asked (a newer grocery choice or event plan vote keeps it). One vote each; a poll closes when everyone has voted or after 24 hours (announced in the group, not during quiet hours). `polls`, `close poll`.
+- **AI assistants:** `get_house_info` (passwords and codes masked unless `include_secrets`, which returns them only to the calling member), `create_maintenance_request`, `update_maintenance_request`, `announce_guest`, `set_quiet_hours`, `create_poll`, `vote_poll`; `whats_on_my_plate` gains a `house` section.
+
+The demo seeds a board (sample Wi-Fi, a door code, rules, the landlord "Pat Rivera, 555-0100"), an open repair with a sample photo, a guest visit, tonight's quiet hours, and an open thermostat poll. Data lives in `house_*` tables; repair photos in `house-files/` next to the database.
 
 ## Profiles, sign-in, and web chat
 
@@ -201,6 +213,7 @@ node --import=tsx --test src/points.test.ts         # points rules, levels, stre
 node --import=tsx --test src/digest.test.ts         # Sunday digest text and once-per-week delivery
 node --import=tsx --test src/meals.test.ts          # meal plans: dietary flags, cook rotation, ok/swap, shop for meals
 node --import=tsx --test src/pantry.test.ts         # pantry: parsing, cadence, “yes” disambiguation, checkout → In stock
+node --import=tsx --test src/house.test.ts          # House: parsers, masking, polls and number disambiguation, nudges
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.

@@ -4,6 +4,7 @@ import { choresHomeCard } from "./choresPage.js"; // Chores: live "Chores due" c
 import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
 import { POINTS_CLIENT_JS, POINTS_CSS } from "./pointsUi.js"; // money & points: points chips on the people card
 import { HOME_TONIGHT } from "./mealsPanel.js"; // Kitchen: "Tonight" line in the Groceries card
+import { houseHomeChip } from "./housePage.js"; // House: one compact line in the date header
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -38,6 +39,7 @@ const body = `
 <div class="home-hello">
   <p class="home-date" id="homeDate"></p>
   <p class="gc-meta" id="homeSummary"></p>
+  ${houseHomeChip()}
 </div>
 <div class="gc-cards">
   ${groceriesCard}

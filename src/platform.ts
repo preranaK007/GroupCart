@@ -1,7 +1,7 @@
 // Shared extension points for household features (chores, lists, events, bills, connector).
 //
 // Each feature module registers what it needs here instead of editing index.ts / dashboard.ts:
-//   registerCommand(handler)   group-chat command, tried in order before cart processing
+//   registerCommand(handler)   group-chat command, tried in order before cart processing ({ before: name } to go first)
 //   registerRoute(handler)     HTTP route on the local dashboard server (pages and /api/*)
 //   registerTools(tools)       tools exposed to Claude through the connector (MCP)
 //   scheduleEvery(name, ms, fn) background job (nudges, recurring lists, reminders)
@@ -122,7 +122,11 @@ export function registeredHelp(): string[] {
   return [...helpLines];
 }
 
-export function registerCommand(name: string, handler: CommandHandler): void {
+export function registerCommand(name: string, handler: CommandHandler, options: { before?: string } = {}): void {
+  // --- House: `before` runs a narrow handler ahead of a broader one (e.g. a "broken: …" photo before bills) ---
+  const index = options.before ? commands.findIndex((command) => command.name === options.before) : -1;
+  if (index >= 0) { commands.splice(index, 0, { name, handler }); return; }
+  // --- end House ---
   commands.push({ name, handler });
 }
 
