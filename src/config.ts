@@ -103,6 +103,9 @@ export const googleCalendarConfig = {
   clientId: process.env.GOOGLE_CLIENT_ID?.trim() || undefined,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || undefined,
   redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim() || `${dashboardPublicUrl}/api/google/oauth/callback`,
+  // Optional local JSON of titled events per member name (src/calendarDemo.ts). It replaces the
+  // sample schedule in demo mode and fills in for members who have not connected Google.
+  demoCalendarFile: process.env.GROUP_CART_DEMO_CALENDAR?.trim() || undefined,
 };
 // --- end Google Calendar ------------------------------------------------------
 

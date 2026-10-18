@@ -1,16 +1,33 @@
-// Google Calendar free/busy integration: per-member OAuth 2.0 (authorization code
-// flow with offline access), access-token refresh, the freeBusy API, and the
-// CalendarService that assembles the week view for /calendar and the iMessage
-// "calendar" command. Without GOOGLE_CLIENT_ID/SECRET it serves sample schedules.
+// Google Calendar integration: per-member OAuth 2.0 (authorization code flow with
+// offline access), access-token refresh, the freeBusy API, and the CalendarService
+// that assembles the week view for /calendar and the iMessage "calendar" command.
+// Without GOOGLE_CLIENT_ID/SECRET it serves sample schedules.
+//
+// Free/busy is the default. A member can opt in to "Show event titles": GroupCart then
+// asks Google again for calendar.events.readonly as well, stores the granted scope, and
+// reads that member's primary calendar with events.list (title, time, and location
+// only; see calendarItems.ts) instead of freeBusy.
 import { createHash, randomBytes } from "node:crypto";
 import {
   addDays, bestFreeTimes, computeAvailability, freeWindowsInDays, isDateString, isValidTimeZone, localDate, mondayOf, nextFreeTimes,
   zonedTimeToEpoch, type Interval, type MemberBusy, type OverlapSegment,
 } from "./availability.js";
-import { demoBusyBlocks } from "./calendarDemo.js";
+import { DemoCalendarFile, demoCalendarEvents, demoEvents } from "./calendarDemo.js";
+import { busyFromItems, itemsFromBusy, normalizeGoogleEvents, overlapsWindow, type CalendarItem } from "./calendarItems.js";
 import type { CartStore, Member } from "./store.js";
 
 export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy";
+/** Opt-in, per member: read-only events, so the page can show titles, times, and locations. */
+export const GOOGLE_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+const EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
+/** Partial response: only what the page shows (plus the member's own RSVP to skip declined events). */
+const EVENT_FIELDS = "items(status,summary,location,start,end,transparency,visibility,eventType,attendees(self,responseStatus)),nextPageToken";
+const MAX_EVENT_PAGES = 4;
+
+/** True when a stored grant includes event access (the member opted in to titles). */
+export function hasEventTitlesScope(scope: string | null | undefined): boolean {
+  return String(scope ?? "").split(/\s+/).includes(GOOGLE_EVENTS_SCOPE);
+}
 const AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
 const REVOKE_URL = "https://oauth2.googleapis.com/revoke";
@@ -25,13 +42,13 @@ export const FREE_DAY_END_MINUTES = 21 * 60;
 type FetchLike = typeof fetch;
 
 export class GoogleCalendarError extends Error {
-  constructor(message: string, readonly needsReconnect = false) {
+  constructor(message: string, readonly needsReconnect = false, readonly code: "titles_forbidden" | null = null) {
     super(message);
   }
 }
 
 export class GoogleCalendarClient {
-  readonly #pending = new Map<string, { memberId: string; codeVerifier: string; createdAt: number }>();
+  readonly #pending = new Map<string, { memberId: string; codeVerifier: string; createdAt: number; titles: boolean }>();
   readonly #accessTokens = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(
@@ -41,19 +58,21 @@ export class GoogleCalendarClient {
     private readonly fetchImpl: FetchLike = fetch,
   ) {}
 
-  createAuthorization(memberId: string): { url: string; state: string } {
+  /** `titles`: also ask for read-only events (the member's "Show event titles" opt-in). */
+  createAuthorization(memberId: string, options: { titles?: boolean } = {}): { url: string; state: string } {
     const now = Date.now();
     for (const [key, pending] of this.#pending) if (now - pending.createdAt > STATE_TTL_MS) this.#pending.delete(key);
     const state = randomBytes(32).toString("base64url");
     const codeVerifier = randomBytes(32).toString("base64url");
     const codeChallenge = createHash("sha256").update(codeVerifier).digest("base64url");
-    this.#pending.set(state, { memberId, codeVerifier, createdAt: now });
+    const titles = Boolean(options.titles);
+    this.#pending.set(state, { memberId, codeVerifier, createdAt: now, titles });
     const url = new URL(AUTHORIZE_URL);
     url.search = new URLSearchParams({
       response_type: "code",
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
-      scope: GOOGLE_FREEBUSY_SCOPE,
+      scope: titles ? `${GOOGLE_FREEBUSY_SCOPE} ${GOOGLE_EVENTS_SCOPE}` : GOOGLE_FREEBUSY_SCOPE,
       access_type: "offline",
       prompt: "consent",
       include_granted_scopes: "false",
@@ -64,7 +83,7 @@ export class GoogleCalendarClient {
     return { url: url.toString(), state };
   }
 
-  async completeAuthorization(code: string, state: string): Promise<{ memberId: string; refreshToken: string; scope: string }> {
+  async completeAuthorization(code: string, state: string): Promise<{ memberId: string; refreshToken: string; scope: string; titlesRequested: boolean }> {
     const pending = this.#pending.get(state);
     this.#pending.delete(state);
     if (!pending || Date.now() - pending.createdAt > STATE_TTL_MS) {
@@ -86,7 +105,7 @@ export class GoogleCalendarClient {
     if (typeof body.access_token === "string") {
       this.#accessTokens.set(pending.memberId, { token: body.access_token, expiresAt: Date.now() + expiresInMs(body.expires_in) });
     }
-    return { memberId: pending.memberId, refreshToken: body.refresh_token, scope };
+    return { memberId: pending.memberId, refreshToken: body.refresh_token, scope, titlesRequested: pending.titles };
   }
 
   forget(memberId: string): void {
@@ -94,16 +113,71 @@ export class GoogleCalendarClient {
   }
 
   async freeBusy(memberId: string, refreshToken: string, window: Interval): Promise<Interval[]> {
+    const body = await this.#calendarRequest(memberId, refreshToken, FREEBUSY_URL, {
+      method: "POST",
+      body: JSON.stringify({
+        timeMin: new Date(window.start).toISOString(),
+        timeMax: new Date(window.end).toISOString(),
+        items: [{ id: "primary" }],
+      }),
+    }, "Calendar availability permission is missing.") as {
+      calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }>; errors?: Array<{ domain?: string; reason?: string }> }>;
+    };
+    const calendar = body.calendars?.primary ?? Object.values(body.calendars ?? {})[0];
+    if (!calendar) throw new GoogleCalendarError("Google Calendar returned no primary calendar.");
+    if (calendar.errors?.length) {
+      const reason = calendar.errors.map((error) => error.reason ?? "unknown").join(", ");
+      throw new GoogleCalendarError(`Google could not read this calendar (${reason}).`, /notFound|forbidden|unauthorized/i.test(reason));
+    }
+    return (calendar.busy ?? []).flatMap((block) => {
+      const start = Date.parse(block.start ?? "");
+      const end = Date.parse(block.end ?? "");
+      return Number.isFinite(start) && Number.isFinite(end) && end > start ? [{ start, end }] : [];
+    });
+  }
+
+  /**
+   * The member's primary-calendar events in `window` (events.list, recurring events
+   * expanded), normalized to title/time/location entries. Needs GOOGLE_EVENTS_SCOPE;
+   * without it this throws a GoogleCalendarError with code "titles_forbidden".
+   */
+  async events(memberId: string, refreshToken: string, window: Interval, timeZone: string): Promise<CalendarItem[]> {
+    const items: unknown[] = [];
+    let pageToken = "";
+    for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+      const url = new URL(EVENTS_URL);
+      url.search = new URLSearchParams({
+        singleEvents: "true",
+        orderBy: "startTime",
+        timeMin: new Date(window.start).toISOString(),
+        timeMax: new Date(window.end).toISOString(),
+        maxResults: "250",
+        fields: EVENT_FIELDS,
+        ...(pageToken ? { pageToken } : {}),
+      }).toString();
+      const body = await this.#calendarRequest(memberId, refreshToken, url.toString(), { method: "GET" }, "Event titles permission is missing.", "titles_forbidden") as { items?: unknown[]; nextPageToken?: string };
+      if (Array.isArray(body.items)) items.push(...body.items);
+      pageToken = typeof body.nextPageToken === "string" ? body.nextPageToken : "";
+      if (!pageToken) break;
+    }
+    return normalizeGoogleEvents(items, timeZone);
+  }
+
+  /** Authorized Calendar API call with one retry after a 401 (stale access token). */
+  async #calendarRequest(
+    memberId: string,
+    refreshToken: string,
+    url: string,
+    init: { method: "GET" | "POST"; body?: string },
+    scopeMessage: string,
+    scopeCode: "titles_forbidden" | null = null,
+  ): Promise<unknown> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const accessToken = await this.#accessToken(memberId, refreshToken);
-      const response = await this.fetchImpl(FREEBUSY_URL, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          timeMin: new Date(window.start).toISOString(),
-          timeMax: new Date(window.end).toISOString(),
-          items: [{ id: "primary" }],
-        }),
+      const response = await this.fetchImpl(url, {
+        method: init.method,
+        headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json", ...(init.body ? { "Content-Type": "application/json" } : {}) },
+        ...(init.body ? { body: init.body } : {}),
         signal: AbortSignal.timeout(12_000),
       });
       if (response.status === 401) {
@@ -114,25 +188,13 @@ export class GoogleCalendarClient {
       if (response.status === 403) {
         const detail = await response.text();
         if (/insufficient|scope|forbidden|PERMISSION_DENIED/i.test(detail)) {
-          throw new GoogleCalendarError("Calendar availability permission is missing.", true);
+          // Missing event access only downgrades to busy times; missing free/busy access needs a reconnect.
+          throw new GoogleCalendarError(scopeMessage, scopeCode === null, scopeCode);
         }
         throw new GoogleCalendarError(`Google Calendar refused the request (${response.status}).`);
       }
       if (!response.ok) throw new GoogleCalendarError(`Google Calendar is unavailable right now (${response.status}).`);
-      const body = await response.json() as {
-        calendars?: Record<string, { busy?: Array<{ start?: string; end?: string }>; errors?: Array<{ domain?: string; reason?: string }> }>;
-      };
-      const calendar = body.calendars?.primary ?? Object.values(body.calendars ?? {})[0];
-      if (!calendar) throw new GoogleCalendarError("Google Calendar returned no primary calendar.");
-      if (calendar.errors?.length) {
-        const reason = calendar.errors.map((error) => error.reason ?? "unknown").join(", ");
-        throw new GoogleCalendarError(`Google could not read this calendar (${reason}).`, /notFound|forbidden|unauthorized/i.test(reason));
-      }
-      return (calendar.busy ?? []).flatMap((block) => {
-        const start = Date.parse(block.start ?? "");
-        const end = Date.parse(block.end ?? "");
-        return Number.isFinite(start) && Number.isFinite(end) && end > start ? [{ start, end }] : [];
-      });
+      return await response.json();
     }
     throw new GoogleCalendarError("Google Calendar request failed.");
   }
@@ -198,21 +260,50 @@ export type CalendarWeek = {
   nextWeek: string;
   days: Array<{ date: string; start: number; end: number }>;
   freeHours: { startMinutes: number; endMinutes: number };
-  members: Array<{ id: string; name: string; colorIndex: number; status: CalendarMemberStatus; detail: string | null; busy: Interval[] }>;
+  members: CalendarWeekMember[];
   included: number;
   overlaps: OverlapSegment[];
   everyoneFree: Interval[];
   bestTimes: Interval[];
 };
 
+/**
+ * Where a member's calendar comes from: generated samples, the GROUP_CART_DEMO_CALENDAR
+ * file, Google (titles or busy-only), or nothing yet.
+ */
+export type CalendarSource = "generated" | "file" | "google" | null;
+
+export type CalendarWeekMember = {
+  id: string;
+  name: string;
+  colorIndex: number;
+  status: CalendarMemberStatus;
+  detail: string | null;
+  source: CalendarSource;
+  /** Entries carry titles (samples, the demo file, or a member who opted in to event titles). */
+  titles: boolean;
+  /** The member's Google grant includes event access (drives the "Show event titles" switch). */
+  titlesGranted: boolean;
+  /** Busy time used for overlaps and free time ("show as available" entries excluded). */
+  busy: Interval[];
+  /** What the page draws: titled entries, or untitled busy blocks for free/busy-only calendars. */
+  events: CalendarItem[];
+};
+
+type GoogleFetch = { events: CalendarItem[]; titles: boolean; detail: string | null };
+
 export class CalendarService {
-  readonly #busyCache = new Map<string, { at: number; busy: Interval[] }>();
+  readonly #googleCache = new Map<string, { at: number; value: GoogleFetch }>();
+  readonly #demoFile: DemoCalendarFile | undefined;
 
   constructor(
     private readonly store: CartStore,
     private readonly publicUrl: string,
     private readonly client?: GoogleCalendarClient,
-  ) {}
+    options: { demoCalendarFile?: string } = {},
+  ) {
+    this.#demoFile = options.demoCalendarFile ? new DemoCalendarFile(options.demoCalendarFile, CalendarService.serverTimeZone) : undefined;
+  }
 
   get mode(): "demo" | "google" {
     return this.client ? "google" : "demo";
@@ -300,22 +391,41 @@ export class CalendarService {
     return reply;
   }
 
-  startAuthorization(memberId: string): { ok: true; url: string } | { ok: false; status: number; message: string } {
+  /** `titles`: the "Show event titles" opt-in (asks Google for read-only events as well as free/busy). */
+  startAuthorization(memberId: string, options: { titles?: boolean } = {}): { ok: true; url: string } | { ok: false; status: number; message: string } {
     if (!this.client) return { ok: false, status: 503, message: "Google Calendar is not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to connect real calendars." };
     if (!this.store.getMembers().some((member) => member.id === memberId)) return { ok: false, status: 404, message: "That household member was not found." };
-    return { ok: true, url: this.client.createAuthorization(memberId).url };
+    return { ok: true, url: this.client.createAuthorization(memberId, { titles: options.titles }).url };
   }
 
-  async completeAuthorization(code: string, state: string): Promise<Member> {
+  /** `titles`: "on" / "denied" when the member asked for event titles, null for a plain connect. */
+  async completeAuthorization(code: string, state: string): Promise<{ member: Member; titles: "on" | "denied" | null }> {
     if (!this.client) throw new GoogleCalendarError("Google Calendar is not configured.");
     const result = await this.client.completeAuthorization(code, state);
     const member = this.store.getMembers().find((candidate) => candidate.id === result.memberId);
     if (!member) throw new GoogleCalendarError("That household member no longer exists.");
     const previous = this.store.googleCalendarAccount(member.id);
     this.store.saveGoogleCalendarAccount(member.id, result.refreshToken, result.scope);
-    if (previous && previous.refreshToken !== result.refreshToken) void this.client.revoke(previous.refreshToken);
+    // Adding event access extends the same Google grant; revoking the old token there could
+    // revoke the new one with it, so only a plain reconnect revokes the previous token.
+    if (previous && previous.refreshToken !== result.refreshToken && !result.titlesRequested) void this.client.revoke(previous.refreshToken);
     this.#clearCache(member.id);
-    return member;
+    return { member, titles: result.titlesRequested ? (hasEventTitlesScope(result.scope) ? "on" : "denied") : null };
+  }
+
+  /**
+   * "Show event titles" switch. On: returns the Google sign-in URL that adds event access.
+   * Off: revokes the grant that includes event access (so GroupCart truly loses it) and
+   * returns the sign-in URL for busy times only.
+   */
+  async setEventTitles(memberId: string, enabled: boolean): Promise<{ ok: true; url: string } | { ok: false; status: number; message: string }> {
+    if (!this.client) return { ok: false, status: 503, message: "Event titles need Google Calendar. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET first." };
+    if (!this.store.getMembers().some((member) => member.id === memberId)) return { ok: false, status: 404, message: "That household member was not found." };
+    const start = `/api/google/oauth/start?memberId=${encodeURIComponent(memberId)}`;
+    if (enabled) return { ok: true, url: `${start}&titles=1` };
+    const account = this.store.googleCalendarAccount(memberId);
+    if (account && hasEventTitlesScope(account.scope)) await this.disconnect(memberId);
+    return { ok: true, url: start };
   }
 
   async disconnect(memberId: string): Promise<boolean> {
@@ -328,44 +438,67 @@ export class CalendarService {
     return true;
   }
 
-  async #collect(window: Interval, weekStarts: string[], timeZone: string): Promise<CalendarWeek["members"]> {
+  async #collect(window: Interval, weekStarts: string[], timeZone: string): Promise<CalendarWeekMember[]> {
     const members = this.store.getMembers();
-    return Promise.all(members.map(async (member, colorIndex) => {
-      const base = { id: member.id, name: member.name, colorIndex };
+    const file = this.#demoFile?.get() ?? null;
+    return Promise.all(members.map(async (member, colorIndex): Promise<CalendarWeekMember> => {
+      const base = { id: member.id, name: member.name, colorIndex, titlesGranted: false };
+      const empty = { source: null, titles: false, busy: [], events: [] };
+      // GROUP_CART_DEMO_CALENDAR replaces the sample schedule (demo) or fills in for a member without Google.
+      const fromFile = (): CalendarWeekMember | null => {
+        const events = demoCalendarEvents(file, member.name, window);
+        return events ? { ...base, status: "sample", detail: "Demo calendar file", source: "file", titles: true, events, busy: busyFromItems(events) } : null;
+      };
       if (!this.client) {
-        const busy = weekStarts.flatMap((weekStart) => demoBusyBlocks(member.id, colorIndex, weekStart, timeZone))
-          .filter((block) => block.end > window.start && block.start < window.end);
-        return { ...base, status: "sample" as const, detail: "Sample schedule", busy };
+        const listed = fromFile();
+        if (listed) return listed;
+        const events = weekStarts.flatMap((weekStart) => demoEvents(member.id, colorIndex, weekStart, timeZone))
+          .filter((item) => overlapsWindow(item, window));
+        return { ...base, status: "sample", detail: "Sample schedule", source: "generated", titles: true, events, busy: busyFromItems(events) };
       }
       const account = this.store.googleCalendarAccount(member.id);
-      if (!account) return { ...base, status: "not_connected" as const, detail: null, busy: [] };
-      if (account.status === "needs_reconnect") return { ...base, status: "needs_reconnect" as const, detail: account.lastError, busy: [] };
+      if (!account) return fromFile() ?? { ...base, ...empty, status: "not_connected", detail: null };
+      const titlesGranted = hasEventTitlesScope(account.scope);
+      if (account.status === "needs_reconnect") return { ...base, ...empty, titlesGranted, status: "needs_reconnect", detail: account.lastError };
       try {
-        return { ...base, status: "connected" as const, detail: null, busy: await this.#cachedFreeBusy(member.id, account.refreshToken, window) };
+        const fetched = await this.#cachedGoogle(member.id, account.refreshToken, window, timeZone, titlesGranted);
+        return { ...base, titlesGranted, status: "connected", detail: fetched.detail, source: "google", titles: fetched.titles, events: fetched.events, busy: busyFromItems(fetched.events) };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Google Calendar request failed.";
         if (error instanceof GoogleCalendarError && error.needsReconnect) {
           this.store.markGoogleCalendarNeedsReconnect(member.id, message);
           this.client.forget(member.id);
-          return { ...base, status: "needs_reconnect" as const, detail: message, busy: [] };
+          return { ...base, ...empty, titlesGranted, status: "needs_reconnect", detail: message };
         }
-        return { ...base, status: "error" as const, detail: message, busy: [] };
+        return { ...base, ...empty, titlesGranted, status: "error", detail: message };
       }
     }));
   }
 
-  async #cachedFreeBusy(memberId: string, refreshToken: string, window: Interval): Promise<Interval[]> {
-    const key = `${memberId}|${window.start}|${window.end}`;
-    const cached = this.#busyCache.get(key);
-    if (cached && Date.now() - cached.at < BUSY_CACHE_TTL_MS) return cached.busy;
-    const busy = await this.client!.freeBusy(memberId, refreshToken, window);
-    if (this.#busyCache.size > 200) this.#busyCache.clear();
-    this.#busyCache.set(key, { at: Date.now(), busy });
-    return busy;
+  /** events.list for members who opted in to titles (falls back to busy times if that access is gone), else freeBusy. */
+  async #cachedGoogle(memberId: string, refreshToken: string, window: Interval, timeZone: string, titles: boolean): Promise<GoogleFetch> {
+    const key = `${memberId}|${titles ? `events|${timeZone}` : "busy"}|${window.start}|${window.end}`;
+    const cached = this.#googleCache.get(key);
+    if (cached && Date.now() - cached.at < BUSY_CACHE_TTL_MS) return cached.value;
+    let value: GoogleFetch;
+    if (titles) {
+      try {
+        value = { events: await this.client!.events(memberId, refreshToken, window, timeZone), titles: true, detail: null };
+      } catch (error) {
+        if (!(error instanceof GoogleCalendarError) || error.code !== "titles_forbidden") throw error;
+        const busy = await this.client!.freeBusy(memberId, refreshToken, window);
+        value = { events: itemsFromBusy(busy), titles: false, detail: "Event titles access was removed in Google; showing busy times." };
+      }
+    } else {
+      value = { events: itemsFromBusy(await this.client!.freeBusy(memberId, refreshToken, window)), titles: false, detail: null };
+    }
+    if (this.#googleCache.size > 200) this.#googleCache.clear();
+    this.#googleCache.set(key, { at: Date.now(), value });
+    return value;
   }
 
   #clearCache(memberId: string): void {
-    for (const key of this.#busyCache.keys()) if (key.startsWith(`${memberId}|`)) this.#busyCache.delete(key);
+    for (const key of this.#googleCache.keys()) if (key.startsWith(`${memberId}|`)) this.#googleCache.delete(key);
   }
 
   #freeHours(date: string, timeZone: string): Interval {

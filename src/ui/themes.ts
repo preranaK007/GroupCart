@@ -968,6 +968,16 @@ const MINECRAFT_CSS = scoped("minecraft", `
 @R .cal .cal-now::before { border-radius:0; }
 @R .cal .cal-avatar { border-radius:0; color:#fff; font-family:var(--gc-font-display); font-size:10px; text-shadow:1px 1px 0 rgba(0,0,0,.5); box-shadow:0 0 0 2px #000, inset 2px 2px 0 rgba(255,255,255,.25); }
 @R .cal .cal-best-day { font:21px/1 var(--gc-font-pixel); }
+/* [calendar-detail] Day view strip and headers, all-day chips, "available" chips, popover */
+@R .cal :is(.cal-strip-day, .cal-strip-num, .cal-house-badge, .cal-adchip, .cal-pop-swatch, .cal-range-btn, .cal-head-btn, .cal-key-member) { border-radius:0; }
+@R .cal .cal-ev.cal-busy.is-free { border-radius:0; border:2px dashed color-mix(in srgb, var(--m-solid) 80%, #000); background:rgba(255,255,255,.45); }
+@R .cal .cal-strip-day { font:16px/1 var(--gc-font-pixel); letter-spacing:0; color:#3d3d3d; }
+@R .cal .cal-strip-num { font:22px/1 var(--gc-font-pixel); color:#24180e; }
+@R .cal .cal-strip-day.is-today .cal-strip-num { color:#1f4f15; box-shadow:inset 0 0 0 2px #2f6e20; }
+@R .cal .cal-strip-day[aria-pressed="true"] .cal-strip-num { background:#2f6e20; color:#fff; box-shadow:0 0 0 2px #000, inset 2px 2px 0 rgba(255,255,255,.3); text-shadow:2px 2px 0 rgba(0,0,0,.4); }
+@R .cal .cal-who-name { font:20px/1 var(--gc-font-pixel); font-weight:400; color:#24180e; }
+@R .cal .cal-pop-title { font-size:12px; line-height:1.6; }
+@media (max-width: 640px) { @R .cal .cal-range { font-size:11px; } }
 
 /* "Achievement get!" toast */
 @S .gc-celebrate { top:calc(var(--gc-appbar-h) + 12px); right:12px; }
@@ -1133,6 +1143,7 @@ const RDR_CSS = scoped("rdr", `
 @R .cal .cal-chip { border-radius:2px; background:transparent; border:1.5px solid #8b1c1c; color:#8b1c1c; font:700 10.5px/1 var(--gc-font); letter-spacing:.12em; text-transform:uppercase; }
 @R .cal .cal-notice { border-radius:0; }
 @R .cal .cal-range { font-family:var(--gc-font-display); font-weight:400; font-size:22px; }
+@media (max-width: 640px) { @R .cal .cal-range { font-size:17px; } } /* [calendar-detail] */
 @R .cal .cal-panel h2 { font-family:var(--gc-font-display); font-weight:400; font-size:17px; padding-bottom:6px; border-bottom:3px double rgba(59,42,26,.55); }
 @R .cal .cal-head-dow { font:700 10px/1 var(--gc-font); letter-spacing:.14em; }
 @R .cal .cal-head-date { font-family:var(--gc-font-display); }
@@ -1312,6 +1323,19 @@ const CYBER_CSS = scoped("cyberpunk", `
 @R .cal .cal-now::before { border-radius:0; transform:rotate(45deg); }
 @R .cal .cal-avatar { border-radius:0; color:#fff; font-family:var(--gc-font-display); clip-path:polygon(22% 0,100% 0,100% 78%,78% 100%,0 100%,0 22%); }
 @R .cal .cal-best-day { font:600 15px/1.1 var(--gc-font-display); letter-spacing:.04em; }
+/* [calendar-detail] Day view strip and headers, all-day chips, "available" chips, popover */
+@R .cal :is(.cal-strip-day, .cal-strip-num, .cal-house-badge, .cal-adchip, .cal-pop-swatch, .cal-range-btn, .cal-head-btn, .cal-key-member) { border-radius:0; }
+@R .cal .cal-ev.cal-busy.is-free { border-radius:0; border-color:color-mix(in srgb, var(--m-solid) 85%, #fff); background:rgba(14,15,21,.7); color:#e9f3f4; }
+@R .cal .cal-strip-day { font-family:var(--gc-font-display); font-weight:600; letter-spacing:.14em; }
+@R .cal .cal-strip-num { font-family:var(--gc-font-display); font-weight:600; }
+@R .cal .cal-strip-day.is-today { color:#fcee0a; }
+@R .cal .cal-strip-day.is-today .cal-strip-num { color:#fcee0a; box-shadow:inset 0 0 0 1.5px #fcee0a; }
+@R .cal .cal-strip-day[aria-pressed="true"] .cal-strip-num { background:#fcee0a; color:${CP_INK}; box-shadow:none; clip-path:polygon(0 0,100% 0,100% 70%,70% 100%,0 100%); }
+@R .cal .cal-who-name { font-family:var(--gc-font-display); letter-spacing:.06em; text-transform:uppercase; }
+@R .cal .cal-house-badge { background:rgba(0,240,255,.1); color:#00f0ff; clip-path:polygon(22% 0,100% 0,100% 78%,78% 100%,0 100%,0 22%); }
+@R .cal .cal-pop-title { letter-spacing:.04em; }
+@R .cal .cal-pop.cal-panel { background-color:#0e0f15; }
+@media (max-width: 640px) { @R .cal .cal-range { font-size:17px; } }
 
 /* "Gig complete" HUD banner */
 @S .gc-celebrate { top:calc(var(--gc-appbar-h) + 14px); left:50%; transform:translateX(-50%); }
