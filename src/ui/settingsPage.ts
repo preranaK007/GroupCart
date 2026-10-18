@@ -1,4 +1,4 @@
-import { appearanceCard, avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
+import { appearanceCard, avatarHtml, button, card, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
 import { coordinatorCard } from "../agent/setup.js"; // household coordinator (one Claude for the apartment)
 import { claudeConnectorCard } from "./connectorCard.js"; // AI assistants (Claude, ChatGPT, Grok) connector card
 import { billsAnthropicCard, billsSplitwiseCard } from "./billsHome.js";
@@ -125,6 +125,18 @@ function claudeCard(): IntegrationCard {
 }
 // --- end AI assistants connector ---
 
+// Home-screen install steps (src/ui/pwa.ts makes GroupCart installable). Hidden inside the installed app.
+function installCard(): string {
+  return card({
+    id: "install",
+    className: "set-install",
+    icon: "phone",
+    title: "Install on your phone",
+    tip: "Your phone needs this GroupCart's address: its public https link, or this computer's address on the same Wi-Fi. On Android, open it in Chrome and choose Install app.",
+    body: `<ol class="set-steps"><li>Open GroupCart in <strong>Safari</strong> on your iPhone.</li><li>Tap <strong>Share</strong> ${icon("share", { size: 18, className: "set-share" })} (under <strong>⋯</strong> if you don't see it).</li><li>Tap <strong>Add to Home Screen</strong>.</li></ol><p class="gc-meta set-steps-note">It opens full screen, like an app.</p>`,
+  });
+}
+
 const styles = `
 .set-wrap { max-width:760px; margin:0 auto; display:grid; gap:var(--gc-space-4); }
 .set-head { display:flex; align-items:center; gap:var(--gc-space-3); min-width:0; }
@@ -136,6 +148,10 @@ const styles = `
 .set-actions { display:flex; align-items:center; gap:var(--gc-space-2); margin-top:var(--gc-space-4); }
 .set-members { display:flex; flex-wrap:wrap; gap:var(--gc-space-2) var(--gc-space-3); justify-content:flex-end; }
 .set-member { display:inline-flex; align-items:center; gap:6px; }
+.set-steps { margin:0; padding-left:1.4em; display:grid; gap:6px; }
+.set-share { display:inline-block; vertical-align:-3px; color:var(--gc-accent); }
+.set-steps-note { margin-top:var(--gc-space-2); }
+@media (display-mode: standalone) { .set-install { display:none; } }
 /* Phones: the one-line summaries crowd the title next to the status chip; the info tip keeps the detail. */
 @media (max-width: 760px) { .set-name .gc-meta { display:none; } }
 `;
@@ -143,6 +159,7 @@ const styles = `
 export function renderSettingsPage(context: SettingsContext): string {
   const body = `<div class="set-wrap">
   ${appearanceCard()}
+  ${installCard()}
   ${sectionHeader("Connections", { flavor: "settings.connections" })}
   ${[coordinatorCard(), imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), billsAnthropicCard(), claudeCard()].filter((card): card is IntegrationCard => card !== null).map(renderIntegrationCard).join("\n")}
 </div>`;

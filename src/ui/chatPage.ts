@@ -129,7 +129,7 @@ const styles = `
 .ch-empty { margin:auto; text-align:center; color:var(--gc-muted); padding:var(--gc-space-6) var(--gc-space-4); }
 @media (max-width: 760px) {
   .gc-main { padding:0 0 calc(var(--gc-bottomnav-h) + 12px + env(safe-area-inset-bottom)); }
-  .ch { height:calc(100dvh - 56px - var(--gc-bottomnav-h) - 12px - env(safe-area-inset-bottom)); min-height:0; border:0; border-radius:0; max-width:none; }
+  .ch { height:calc(100dvh - 56px - env(safe-area-inset-top) - var(--gc-bottomnav-h) - 12px - env(safe-area-inset-bottom)); min-height:0; border:0; border-radius:0; max-width:none; }
   .ch-scroll { padding:var(--gc-space-2) var(--gc-space-3); }
   .ch-col { max-width:84%; }
   .ch-av { width:28px; }

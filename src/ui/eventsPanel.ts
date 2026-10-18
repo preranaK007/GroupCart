@@ -186,7 +186,7 @@ button.hv-vote { cursor:pointer; }
 .hv-foot { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
 .hv-toast { position:fixed; left:50%; bottom:24px; z-index:40; transform:translateX(-50%); max-width:min(560px, calc(100vw - 32px)); padding:12px 16px; border-radius:var(--gc-radius-sm); background:var(--gc-tooltip-bg); color:var(--gc-tooltip-text); font-size:var(--gc-fs-sm); box-shadow:0 2px 8px rgba(0,0,0,.2); white-space:pre-line; }
 @media (max-width: 760px) {
-  .hv-toast { bottom:calc(var(--gc-bottomnav-h) + 24px); }
+  .hv-toast { bottom:calc(var(--gc-bottomnav-h) + 24px + env(safe-area-inset-bottom)); }
   .hv-when { grid-template-columns:minmax(0,1fr) minmax(0,1fr); }
   .hv-when #hvDate { grid-column:1 / -1; }
   .hv-when.is-all-day #hvDate { grid-column:auto; }

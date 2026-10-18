@@ -256,7 +256,7 @@ const styles = `
   .hs-tiles { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:var(--gc-space-2); }
   .hs-tile { min-height:104px; padding:var(--gc-space-2) var(--gc-space-3); }
   .hs-board { margin-bottom:var(--gc-space-4); }
-  .hs-toast { bottom:calc(var(--gc-bottomnav-h) + var(--gc-space-4)); }
+  .hs-toast { bottom:calc(var(--gc-bottomnav-h) + var(--gc-space-4) + env(safe-area-inset-bottom)); }
 }
 `;
 

@@ -843,7 +843,7 @@ const MINECRAFT_CSS = scoped("minecraft", `
 @S a { text-decoration-thickness:2px; }
 
 @S .gc-appbar { --gc-text:#fff; --gc-text-2:#f2f2f2; --gc-muted:#ececec; --gc-border:rgba(0,0,0,.55); --gc-hover:rgba(255,255,255,.18);
-  padding-top:10px; background:var(--gc-tx-mc-grass) 0 0/64px 64px repeat-x, #866043; border-bottom:3px solid #24180e; color:#fff; }
+  padding-top:calc(10px + env(safe-area-inset-top)); background:var(--gc-tx-mc-grass) 0 0/64px 64px repeat-x, #866043; border-bottom:3px solid #24180e; color:#fff; }
 @S .gc-logo { width:34px; height:34px; border-radius:0; background:linear-gradient(#6aad3f 0 9px, transparent 9px), var(--gc-tx-mc-dirt) 0 0/32px 32px, #866043; border:2px solid #1b120b; box-shadow:inset -3px -3px 0 rgba(0,0,0,.3), inset 3px 3px 0 rgba(255,255,255,.2); color:#fff; }
 @S .gc-logo > .gc-icon { filter:drop-shadow(2px 2px 0 rgba(0,0,0,.65)); }
 @S .gc-brand-name { font-family:var(--gc-font-display); font-size:15px; color:#fff; text-shadow:3px 3px 0 #3f3f3f; letter-spacing:0; }

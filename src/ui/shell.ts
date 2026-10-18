@@ -7,6 +7,10 @@
  * width (<=760px) turns the left rail into a bottom bar: the first five sections
  * plus "More" (a sheet with the rest, People and Settings).
  *
+ * Pages can be installed to a phone's home screen (./pwa.ts adds the <head> tags).
+ * With viewport-fit=cover, anything fixed to the bottom on phones adds
+ * env(safe-area-inset-bottom) to its offset, as the bottom bar does.
+ *
  * ── Building a page ─────────────────────────────────────────────────────────
  *   import { renderPage, card, listRow, list, chip, button } from "./ui/shell.js";
  *   const html = renderPage({
@@ -80,6 +84,7 @@ import { ACCOUNT_MENU_CSS, ACCOUNT_MENU_SCRIPT } from "./accountMenu.js";
 import { appearanceCard, currentSkin, flavored, skinClientScript, skinHead, skinScheme, skinStylesheet, skinSwitcher } from "./themes.js";
 export { appearanceCard };
 // [/themes]
+import { PWA_HEAD } from "./pwa.js"; // home-screen install: manifest, icons, service worker
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -159,6 +164,9 @@ const ICON_PATHS = {
   logout: '<path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14"/><path d="M10 12h10M16.5 8.5L20 12l-3.5 3.5"/>',
   // --- end profiles & chat icons ---
   door: '<path d="M6.5 20.5V4.8a1.3 1.3 0 0 1 1.3-1.3h8.4a1.3 1.3 0 0 1 1.3 1.3v15.7"/><path d="M4 20.5h16"/><path d="M14.3 12.2h.01" stroke-width="2.6"/>', // House
+  // Install on your phone (Settings): a phone, and Safari's Share button.
+  phone: '<rect x="6.5" y="2.5" width="11" height="19" rx="2.2"/><path d="M10.5 18.5h3"/>',
+  share: '<path d="M12 14.5v-11M8.5 7L12 3.5 15.5 7"/><path d="M8.5 10.5H7a1.5 1.5 0 0 0-1.5 1.5v7A1.5 1.5 0 0 0 7 20.5h10a1.5 1.5 0 0 0 1.5-1.5v-7a1.5 1.5 0 0 0-1.5-1.5h-1.5"/>',
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
@@ -461,7 +469,8 @@ export const TOKENS_CSS = `
 export const BASE_CSS = `
 *,*::before,*::after { box-sizing:border-box; }
 html { -webkit-text-size-adjust:100%; }
-body { margin:0; background:var(--gc-bg); color:var(--gc-text); font:var(--gc-fs-md)/1.45 var(--gc-font); overflow-x:clip; }
+/* viewport-fit=cover: keep content out of the notch sides in landscape (fixed bars add their own insets). */
+body { margin:0; padding:0 env(safe-area-inset-right) 0 env(safe-area-inset-left); background:var(--gc-bg); color:var(--gc-text); font:var(--gc-fs-md)/1.45 var(--gc-font); overflow-x:clip; }
 h1,h2,h3,p { margin:0; }
 a { color:var(--gc-accent); }
 [hidden] { display:none !important; }
@@ -469,8 +478,8 @@ a { color:var(--gc-accent); }
 .gc-icon { flex:none; display:block; }
 .gc-sr { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
 
-/* App bar */
-.gc-appbar { position:sticky; top:0; z-index:20; height:var(--gc-appbar-h); display:flex; align-items:center; gap:var(--gc-space-4); padding:0 var(--gc-space-4) 0 var(--gc-space-5); background:var(--gc-surface); border-bottom:1px solid var(--gc-border); }
+/* App bar (grows by the top safe area, e.g. a status bar drawn over the page in a home-screen app) */
+.gc-appbar { position:sticky; top:0; z-index:20; height:calc(var(--gc-appbar-h) + env(safe-area-inset-top)); display:flex; align-items:center; gap:var(--gc-space-4); padding:env(safe-area-inset-top) var(--gc-space-4) 0 var(--gc-space-5); background:var(--gc-surface); border-bottom:1px solid var(--gc-border); }
 .gc-brand { display:flex; align-items:center; gap:10px; color:var(--gc-text); text-decoration:none; flex:none; }
 .gc-logo { width:36px; height:36px; display:grid; place-items:center; border-radius:10px; background:var(--gc-accent); color:var(--gc-on-accent); }
 .gc-brand-name { font-size:var(--gc-fs-xl); font-weight:400; letter-spacing:-.01em; }
@@ -478,8 +487,8 @@ a { color:var(--gc-accent); }
 .gc-appbar-actions { margin-left:auto; display:flex; align-items:center; gap:var(--gc-space-2); min-width:0; }
 
 /* Navigation rail */
-.gc-frame { display:flex; min-height:calc(100vh - var(--gc-appbar-h)); }
-.gc-rail { position:sticky; top:var(--gc-appbar-h); align-self:flex-start; width:var(--gc-rail-w); flex:none; display:flex; flex-direction:column; align-items:center; gap:var(--gc-space-2); padding:var(--gc-space-3) 0; height:calc(100vh - var(--gc-appbar-h)); }
+.gc-frame { display:flex; min-height:calc(100vh - var(--gc-appbar-h) - env(safe-area-inset-top)); }
+.gc-rail { position:sticky; top:calc(var(--gc-appbar-h) + env(safe-area-inset-top)); align-self:flex-start; width:var(--gc-rail-w); flex:none; display:flex; flex-direction:column; align-items:center; gap:var(--gc-space-2); padding:var(--gc-space-3) 0; height:calc(100vh - var(--gc-appbar-h) - env(safe-area-inset-top)); }
 .gc-nav-item { width:72px; display:flex; flex-direction:column; align-items:center; gap:4px; padding:4px 0; color:var(--gc-text-2); text-decoration:none; font-size:var(--gc-fs-xs); font-weight:500; border-radius:var(--gc-radius-md); }
 .gc-nav-pill { width:56px; height:32px; display:grid; place-items:center; border-radius:var(--gc-radius-pill); transition:background-color .15s ease; }
 .gc-nav-item:hover .gc-nav-pill { background:var(--gc-hover); }
@@ -615,18 +624,18 @@ button.gc-nav-item { border:0; background:transparent; font-family:inherit; curs
 
 /* Phone and small tablets: rail becomes a bottom bar */
 @media (max-width: 760px) {
-  .gc-appbar { padding:0 var(--gc-space-3) 0 var(--gc-space-4); gap:var(--gc-space-3); height:56px; }
+  .gc-appbar { padding:env(safe-area-inset-top) var(--gc-space-3) 0 var(--gc-space-4); gap:var(--gc-space-3); height:calc(56px + env(safe-area-inset-top)); }
   .gc-brand-name { display:none; }
   .gc-appbar-title { border-left:0; padding-left:0; font-size:var(--gc-fs-lg); color:var(--gc-text); }
   .gc-frame { display:block; min-height:0; }
-  .gc-rail { position:fixed; top:auto; bottom:0; left:0; right:0; z-index:20; width:auto; height:var(--gc-bottomnav-h); flex-direction:row; justify-content:space-around; gap:0; padding:6px 4px calc(6px + env(safe-area-inset-bottom)); background:var(--gc-surface); border-top:1px solid var(--gc-border); box-sizing:content-box; }
+  .gc-rail { position:fixed; top:auto; bottom:0; left:0; right:0; z-index:20; width:auto; height:var(--gc-bottomnav-h); flex-direction:row; justify-content:space-around; gap:0; padding:6px calc(4px + env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) calc(4px + env(safe-area-inset-left)); background:var(--gc-surface); border-top:1px solid var(--gc-border); box-sizing:content-box; }
   .gc-nav-item { width:auto; flex:1; min-width:0; font-size:11px; }
   .gc-nav-item > span:last-child { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gc-nav-pill { width:48px; height:30px; }
   .gc-nav-extra { display:none !important; }
   .gc-nav-more { display:flex !important; }
   .gc-dialog { width:100%; max-width:100%; margin:auto 0 0; border-radius:var(--gc-radius-lg) var(--gc-radius-lg) 0 0; padding-bottom:env(safe-area-inset-bottom); }
-  .gc-main { padding:var(--gc-space-4) var(--gc-space-4) calc(var(--gc-bottomnav-h) + var(--gc-space-6)); }
+  .gc-main { padding:var(--gc-space-4) var(--gc-space-4) calc(var(--gc-bottomnav-h) + var(--gc-space-6) + env(safe-area-inset-bottom)); }
   .gc-grid { grid-template-columns:minmax(0,1fr); }
   .gc-stats { gap:var(--gc-space-2); }
   .gc-stat { padding:var(--gc-space-2) var(--gc-space-3); }
@@ -771,6 +780,7 @@ export function renderPage(options: PageOptions): string {
 <meta name="color-scheme" content="${skinScheme(skin)}" />
 <title>${title} · GroupCart</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0b57d0"/><g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS.cart}</g></svg>`)}" />
+${PWA_HEAD}
 ${skinHead(skin)}
 <style>${TOKENS_CSS}${BASE_CSS}${ACCOUNT_MENU_CSS}</style>
 ${skinStylesheet()}

@@ -10,6 +10,8 @@
 //   /mcp, /mcp/t/<token>          the AI assistant connector (own token auth, src/connector.ts)
 //   /oauth/…, /.well-known/…      its OAuth sign-in and metadata (src/connectorOAuth.ts; pairing code + consent)
 //   /signin…, /api/auth/…         web sign-in (src/auth.ts; does its own checks)
+//   INSTALL_FILE_PATHS            the home-screen app's manifest, icons, service worker, and offline page
+//                                 (src/ui/pwa.ts; static files with no household data, exact paths only)
 import type { IncomingMessage } from "node:http";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
@@ -47,11 +49,26 @@ export function isConnectorPath(pathname: string): boolean {
   return pathname === "/mcp" || pathname === "/mcp/" || /^\/mcp\/t\/[^/]+\/?$/.test(pathname);
 }
 
-/** Paths a remote request may reach without isRemoteAuthorized(): the connector, its OAuth, and sign-in routes. */
+/**
+ * Files a phone fetches without cookies, before anyone signs in, to install GroupCart to its home screen
+ * (served by src/ui/pwa.ts). Exact paths: no prefixes, so nothing else under /icons/ becomes public.
+ */
+const INSTALL_FILE_PATHS: ReadonlySet<string> = new Set([
+  "/manifest.webmanifest",
+  "/sw.js",
+  "/offline.html",
+  "/icons/apple-touch-icon.png",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/icon-maskable-512.png",
+]);
+
+/** Paths a remote request may reach without isRemoteAuthorized(): the connector, its OAuth, sign-in, and install files. */
 export function isRemotePublicPath(pathname: string): boolean {
   return isConnectorPath(pathname)
     || pathname.startsWith("/oauth/")
     || pathname.startsWith("/.well-known/")
     || pathname.startsWith("/signin")
-    || pathname.startsWith("/api/auth/");
+    || pathname.startsWith("/api/auth/")
+    || INSTALL_FILE_PATHS.has(pathname);
 }

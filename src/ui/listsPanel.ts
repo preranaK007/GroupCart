@@ -109,7 +109,7 @@ const styles = `
 @media (max-width: 760px) {
   .gl-tabs { display:flex; }
   .gl-tab { flex:1; padding:0 8px; }
-  .gl-toast { bottom:calc(var(--gc-bottomnav-h) + 24px); }
+  .gl-toast { bottom:calc(var(--gc-bottomnav-h) + 24px + env(safe-area-inset-bottom)); }
 }`;
 
 const script = `
