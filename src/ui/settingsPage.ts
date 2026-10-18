@@ -1,4 +1,5 @@
 import { avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
+import { billsAnthropicCard, billsSplitwiseCard } from "./billsHome.js";
 
 /**
  * Settings / Connections page (route "/settings"). Server-rendered on each
@@ -111,15 +112,9 @@ function googleCalendarCard(): IntegrationCard {
   };
 }
 
+// Bills branch: real Splitwise status (configured / simulated, last result) from src/bills.ts.
 function splitwiseCard(): IntegrationCard {
-  return {
-    id: "splitwise",
-    name: "Splitwise",
-    icon: "receipt",
-    summary: "Log groceries and bills as shared expenses",
-    status: { label: "Not configured", tone: "neutral" },
-    actions: button({ label: "Connect", variant: "outline", size: "sm", disabled: true }),
-  };
+  return billsSplitwiseCard();
 }
 
 function claudeCard(): IntegrationCard {
@@ -149,7 +144,7 @@ const styles = `
 export function renderSettingsPage(context: SettingsContext): string {
   const body = `<div class="set-wrap">
   ${sectionHeader("Connections")}
-  ${[imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), claudeCard()].map(renderIntegrationCard).join("\n")}
+  ${[imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), billsAnthropicCard(), claudeCard()].map(renderIntegrationCard).join("\n")}
 </div>`;
   return renderPage({
     title: "Settings",
