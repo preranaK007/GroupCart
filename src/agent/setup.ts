@@ -8,7 +8,7 @@ import type { ChatService } from "../chat.js";
 import { issueTurnToken } from "../connector.js";
 import { sendJson } from "../connectorSecurity.js";
 import type { KrogerClient } from "../kroger.js";
-import { postCard, postMessage, registerCardHandler, registerRoute, registerTools, scheduleEvery, type CommandContext } from "../platform.js";
+import { notifyGroup, postCard, postMessage, registerCardHandler, registerRoute, registerTools, scheduleEvery, type CommandContext } from "../platform.js";
 import type { CartStore } from "../store.js";
 import { coordinatorSettingsCard } from "../ui/coordinatorCard.js";
 import type { IntegrationCard } from "../ui/settingsPage.js";
@@ -80,6 +80,7 @@ export function setupCoordinator(options: {
       await chat.postBotImage({ text: caption, image: image.data, author: COORDINATOR_NAME });
     },
     react: async (messageId, emoji) => { await chat.react(messageId, emoji, COORDINATOR_NAME); },
+    postAsGroupCart: (text) => notifyGroup(text),
     runCommand: (memberId, text) => {
       const member = store.getMembers().find((candidate) => candidate.id === memberId);
       return member ? options.runCommand({ messageId: `coordinator:${randomUUID()}`, memberId, memberName: member.name, text, attachments: [] }) : Promise.resolve(null);

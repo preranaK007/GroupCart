@@ -19,7 +19,7 @@ import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
 import { setupKitchen } from "./kitchen.js"; // Kitchen: pantry and meal plans
 import { setupHouse } from "./house.js";
-import { recordGroupMessage, registerCommand, runCommands, setBuiltInCommands, setGroupPollSender, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
+import { otherPendingQuestionAt, recordGroupMessage, registerCommand, runCommands, setBuiltInCommands, setGroupPollSender, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupGroceryActions } from "./groceryActions.js";
 import type { HouseholdCoordinator } from "./agent/coordinator.js";
 import { setupCoordinator } from "./agent/setup.js";
@@ -102,10 +102,20 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
   // While a roommate has the Claude coordinator connected, it handles every message and posts its own replies.
   // (It is set up after the web chat, whose demo seed already sends messages through here.)
   if (coordinator?.status().active) {
+    // A product number (or "cancel") answering GroupCart's own Kroger question goes straight to GroupCart.
+    if (answersCartQuestion(message)) return runGroupCartCommand(message);
     await coordinator.handleMessage(message);
     return null;
   }
   return runGroupCartCommand(message);
+}
+
+/** True for "2", "1, 3" or "cancel" from a member whose newest open question is GroupCart's own cart question. */
+function answersCartQuestion(message: CommandContext): boolean {
+  if (!/^\s*(?:\d{1,2}(?:\s*[, ]\s*\d{1,2})*|cancel)\s*$/i.test(message.text)) return false;
+  const asked = store.pendingQuestionAt(message.memberId);
+  const other = otherPendingQuestionAt("cart", message.memberId, "number");
+  return Boolean(asked) && (!other || asked! >= other);
 }
 
 /** GroupCart's built-in command handling: feature commands, then the cart (also the coordinator's run_groupcart_command). */

@@ -22,7 +22,7 @@ const TRANSCRIPT_MESSAGES = 30;
  * Connector tools the coordinator doesn't use: its replies are the group messages, and it runs polls with its
  * own poll cards instead of the number-reply polls.
  */
-export const COORDINATOR_EXCLUDED_TOOLS = ["send_group_message", "post_to_group", "read_group_chat", "plan_activity", "vote", "book_event", "create_poll", "vote_poll"];
+export const COORDINATOR_EXCLUDED_TOOLS = ["send_group_message", "post_to_group", "read_group_chat", "plan_activity", "vote", "book_event", "create_poll", "vote_poll", "find_groceries"];
 
 /** How the coordinator talks to the household chat (web chat + iMessage relay). */
 export type CoordinatorChannel = {
@@ -267,7 +267,7 @@ Plans: for "movie night?", "dinner this week?" and the like, find times when eve
 
 Money: "I bought snacks for $13, split evenly" is an expense: save it with add_bill (paid_by the sender, split among everyone unless they say otherwise, a fitting category, save true). A photo of a bill or receipt: look at it with view_photo, read the printed vendor, total and due date, and save it with add_bill; never guess numbers that aren't printed. Use exact amounts. For "what do I owe", use get_balances and get_pay_links and post pay buttons. You never move money yourself.
 
-Groceries: for "we need milk and flour", look up each item with find_groceries, then post_choices with your best pick for each (name, size, price) and the buttons “Add these” (primary) and “Swap something” (secondary). When someone taps “Add these”, add them with add_to_cart in one call written like a text (“2% milk, all-purpose flour”); add_to_cart posts nothing, so confirm in one line. When the search used the sample catalog, don't call it Kroger. Never check out or place an order.
+Groceries go through GroupCart's own Kroger flow, the one that works right in iMessage: for "we need milk and flour", call run_groupcart_command with the items written like a text ("milk, flour") and post true. GroupCart then posts the Kroger products with numbers to the group, the roommate answers with a number, and GroupCart handles that answer itself. After posting, your reply is "(no reply)". Don't post your own grocery picks or cards. Never check out or place an order: checkout and payment happen only on Kroger.
 
 GroupCart's own commands: for things your other tools don't cover (sharing sessions like “start sharing with Sami”, recurring lists, cart steps like “approve” or “undo”, checkout, or a numbered answer to one of GroupCart's questions), use run_groupcart_command with the roommate's words and relay the gist of GroupCart's reply.
 

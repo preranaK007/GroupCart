@@ -42,9 +42,10 @@ function setup(replies: Array<string | null>, chance = 1) {
   const commands: Array<{ memberId: string; text: string }> = [];
   const images: Array<{ url: string; caption: string }> = [];
   const reactions: Array<{ messageId: number; emoji: string }> = [];
-  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], postImage: async (url, caption) => { images.push({ url, caption }); }, react: async (messageId, emoji) => { reactions.push({ messageId, emoji }); }, runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
+  const groupCartPosts: string[] = [];
+  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], postImage: async (url, caption) => { images.push({ url, caption }); }, react: async (messageId, emoji) => { reactions.push({ messageId, emoji }); }, runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; }, postAsGroupCart: async (text) => { groupCartPosts.push(text); } });
   const tool = (name: string) => tools.find((spec) => spec.name === name)!;
-  return { coordinator, posted, turns, tool, channel, commands, images, reactions };
+  return { coordinator, posted, turns, tool, channel, commands, images, reactions, groupCartPosts };
 }
 
 const message = (memberId: string, text: string) => ({ messageId: `x:${text}`, memberId, memberName: members.find((m) => m.id === memberId)!.name, text, attachments: [] });
@@ -172,4 +173,16 @@ test("a direct reply to Claude is always for Claude, even a one-word laugh", asy
   assert.match(turns[0]!.prompt, /a direct reply to your message #4 \(“Bananas are in the cart 🍌”\), so it's for you: answer it, or if words would add nothing .*react to it with one fitting emoji.*: “lol”/);
   await coordinator.handleMessage({ ...message("m-ben", "lol"), replyTo: { messageId: 5, name: "Ana", text: "the fridge is a crime scene", fromBot: false } });
   assert.equal(turns.length, 1, "a laugh replying to a roommate is still banter");
+});
+
+test("groceries go through GroupCart's Kroger flow: with post, GroupCart's own reply goes to the group", async () => {
+  const { coordinator, tool, commands, groupCartPosts, posted } = setup([]);
+  coordinator.connect("m-ana");
+  const result = await tool("run_groupcart_command").handler({ text: "milk, flour", post: true }, { memberId: "m-ben", memberName: "Ben", via: "Claude" }) as { posted?: boolean };
+  assert.deepEqual(commands, [{ memberId: "m-ben", text: "milk, flour" }]);
+  assert.equal(result.posted, true);
+  assert.deepEqual(groupCartPosts, ["Started sharing for Ben and Ana."], "posted as GroupCart, not as Claude");
+  assert.equal(posted.length, 0);
+  await tool("run_groupcart_command").handler({ text: "cart" }, { memberId: "m-ben", memberName: "Ben", via: "Claude" });
+  assert.equal(groupCartPosts.length, 1, "without post, nothing is posted");
 });

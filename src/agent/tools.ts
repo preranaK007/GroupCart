@@ -18,6 +18,8 @@ export type CoordinatorToolDeps = {
   postImage: (url: string, caption: string) => Promise<void>;
   /** Runs GroupCart's built-in command handling for a member's text and returns its reply (nothing is posted). */
   runCommand: (memberId: string, text: string) => Promise<string | null>;
+  /** Posts a message to the group as GroupCart itself (web chat and iMessage). */
+  postAsGroupCart: (text: string) => Promise<void>;
   /** Reacts to a chat message with one emoji (a tapback in iMessage). */
   react: (messageId: number, emoji: string) => Promise<void>;
   now?: () => Date;
@@ -138,11 +140,15 @@ export function coordinatorTools(deps: CoordinatorToolDeps): ToolSpec[] {
     },
     {
       name: "run_groupcart_command",
-      description: "Run one of GroupCart's built-in chat commands as the roommate you're answering, as if they had texted it, and get GroupCart's reply (nothing is posted; relay what matters). For what the other tools don't cover: sharing sessions (“start sharing with Sami”, “stop sharing”), recurring lists (“weekly: milk, eggs”, “load weekly list”), cart steps (“cart”, “approve”, “undo”, “remove eggs”), checkout, and numbered answers to GroupCart's own questions (“2”).",
-      inputSchema: { type: "object", properties: { text: { type: "string", description: "The command, written the way the roommate would text it." } }, required: ["text"] },
+      description: "Run one of GroupCart's built-in chat commands as the roommate you're answering, as if they had texted it, and get GroupCart's reply. With post true, GroupCart also posts its reply to the group itself (use this for grocery requests like “milk, flour”: GroupCart lists Kroger products with numbers and the roommate answers with a number). Without post, nothing is posted; relay what matters. Also for sharing sessions (“start sharing with Sami”, “stop sharing”), recurring lists (“weekly: milk, eggs”, “load weekly list”), cart steps (“cart”, “approve”, “undo”, “remove eggs”), and checkout.",
+      inputSchema: { type: "object", properties: { text: { type: "string", description: "The command, written the way the roommate would text it." }, post: { type: "boolean", description: "Post GroupCart's reply to the group as GroupCart." } }, required: ["text"] },
       mutates: true,
       handler: async (args, caller) => {
         const reply = await deps.runCommand(caller.memberId, text(args.text, 500));
+        if (reply && args.post === true) {
+          await deps.postAsGroupCart(reply);
+          return { posted: true, reply };
+        }
         return { reply: reply ?? "(GroupCart had nothing to say to that.)" };
       },
     },
