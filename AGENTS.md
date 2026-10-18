@@ -9,6 +9,7 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
 - `src/dashboard.ts`: loopback-only browser dashboard and local demo endpoints.
 - `src/config.ts`: environment configuration.
+- `src/googleCalendar.ts`: per-member Google OAuth (free/busy scope only), freeBusy API, and the calendar service used by `/calendar` and the `calendar` command; `src/calendarPage.ts`: the `/calendar` page and its routes; `src/availability.ts`: pure overlap/free-time math (`src/availability.test.ts`); `src/calendarDemo.ts`: deterministic sample schedules when Google is not configured.
 
 ## Environment and credentials
 

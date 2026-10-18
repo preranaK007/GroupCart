@@ -28,6 +28,7 @@ Keep `.env` private; never commit it or paste its secrets into chat. Start the a
 ## Commands in the group
 
 - Text `help`, `commands`, or `hi` for the welcome guide and examples. If a grocery search finds no match, GroupCart points you back to this guide.
+- Text `calendar` for the household calendar page link and the next couple of times everyone is free (8 AM–9 PM, at least 30 minutes).
 - Text `dashboard` for the companion cart page link. It is bound to `127.0.0.1`, so open it on the computer running GroupCart; it is not reachable from other devices by default.
 - Send one grocery item or a short list of up to five separated by commas or `and`, e.g. `2 bananas`, `Darigold 2% milk`, `bread, bananas, and eggs`, or `Vital Farms organic eggs shared with Anupritaa and Prerana`.
 - Add per-item price limits such as `pasta under $5` or `pasta under $5, bread up to $3`. `Under` is strict; `up to` includes the stated price. Limited searches only offer products with a current returned store price that meets the limit.
@@ -50,6 +51,11 @@ Configure Kroger Production app credentials, Cart API access, and a `KROGER_LOCA
 After a successful checkout (in live mode, only after Kroger confirms the items were added), GroupCart logs one expense in the household's Splitwise group: the member whose Kroger account received the items paid the full total, and each member owes exactly the share GroupCart computed (shares always sum to the total to the cent). The checkout reply includes a short Splitwise summary, and the dashboard shows the latest status (`GET /api/splitwise` returns it as JSON). A Splitwise failure (bad key, rate limit, unmapped member) never undoes the checkout; it is reported and can be retried. Each checkout is logged at most once.
 
 Set `SPLITWISE_API_KEY` (a personal API key from [secure.splitwise.com/apps](https://secure.splitwise.com/apps)), `SPLITWISE_GROUP_ID`, and `SPLITWISE_MEMBERS` (e.g. `Alex=12345,Maya=maya@example.com`, mapping each GroupCart member name to a Splitwise user id or email). In the local demo, or while these are unset, checkouts are simulated: GroupCart records and shows the expense it would have sent, but makes no Splitwise request.
+## Household calendar
+
+Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also linked from the dashboard). It shows a week view with one lane per member in their own color, shades times when two or more people are busy at once (darker as more overlap), highlights windows when everyone is free, and lists the best shared free times for the week (1 hour or longer, 8 AM–9 PM), which is handy for picking a pickup or delivery slot. Use the arrows or ←/→ to change weeks and **Today** (or `t`) to jump back.
+
+Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
 ## Configuration
 
@@ -71,12 +77,16 @@ Set `SPLITWISE_API_KEY` (a personal API key from [secure.splitwise.com/apps](htt
 | `SPLITWISE_API_KEY` | Splitwise personal API key (sent as a bearer token) | unset (Splitwise simulated) |
 | `SPLITWISE_GROUP_ID` | Numeric id of the household's Splitwise group | unset (Splitwise simulated) |
 | `SPLITWISE_MEMBERS` | Comma-separated `memberName=splitwiseUserIdOrEmail` mapping | unset (Splitwise simulated) |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 web client ID for per-member calendar free/busy | unset (sample schedules) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret | unset (sample schedules) |
+| `GOOGLE_REDIRECT_URI` | OAuth callback URL registered with Google | `GROUP_CART_PUBLIC_URL` + `/api/google/oauth/callback` |
 
 ## Development
 
 ```sh
 npm run dev
 npm run typecheck
+node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.

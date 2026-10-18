@@ -52,6 +52,8 @@ const SPLITWISE_PANEL_SCRIPT = `
     })();
   </script>`;
 // --- end Splitwise status panel ---------------------------------------------
+import { handleCalendarRequest } from "./calendarPage.js";
+import type { CalendarService } from "./googleCalendar.js";
 
 const html = `<!doctype html>
 <html lang="en">
@@ -110,6 +112,9 @@ const html = `<!doctype html>
     .live-note { padding:14px 16px; border-radius:14px; background:#edf7f0; border:1px solid #d8ecdf; color:#355c46; font-size:13px; margin-bottom:16px; }
     .live-note strong { display:block; margin-bottom:3px; color:#234a35; }
     [hidden] { display:none !important; }${SPLITWISE_PANEL_STYLES}
+    .header-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
+    .calendar-link { border:1px solid var(--line); background:white; color:var(--ink); padding:6px 12px; border-radius:999px; font-size:12px; font-weight:650; text-decoration:none; white-space:nowrap; }
+    .calendar-link:hover { border-color:#cfe4d7; background:var(--mint); color:var(--green); }
     @media(max-width:720px) { main{margin-top:18px}.layout{grid-template-columns:1fr}header{align-items:flex-start}.badge{max-width:150px;text-align:center} }
   </style>
 </head>
@@ -117,7 +122,7 @@ const html = `<!doctype html>
   <main>
     <header>
       <div class="brand"><div class="logo" aria-hidden="true">🛒</div><div><h1>GroupCart</h1><p class="sub">One shared cart for your group</p><p class="sync" id="syncState">Connecting to the cart…</p></div></div>
-      <span class="badge" id="mode">Loading cart…</span>
+      <div class="header-actions"><a class="calendar-link" href="/calendar">📅 Calendar</a><span class="badge" id="mode">Loading cart…</span></div>
     </header>
     <div class="live-note" id="liveNote" hidden><strong>Live iMessage cart · view only</strong>This page reads the same cart, item shares, prices, and revision the agent reports in your group. Changes made in iMessage appear here automatically. To add, remove, clear, undo, or approve, message the GroupCart number in the group chat.</div>
     <div class="layout">
@@ -282,9 +287,11 @@ function sendJson(response: import("node:http").ServerResponse, status: number, 
   response.end(JSON.stringify(value));
 }
 
-export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient): Server {
+export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    // Google Calendar: /calendar page, /api/calendar, and /api/google/* OAuth routes.
+    if (calendar && await handleCalendarRequest(calendar, request, response, url)) return;
     if (request.method === "GET" && url.pathname === "/api/kroger/oauth/start") {
       if (!krogerClient) return sendJson(response, 503, { error: "Kroger credentials are not configured." });
       const memberId = url.searchParams.get("memberId");
@@ -368,6 +375,9 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
         }
         const member = store.getMembers().find((candidate) => candidate.id === body.memberId);
         if (!member) return sendJson(response, 404, { error: "Member not found." });
+        // Google Calendar: answer the "calendar" command before cart processing.
+        const calendarReply = calendar ? await calendar.replyToCommand(`demo:${randomUUID()}`, body.text) : null;
+        if (calendarReply) return sendJson(response, 200, { message: calendarReply });
       const reply = krogerClient
         ? await store.processLiveIncomingText(
           `demo:${randomUUID()}`,
