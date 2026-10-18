@@ -123,3 +123,21 @@ test("run_groupcart_command runs a built-in command as the roommate being answer
   assert.deepEqual(commands, [{ memberId: "m-ben", text: "start sharing with Ana" }]);
   assert.deepEqual(result, { reply: "Started sharing for Ben and Ana." });
 });
+
+test("staying quiet: banter skips the turn, and a reply that explains itself before \"(no reply)\" posts nothing", async () => {
+  const { coordinator, posted, turns } = setup(["Sami's message is banter, not a request for me.\n\n(no reply)"]);
+  coordinator.connect("m-ana");
+  await coordinator.handleMessage(message("m-ben", "lol 👍"));
+  assert.equal(turns.length, 0, "banter never reaches Claude");
+  await coordinator.handleMessage(message("m-ben", "I thought photon was supposed to"));
+  assert.equal(turns.length, 1);
+  assert.equal(posted.length, 0);
+});
+
+test("a bare \"yes\" right after Claude spoke still reaches Claude (it may answer its question)", async () => {
+  const { coordinator, turns, channel } = setup(["(no reply)"]);
+  coordinator.connect("m-ana");
+  await channel.post("Found 2% milk and flour. Do these work?");
+  await coordinator.handleMessage(message("m-ben", "yes"));
+  assert.equal(turns.length, 1);
+});

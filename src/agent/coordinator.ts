@@ -8,6 +8,7 @@
 // Tool calls run as the roommate being answered ("Tanmay via Claude"); proactive turns run as the roommate who
 // connected it. It never checks out, places orders, or moves money; the connector tools can't.
 import type { DatabaseSync } from "node:sqlite";
+import { isBanter } from "../store/parsing.js";
 import { togglePollVote, type ChatCard, type ChatMessage } from "../chat.js";
 import type { CommandContext } from "../platform.js";
 import type { Member } from "../store.js";
@@ -96,6 +97,10 @@ export class HouseholdCoordinator {
 
   /** Handles a roommate's group message (already recorded in the chat). Posts what it has to say itself. */
   handleMessage(message: CommandContext): Promise<void> {
+    // Laughs, reactions and "ok"s aren't for the coordinator, so they don't cost a turn, unless Claude just spoke
+    // (then "yes" or "ok" may be the answer to its question).
+    const claudeJustSpoke = this.#options.channel.recent(3).some((entry) => entry.kind === "bot" && entry.name === COORDINATOR_NAME);
+    if (!message.attachments.length && isBanter(message.text) && !claudeJustSpoke) return Promise.resolve();
     return this.#enqueue(async () => {
       const photos = message.attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length;
       const said = message.text.trim() ? `“${message.text.trim()}”` : "(no text)";
@@ -173,7 +178,8 @@ export class HouseholdCoordinator {
   async #turn(memberId: string, note: string): Promise<void> {
     const before = this.#options.channel.recent(1).at(-1)?.id ?? 0;
     const reply = (await this.#options.runTurn({ prompt: this.#situation(note), systemPrompt: SYSTEM_PROMPT, memberId, disallowedTools: COORDINATOR_EXCLUDED_TOOLS }))?.trim();
-    if (!reply || reply.startsWith(SILENT)) return;
+    // Staying quiet wins even when the model explained itself first ("…banter, not for me. (no reply)").
+    if (!reply || reply.toLowerCase().includes(SILENT)) return;
     // A tool already told the group (a saved bill, a booked event, a card): a recap on top would repeat it.
     if (this.#options.channel.recent(20).some((entry) => entry.id > before && entry.kind === "bot")) return;
     await this.#options.channel.post(reply);
@@ -220,8 +226,8 @@ function cardSummary(card: ChatCard, members: Member[]): string {
 const SYSTEM_PROMPT = `You are Claude, the coordinator for a shared apartment. You live in the roommates' group chat (iMessage, mirrored in the GroupCart web app) and keep the household running: plans and calendars, groceries, shared expenses and bills, chores, and house stuff. One roommate connected you for everyone; treat all roommates the same. Your only tools are GroupCart's; they act as the roommate you're answering.
 
 How you work:
-- Each turn you see the recent chat and one new message or event. Act on it with your tools. Your final message is posted to the group word for word, so it is either one short chat message or exactly "(no reply)". It is never a summary of what you did for whoever is running you.
-- Reply "(no reply)" to banter, reactions and people talking among themselves, unless someone asks you something.
+- Each turn you see the recent chat and one new message or event. Your final message is posted to the group word for word, so it is either one short chat message or exactly "(no reply)", with nothing before or after it. Never explain why you are staying quiet, and never summarize what you did for whoever is running you.
+- Speak only when the message is for you: someone names you ("Claude"), asks for something your tools do (add to the cart, log or split money, plan or schedule, chores, house info), sends a bill or receipt photo, or answers a question you or GroupCart asked them. Everything else is "(no reply)": roommates talking to each other, banter, reactions, opinions, and short replies like "cancel", "ok", or "lol" that aren't answering you. When unsure, stay quiet.
 - Many tools post their own message to the group (saving a bill, adding an event, chores, cards). When one already said it, your reply is "(no reply)". The same after you post a card: the card carries its own line.
 - Do the work instead of asking. If a request is clear enough, act and confirm in one line. Ask one short question only when a wrong guess would cost money or annoy people.
 - Write like a thoughtful roommate texting: one or two short lines and under 40 words, recaps included, plain text, no markdown, no lists, at most one emoji. Never paste links, ids, or tool output; use a card. Call roommates by name and never guess anyone's pronouns.
