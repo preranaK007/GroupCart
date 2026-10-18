@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Groceries (`/groceries`) shows the shared cart, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) shows the shared cart, People (`/people`) shows everyone's profile, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
 
 ## Connect your Spectrum dedicated line
 
@@ -84,6 +84,13 @@ Open [http://127.0.0.1:3000/chores](http://127.0.0.1:3000/chores). A Mon–Sun w
 - **API:** `GET /api/chores?week=YYYY-MM-DD`; JSON `POST /api/chores` (create), `/api/chores/done`, `/undo`, `/skip`, `/assign`, `/delete`, `/restore`, `/away`.
 
 The local demo seeds sample chores and history (dishes, trash, vacuum, bathroom, plants, recycling, fridge) once; live mode starts empty. Data lives in `chore_*` tables in the same SQLite file.
+## Profiles, sign-in, and web chat
+
+Each member has a profile at `/people/<id>`: a name, a photo or emoji avatar, optional pronouns (GroupCart never guesses; it uses names or they/them), a short bio, dietary notes and allergies, favorite snacks, movie and game picks, a birthday, and a payment handle such as Venmo. Open your own profile from the avatar menu in the top right to edit it.
+
+`/chat` shows the group conversation the way iMessage does. In live mode it mirrors the iMessage group: every message from allowlisted members, GroupCart's replies, and group notifications. A message you send from the website is posted to the group as “Maya: …” and handled exactly like the same text in the group, so “2 bananas”, “cart”, and photos of bills all work. In the demo, nothing is sent anywhere.
+
+On the computer running GroupCart you are already signed in; the avatar menu's **Viewing as** list picks which member you act as. To use GroupCart from your own phone or laptop, set `GROUP_CART_HOST=0.0.0.0` (or put it behind a tunnel), open `/signin`, and enter the phone number or Apple ID you use in the group. GroupCart texts you a 6-digit code by iMessage (valid 10 minutes, single use). Sessions last 30 days. If iMessage isn't connected, sign-in from other devices is unavailable and the page says so. In the demo the code is shown on screen.
 
 ## Configuration
 
@@ -97,6 +104,7 @@ The local demo seeds sample chores and history (dishes, trash, vacuum, bathroom,
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |
 | `GROUP_CART_PUBLIC_URL` | Public base URL used in links; a non-loopback HTTPS value (e.g. a tunnel) also becomes the public Claude connector URL | `http://127.0.0.1:$PORT` |
 | `PORT` | Local dashboard port | `3000` |
+| `GROUP_CART_HOST` | Address the dashboard listens on. `0.0.0.0` serves your network; other devices must sign in | `127.0.0.1` (this computer only) |
 | `KROGER_CLIENT_ID` | Kroger Production app client ID for product search and user-authorized cart access | unset (live Kroger features disabled) |
 | `KROGER_CLIENT_SECRET` | Kroger Production app client secret | unset (live Kroger features disabled) |
 | `KROGER_LOCATION_ID` | Kroger-family store ID for local availability/prices | unset |
