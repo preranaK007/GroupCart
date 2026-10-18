@@ -85,7 +85,7 @@ setupListsAndEvents({ store, calendar, demoMode: !liveMode, kroger: krogerClient
 async function processMemberMessage(message: CommandContext): Promise<string | null> {
   // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
   // recurring-list phrases the store owns (upstream), which go straight to the store.
-  const commandReply = store.ownsMessage(message.text) ? null : await runCommands(message);
+  const commandReply = store.ownsMessage(message.text, message.memberId) ? null : await runCommands(message);
   if (commandReply) return commandReply;
   const text = message.text;
   if (!text.trim()) return null;

@@ -356,7 +356,9 @@ export class CartLedger {
     return pending.length
       ? `Your approval is saved for cart revision ${updated.revision}. Waiting for: ${pending.join(", ")}. Any cart change will require approvals again.`
       : this.ctx.krogerCartEnabled
-        ? `Everyone approved cart revision ${updated.revision}. Text “checkout” to choose a Kroger account and add these items to its cart.`
+        ? this.m.checkout.hasOpenReview()
+          ? `Everyone approved cart revision ${updated.revision}. The availability review is still open; text “checkout” to see the choices. Applying them will require fresh approvals.`
+          : `Everyone approved cart revision ${updated.revision}. Text “checkout” to check store availability before choosing a Kroger account.`
         : `Everyone approved cart revision ${updated.revision}. Text “checkout” to finish a simulated checkout.`;
   }
 

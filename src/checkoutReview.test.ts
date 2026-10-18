@@ -6,12 +6,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import type { KrogerCartAvailabilityIssue, KrogerProduct } from "./kroger.js";
+import { KrogerClient, type KrogerCartAvailabilityIssue, type KrogerProduct } from "./kroger.js";
 import { parseReviewCommand } from "./store/parsing.js";
 import { CartStore, type Member } from "./store.js";
 
 let directory: string;
 let counter = 0;
+const stores: CartStore[] = [];
 const id = () => `review:${++counter}`;
 
 before(() => {
@@ -19,6 +20,7 @@ before(() => {
 });
 
 after(() => {
+  for (const store of stores) store.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -48,6 +50,7 @@ async function reviewWith(
   options: { share?: boolean; beforeCheckout?: (h: Harness) => Promise<void> } = {},
 ): Promise<Harness & { opening: string }> {
   const store = new CartStore(join(directory, `${++counter}.sqlite`), "household-review", 50_000, "http://127.0.0.1:3999", true);
+  stores.push(store);
   store.registerMembers([{ handle: "demo:alex", name: "Alex" }, { handle: "demo:maya", name: "Maya" }, { handle: "demo:jordan", name: "Jordan" }]);
   const byName = (memberName: string) => store.getMembers().find((member) => member.name === memberName)!;
   const alex = byName("Alex"), maya = byName("Maya"), jordan = byName("Jordan");
@@ -98,14 +101,13 @@ test("parser: numbers only, natural wrappers, never names", () => {
     ["remove １", { kind: "remove", which: [1] }],
     ["remove 1,2 from cart", { kind: "remove", which: [1, 2] }],
     ["remove all unavailable", { kind: "remove", which: "all" }],
-    ["remove the unavailable items please", { kind: "remove", which: "all" }],
     ["remove the unavailable item", { kind: "remove", which: "single" }],
     ["replace 1 with 2", { kind: "replace", item: 1, option: 2 }],
     ["replace #1 with 2.", { kind: "replace", item: 1, option: 2 }],
     ["swap item 2 for option 1", { kind: "replace", item: 2, option: 1 }],
   ];
   for (const [text, expected] of cases) assert.deepEqual(parseReviewCommand(text), expected, text);
-  for (const text of ["remove the hooks", "drop it", "cancel it", "remove all", "don't remove the eggs", "remove 2 eggs", "remove the 12 pack", "remove 100% juice", "wait, did you remove the eggs?", "I don't want one", "remove"]) {
+  for (const text of ["remove the hooks", "drop it", "cancel it", "remove all", "remove all of them", "drop all those", "remove the unavailable items", "don't remove the eggs", "remove 2 eggs", "remove the 12 pack", "remove 100% juice", "wait, did you remove the eggs?", "I don't want one", "remove"]) {
     assert.equal(parseReviewCommand(text), undefined, text);
   }
 });
@@ -235,6 +237,7 @@ test("anyone's checkout shows the review; approve passes through; the store numb
   assert.match(shown, /“replace 2 with 1”/);
   assert.doesNotMatch(shown, /already being prepared/);
   assert.match(await h.say(h.jordan, "approve"), /approved/i);
+  assert.match(await h.say(h.jordan, "approve"), /availability review is still open/);
 });
 
 test("late review commands after the review ended don't become a product search", async () => {
@@ -285,4 +288,123 @@ test("cancel while items are being sent to Kroger says it can't be stopped", asy
   });
   assert.match(duringAdd, /can’t be stopped now/);
   assert.equal(result.ok, true);
+});
+
+test("the checkout starter can cancel or confirm their own list clear during review", async () => {
+  for (const answer of ["cancel", "yes"]) {
+    const h = await reviewWith([["Hooks"]], { Hooks: 0 });
+    await h.say(h.alex, "weekly: bread");
+    await h.say(h.alex, "1");
+    await h.say(h.alex, "clear weekly list");
+    const reply = await h.say(h.alex, answer);
+    assert.match(reply, answer === "cancel" ? /left the weekly list unchanged/ : /[Cc]leared.*weekly/);
+    assert.equal(h.store.pendingQuestionAt(h.alex.id), null);
+    assert.equal(h.store.pendingKrogerCheckout()?.status, "replacement_review");
+    assert.deepEqual(h.names(), ["Hooks"]);
+  }
+});
+
+test("own pending cart questions accept cancel variants without ending the group review", async () => {
+  for (const question of ["clear all", "pears", "pears, apples", "milk", "weekly: bread"]) {
+    for (const cancel of ["cancel", "Cancel!", "never mind."]) {
+      const h = await reviewWith([["Hooks"]], { Hooks: 0 }, {
+        beforeCheckout: async (x) => { await x.say(x.maya, question); },
+      });
+      assert.ok(h.store.pendingQuestionAt(h.maya.id), question);
+      assert.equal(h.store.ownsMessage(cancel, h.maya.id), true, "feature drafts must leave this answer to the store");
+      assert.equal(h.store.ownsMessage(cancel, h.jordan.id), false, "another member's pending feature may still take their cancel");
+      await h.say(h.maya, cancel);
+      assert.equal(h.store.pendingQuestionAt(h.maya.id), null, `${question}: ${cancel}`);
+      assert.equal(h.store.pendingKrogerCheckout()?.status, "replacement_review");
+      assert.deepEqual(h.names(), ["Hooks"]);
+    }
+  }
+});
+
+test("all review prompts describe empty suggestions honestly and offer a substitute search", async () => {
+  const h = await reviewWith([["Hooks"], ["Bread"]], { Hooks: 0, Bread: 0 });
+  for (const reply of [h.opening, await h.say(h.maya, "hello there"), await h.say(h.maya, "remove 1")]) {
+    assert.doesNotMatch(reply, /no alternatives/i);
+    assert.match(reply, /(?:didn’t return|none returned)/);
+    assert.match(reply, /cancel checkout.*(?:search|look).*substitute/);
+  }
+});
+
+test("a long unavailable list still gets a short nudge", async () => {
+  const names = Array.from({ length: 12 }, (_, i) => `Very Long Household Cleaning Product ${i}`);
+  const h = await reviewWith(names.map((name) => [name]), Object.fromEntries(names.map((name) => [name, 0])));
+  const reply = await h.say(h.maya, "sounds good");
+  assert.ok(reply.length < 400, `nudge length: ${reply.length}`);
+  assert.match(reply, /checkout.*full list/);
+});
+
+test("name hints never remove another member's item or an available namesake", async () => {
+  const h = await reviewWith([["Dust Cloths", "Maya"], ["Cotton Cloths", "Alex"]], { "Dust Cloths": 0 });
+  const before = h.store.snapshot();
+  assert.equal(before.items.length, 2);
+  for (const text of ["remove cloths", "remove Dust Cloths", "remove Cotton Cloths", "drop all of them"]) {
+    await h.say(h.alex, text);
+    assert.deepEqual(h.store.snapshot().items, before.items);
+    assert.equal(h.revision(), before.revision);
+  }
+});
+
+test("a pending removal gets its own cancel; cart-changing answers wait until review ends", async () => {
+  const h = await reviewWith([["Cloth Red"], ["Cloth Blue"]], { "Cloth Red": 0 }, {
+    beforeCheckout: async (x) => { await x.say(x.alex, "remove cloth"); },
+  });
+  assert.ok(h.store.pendingQuestionAt(h.alex.id));
+  const before = h.store.snapshot();
+  assert.match(await h.say(h.alex, "1"), /^Checkout is paused/);
+  assert.deepEqual(h.store.snapshot().items, before.items);
+  await h.say(h.alex, "Cancel!");
+  assert.equal(h.store.pendingQuestionAt(h.alex.id), null);
+  assert.equal(h.store.pendingKrogerCheckout()?.status, "replacement_review");
+});
+
+test("list item text that looks like a review choice stays inside the list", async () => {
+  const h = await reviewWith([["Dust Cloths"]], { "Dust Cloths": 0 });
+  for (const text of ["monthly: drop cloths", "monthly: remove 1", "monthly: remove all unavailable"]) {
+    assert.match(await h.say(h.maya, text), /For the monthly list, Kroger found/);
+    await h.say(h.maya, "cancel");
+    assert.deepEqual(h.names(), ["Dust Cloths"]);
+    assert.equal(h.store.pendingKrogerCheckout()?.status, "replacement_review");
+  }
+});
+
+test("a Kroger suggestion timeout is an empty response, not proof there are no substitutes", async (t) => {
+  const client = new KrogerClient("test-client", "test-secret", "TEST-STORE");
+  t.mock.method(globalThis, "fetch", async (url: string | URL) => {
+    if (String(url).includes("/oauth2/token")) return Response.json({ access_token: "test-access", expires_in: 300 });
+    assert.match(String(url), /\/products\/test-upc\?/);
+    return new Response(null, { status: 404 });
+  });
+  t.mock.method(client, "searchProducts", async () => { throw new Error("Timed out"); });
+  const issues = await client.checkCartAvailability([{ id: "item-1", name: "Hooks", upc: "test-upc", quantity: 1 }]);
+  assert.equal(issues.length, 1);
+  assert.deepEqual(issues[0]!.alternatives, []);
+  // The empty-suggestion prompts above cover this same result, including the option to search manually.
+});
+
+test("an unfinished list pick cannot let cart-changing commands bypass the review lock", async () => {
+  const h = await reviewWith([["Hooks"]], { Hooks: 0 });
+  await h.say(h.maya, "weekly: bread");
+  await h.say(h.maya, "1");
+  await h.say(h.alex, "monthly: cloths");
+  const before = h.store.snapshot();
+  for (const text of ["load weekly list", "clear mine", "clear all", "undo", "confirm clear all"]) {
+    assert.match(await h.say(h.alex, text), /^Checkout is paused/, text);
+    assert.deepEqual(h.store.snapshot().items, before.items);
+    assert.equal(h.revision(), before.revision);
+  }
+  assert.match(await h.say(h.alex, "1"), /Saved to the household’s monthly list/);
+});
+
+test("punctuated approvals never fall through to a product search during review", async () => {
+  const h = await reviewWith([["Hooks"]], { Hooks: 0 });
+  for (const text of ["approve!", "approve cart.", "confirm cart!"]) {
+    assert.match(await h.say(h.maya, text), /^Checkout is paused/);
+    assert.equal(h.searches.length, 0);
+    assert.equal(h.store.hasPendingChoice(h.maya.id), false);
+  }
 });

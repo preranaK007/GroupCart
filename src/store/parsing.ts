@@ -6,6 +6,12 @@ import type { BatchRequest, Member } from "./types.js";
 
 /** Exact cart commands; anything matching is never treated as a product search. */
 export const CART_COMMAND_PATTERN = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i;
+/** A bare reply to the sender's own question, or to the group review when they have none. */
+export const CANCEL_REPLY_PATTERN = /^(?:cancel|never mind|nevermind)[.!?]*$/i;
+export function normalizeCancelReply(text: string): string {
+  const trimmed = text.trim();
+  return CANCEL_REPLY_PATTERN.test(trimmed) ? "cancel" : trimmed;
+}
 /** A choice for the checkout availability review. Items are only ever named by number. */
 export type ReviewCommand =
   | { kind: "replace"; item: number; option: number }
@@ -40,7 +46,7 @@ export function parseReviewCommand(text: string): ReviewCommand | undefined {
   const verb = t.match(/^(?:remove|drop|delete|skip)\s+(.+)$/);
   if (!verb) return undefined;
   const target = verb[1]!.trim();
-  if (/^all (?:of )?(?:the )?unavailable(?: (?:items|ones|things|stuff))?$|^(?:the )?unavailable (?:items|ones|things|stuff)$|^all (?:of )?(?:them|those)$/.test(target)) {
+  if (/^all (?:of )?(?:the )?unavailable(?: (?:items|ones|things|stuff))?$/.test(target)) {
     return { kind: "remove", which: "all" };
   }
   if (/^(?:the )?unavailable(?: (?:item|one|thing))?$/.test(target)) return { kind: "remove", which: "single" };

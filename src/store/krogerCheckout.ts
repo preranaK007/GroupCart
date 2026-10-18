@@ -244,7 +244,7 @@ export class KrogerCheckout {
         this.ctx.db.prepare("UPDATE pending_kroger_replacements SET issues_json = ? WHERE household_id = ?")
           .run(JSON.stringify(issues), this.ctx.householdId);
         const remaining = this.#undecided(issues);
-        return `Noted: ${noted}. Nothing in GroupCart changes until every unavailable item has a choice. Still to decide: ${remaining.map((number) => `${label(number)} (${this.#choiceHint(issues, number)})`).join("; ")}. Send a new choice to change one, or “cancel checkout” to discard them all.`;
+        return `Noted: ${noted}. Nothing in GroupCart changes until every unavailable item has a choice. Still to decide: ${remaining.map((number) => `${label(number)} (${this.#choiceHint(issues, number)})`).join("; ")}. Send a new choice to change one, or ${this.#cancelHint()}.`;
       }
       return this.#applyReview(memberId, review);
     });
@@ -353,7 +353,11 @@ export class KrogerCheckout {
   #choiceHint(issues: ReviewIssue[], number: number): string {
     return issues[number - 1]!.alternatives.length
       ? `“replace ${number} with 1” or “remove ${number}”`
-      : `no alternatives; “remove ${number}”`;
+      : `Kroger didn’t return any alternatives; “remove ${number}”`;
+  }
+
+  #cancelHint(): string {
+    return "“cancel checkout” to discard these choices and search for a substitute";
   }
 
   #storeLabel(locationId: string | undefined): string {
@@ -363,14 +367,16 @@ export class KrogerCheckout {
   /** One-line status: what still needs a choice and how to give it. */
   #nudgeText(review: Review): string {
     const undecided = this.#undecided(review.issues);
-    const open = undecided.map((number) => {
+    const open = undecided.slice(0, 2).map((number) => {
       const issue = review.issues[number - 1]!;
       const count = issue.alternatives.length;
-      return `${number}) ${issue.name} (${count ? `${count} suggestion${count === 1 ? "" : "s"}` : "no alternatives"})`;
+      const name = issue.name.length > 35 ? `${issue.name.slice(0, 32)}…` : issue.name;
+      return `${number}) ${name} (${count ? `${count} suggestion${count === 1 ? "" : "s"}` : "none returned"})`;
     });
+    if (undecided.length > open.length) open.push(`${undecided.length - open.length} more`);
     const first = undecided[0];
     const example = first === undefined ? "" : `“${review.issues[first - 1]!.alternatives.length ? `replace ${first} with 1` : `remove ${first}`}”, `;
-    return `${open.length ? `Still to decide: ${open.join("; ")}. ` : ""}Text ${example}“checkout” to see the full list, or “cancel checkout” to stop with GroupCart unchanged.`;
+    return `${open.length ? `Still to decide: ${open.join("; ")}. ` : ""}Text ${example}“checkout” for the full list, or ${this.#cancelHint()}.`;
   }
 
   #formatReview(review: Review): string {
@@ -391,7 +397,7 @@ export class KrogerCheckout {
     const choices = [
       withAlternatives !== undefined ? `“replace ${withAlternatives} with 1” to swap in a suggestion (item number, then suggestion number)` : "",
       firstOpen !== undefined ? `“remove ${firstOpen}” to drop an item for everyone${undecided.length > 1 ? " (“remove all unavailable” for every open one)" : ""}` : "",
-      "“cancel checkout” to stop with GroupCart unchanged",
+      `${this.#cancelHint()} (GroupCart stays unchanged)`,
     ].filter(Boolean);
     return `Kroger’s availability check at ${this.#storeLabel(locationId)} found ${issues.length} unavailable item${issues.length === 1 ? "" : "s"}. Checkout is paused until each has a choice, and nothing in GroupCart changes until then:\n${lines.join("\n")}\nAnyone in the group can text ${choices.join("; ")}. Applying the choices changes the cart, so everyone approves again before checkout. Confirm the Kroger account uses ${this.#storeLabel(locationId)}. Nothing has been sent to Kroger.`;
   }
