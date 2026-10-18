@@ -3,13 +3,15 @@ import { dirname, resolve } from "node:path";
 import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import { startDashboard } from "./dashboard.js";
-import { config, validateSpectrumConfig } from "./config.js";
+import { config, findMember, maskHandle, validateSpectrumConfig } from "./config.js";
 import { KrogerClient } from "./kroger.js";
 import { CalendarService, GoogleCalendarClient } from "./googleCalendar.js";
 import { googleCalendarConfig } from "./config.js";
+import { auditGroupRoster, handleMembershipEvent, isMembershipEvent } from "./membership.js";
 import { CartStore } from "./store.js";
 import { splitwiseConfig } from "./config.js";
 import { SplitwiseService } from "./splitwise.js";
+import { registerCommand, runCommands, setGroupSender, stopSchedules, type CommandAttachment } from "./platform.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -54,12 +56,15 @@ const calendar = new CalendarService(
     ? new GoogleCalendarClient(googleCalendarConfig.clientId, googleCalendarConfig.clientSecret, googleCalendarConfig.redirectUri)
     : undefined,
 );
+// Group-chat commands registered by feature modules run before cart processing (see src/platform.ts).
+registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCommand(messageId, text) : null));
 // --- end Google Calendar ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {
   console.log("Spectrum Cloud is not configured. Running the browser-based local demo; no messages are sent.");
   const shutdown = (): void => {
+    stopSchedules();
     dashboard.close();
     store.close();
   };
@@ -73,48 +78,73 @@ if (!liveMode) {
   });
 
   console.log(`GroupCart is listening for iMessage group requests from ${members.length} configured household member(s).`);
+  const auditedSpaces = new Set<string>();
 
   try {
     for await (const [space, message] of app.messages) {
-      if (message.direction !== "inbound" || message.platform !== "imessage") continue;
-      if (message.content.type !== "text") continue;
-      if (imessage(space).type !== "group") continue;
+      if (message.platform !== "imessage") continue;
+      const groupSpace = imessage(space);
+      if (groupSpace.type !== "group") continue;
+      if (!auditedSpaces.has(space.id)) {
+        auditedSpaces.add(space.id);
+        void auditGroupRoster(space, members, groupSpace.phone);
+      }
+      if (message.direction === "outbound") continue;
+      // Membership events (dedicated line only) carry no `direction` and are not text, so handle them first.
+      if (isMembershipEvent(message.content)) {
+        try {
+          await handleMembershipEvent(space, message, members, store, groupSpace.phone);
+        } catch (error) {
+          console.error(`Could not handle a group membership event: ${error instanceof Error ? error.message : "unknown error"}`);
+        }
+        continue;
+      }
+      if (message.direction !== "inbound") continue;
+      if (message.content.type !== "text" && message.content.type !== "attachment") continue;
+      // Remember the latest group so features can post proactive updates (nudges, reminders).
+      setGroupSender(async (text) => { await space.send(text); });
 
       const senderHandle = message.sender?.id;
       if (!senderHandle) continue;
-      const normalizedHandle = senderHandle.includes("@") ? senderHandle.toLocaleLowerCase() : senderHandle;
-      const configuredMember = members.find((member) => member.handle === normalizedHandle);
+      const configuredMember = findMember(members, senderHandle);
       if (!configuredMember) {
-        console.warn("Ignored a group message from a sender not listed in GROUP_CART_MEMBERS.");
+        console.warn(`Ignored a group message from ${maskHandle(senderHandle)}, which is not listed in GROUP_CART_MEMBERS.`);
         continue;
       }
 
       const member = store.memberForHandle(configuredMember.handle);
       if (!member) continue;
-      // Google Calendar: "calendar" command (read-only; answered before cart processing).
-      const calendarReply = await calendar.replyToCommand(message.id, message.content.text).catch((error: unknown) => {
-        console.warn("Calendar command failed:", error instanceof Error ? error.message : error);
-        return "I couldn’t check the household calendar just now. Please try again in a moment.";
+      const content = message.content;
+      const attachments: CommandAttachment[] = content.type === "attachment"
+        ? [{ mimeType: content.mimeType, name: content.name, read: () => content.read() }]
+        : [];
+      const commandReply = await runCommands({
+        messageId: message.id,
+        memberId: member.id,
+        memberName: member.name,
+        text: content.type === "text" ? content.text : "",
+        attachments,
       });
-      if (calendarReply) {
+      if (commandReply) {
         await space.responding(async () => {
-          await space.send(calendarReply);
+          await space.send(commandReply);
         });
         continue;
       }
+      if (content.type !== "text") continue;
       const reply = krogerClient
         ? await store.processLiveIncomingText(
           message.id,
           member.id,
-          message.content.text,
+          content.text,
           (query) => krogerClient.searchProducts(query),
           krogerClient.selectedLocationId,
           true,
           (items) => krogerClient.checkCartAvailability(items),
         )
-        : /^(checkout|finish checkout)$/i.test(message.content.text.trim())
+        : /^(checkout|finish checkout)$/i.test(content.text.trim())
           ? "Kroger cart checkout is not connected because Kroger app credentials are missing. GroupCart has not placed an order or changed any Kroger cart."
-          : store.processIncomingText(message.id, member.id, message.content.text);
+          : store.processIncomingText(message.id, member.id, content.text);
       if (!reply) continue;
 
       await space.responding(async () => {
@@ -123,6 +153,7 @@ if (!liveMode) {
       console.log(`Replied in the household group for ${configuredMember.name}.`);
     }
   } finally {
+    stopSchedules();
     dashboard.close();
     store.close();
     await app.stop();

@@ -12,9 +12,11 @@ import {
   unsupportedBrandedRequest,
   type Product,
 } from "./cart.js";
+import { maskHandle, normalizeHandle } from "./config.js";
 import type { KrogerCartAvailabilityIssue, KrogerProduct } from "./kroger.js";
 
-export type MemberConfig = { handle: string; name: string };
+/** `handle` is the member's primary (id-defining) handle; `aliases` are extra handles for the same person. */
+export type MemberConfig = { handle: string; name: string; aliases?: string[] };
 export type Member = { id: string; handle: string; name: string };
 export type GoogleCalendarAccount = { memberId: string; refreshToken: string; scope: string; status: "connected" | "needs_reconnect"; lastError: string | null; connectedAt: string };
 type ItemRow = {
@@ -247,8 +249,25 @@ export class CartStore {
     const insert = this.#db.prepare(
       "INSERT INTO members (id, household_id, handle, name) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET name = excluded.name",
     );
+    const update = this.#db.prepare("UPDATE members SET handle = ?, name = ? WHERE id = ?");
+    // Rows were keyed by the raw configured handle. Reuse any existing row whose handle normalizes to one of the
+    // member's handles so member ids (and their cart items, shares, and approvals) survive normalization or reordering.
+    const existing = this.getMembers();
+    const claimed = new Set<string>();
     for (const member of configuredMembers) {
-      insert.run(this.memberId(member.handle), this.#householdId, member.handle, member.name);
+      const handle = normalizeHandle(member.handle);
+      const handles = new Set([handle, ...(member.aliases ?? []).map(normalizeHandle)]);
+      const matches = existing.filter((row) => !claimed.has(row.id) && handles.has(normalizeHandle(row.handle)));
+      const row = matches.find((candidate) => candidate.handle === handle) ?? matches[0];
+      if (!row) {
+        insert.run(this.memberId(handle), this.#householdId, handle, member.name);
+        continue;
+      }
+      claimed.add(row.id);
+      if (row.handle !== handle || row.name !== member.name) update.run(handle, member.name, row.id);
+      for (const duplicate of matches.filter((candidate) => candidate !== row)) {
+        console.warn(`GroupCart database has a separate member row for ${maskHandle(duplicate.handle)}, now listed under ${member.name}; it is kept so existing cart history stays valid.`);
+      }
     }
     return this.getMembers();
   }
@@ -262,7 +281,14 @@ export class CartStore {
   memberForHandle(handle: string): Member | undefined {
     return this.#db.prepare(
       "SELECT id, handle, name FROM members WHERE household_id = ? AND handle = ?",
-    ).get(this.#householdId, handle) as Member | undefined;
+    ).get(this.#householdId, normalizeHandle(handle)) as Member | undefined;
+  }
+
+  /** Records a handled message id (e.g. a group membership event); returns false if it was already processed. */
+  markMessageProcessed(messageId: string, reply: string | null): boolean {
+    return Number(this.#db.prepare(
+      "INSERT OR IGNORE INTO processed_messages (message_id, reply_text, processed_at) VALUES (?, ?, ?)",
+    ).run(messageId, reply, new Date().toISOString()).changes) > 0;
   }
 
   processIncomingText(messageId: string, memberId: string, text: string): string | null {

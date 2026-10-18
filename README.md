@@ -20,10 +20,16 @@ This project uses the Spectrum Cloud SDK (`spectrum-ts`) and its iMessage provid
 ```env
 PROJECT_ID=...
 PROJECT_SECRET=...
-GROUP_CART_MEMBERS=+15555550100=Alex,+15555550101=Maya
+GROUP_CART_MEMBERS=+15555550100=Alex,+15555550101|maya@example.com=Maya
 ```
 
 Keep `.env` private; never commit it or paste its secrets into chat. Start the app with `npm run start`. It handles inbound text only from configured members in iMessage group conversations, ignores direct messages and the agent's own outbound echoes, and replies in the originating group. The shared group should include the Spectrum dedicated number and each member should send at least one message so their sender identities can be allowlisted.
+
+### Group members
+
+`GROUP_CART_MEMBERS` is an explicit allowlist; GroupCart never enrolls anyone automatically. Each entry is `handle=Name`. List several handles for one person with `|` (for example `+15555550101|maya@example.com=Maya`), because someone added to an existing group often shows up under their Apple ID email rather than their phone. Handles are normalized before comparison: emails are lowercased, phone numbers drop spaces, dashes, dots, and parentheses, and 10-digit US numbers are treated as `+1XXXXXXXXXX`. Existing single-handle entries and saved carts keep working.
+
+Join events require the dedicated Business line (shared-pool lines do not report them). When someone is added to the group, GroupCart replies once: a short welcome for allowlisted people, or a note that an organizer must add their phone or Apple ID to `GROUP_CART_MEMBERS`, with a masked hint (last 4 digits or masked email) of the handle Spectrum sees. No email or other notification is sent, so watch the group chat or console, update `.env`, and restart. After startup, the first message from each group also logs masked handles of any current participants not on the allowlist (covering people added before GroupCart connected). Messages from non-allowlisted senders are ignored and logged with a masked handle.
 
 ## Commands in the group
 
@@ -63,7 +69,7 @@ Without Google credentials the page runs in demo mode with generated sample sche
 | --- | --- | --- |
 | `PROJECT_ID` | Spectrum Cloud project ID | unset (local demo) |
 | `PROJECT_SECRET` | Spectrum Cloud project secret | unset (local demo) |
-| `GROUP_CART_MEMBERS` | Comma-separated `senderHandle=name` allowlist | demo users in local mode |
+| `GROUP_CART_MEMBERS` | Comma-separated `handle=name` allowlist; `handle1\|handle2=name` for several handles | demo users in local mode |
 | `GROUP_CART_HOUSEHOLD` | Shared cart identity | `apartment-4b` |
 | `GROUP_CART_DB` | SQLite file path | `./data/groupcart.sqlite` |
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |

@@ -10,6 +10,7 @@ import { renderHomePage } from "./ui/homePage.js";
 import { renderBillsPlaceholder, renderCalendarPlaceholder, renderChoresPlaceholder } from "./ui/placeholders.js";
 import { renderSettingsPage } from "./ui/settingsPage.js";
 import { renderNotice } from "./ui/shell.js";
+import { recentFeed, runCommands, runRoutes } from "./platform.js";
 
 
 function safeSnapshot(snapshot: CartSnapshot): Omit<CartSnapshot, "members"> & {
@@ -54,6 +55,9 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     // Google Calendar: /calendar page, /api/calendar, and /api/google/* OAuth routes.
     if (calendar && await handleCalendarRequest(calendar, request, response, url)) return;
+    // Feature routes registered through src/platform.ts (chores, lists, events, bills, connector).
+    if (await runRoutes(request, response, url)) return;
+    if (request.method === "GET" && url.pathname === "/api/feed") return sendJson(response, 200, { entries: recentFeed() });
     if (request.method === "GET" && url.pathname === "/api/kroger/oauth/start") {
       if (!krogerClient) return sendJson(response, 503, { error: "Kroger credentials are not configured." });
       const memberId = url.searchParams.get("memberId");
@@ -168,9 +172,9 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
         }
         const member = store.getMembers().find((candidate) => candidate.id === body.memberId);
         if (!member) return sendJson(response, 404, { error: "Member not found." });
-        // Google Calendar: answer the "calendar" command before cart processing.
-        const calendarReply = calendar ? await calendar.replyToCommand(`demo:${randomUUID()}`, body.text) : null;
-        if (calendarReply) return sendJson(response, 200, { message: calendarReply });
+        // Feature commands (calendar, chores, bills, ...) run before cart processing, as in the group chat.
+        const commandReply = await runCommands({ messageId: `demo:${randomUUID()}`, memberId: member.id, memberName: member.name, text: body.text, attachments: [] });
+        if (commandReply) return sendJson(response, 200, { message: commandReply });
       const reply = krogerClient
         ? await store.processLiveIncomingText(
           `demo:${randomUUID()}`,
