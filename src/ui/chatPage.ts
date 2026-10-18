@@ -12,7 +12,7 @@ const BOT_AVATAR = (size: number) => `<span class="gc-avatar ch-bot-avatar" styl
 
 const styles = `
 .gc-main { padding-top:var(--gc-space-4); padding-bottom:var(--gc-space-4); }
-.ch { --ch-other:var(--gc-track); --ch-gap:2px; display:flex; flex-direction:column; max-width:820px; height:calc(100dvh - var(--gc-appbar-h) - 2 * var(--gc-space-4)); min-height:420px; margin:0 auto; background:var(--gc-surface); border:1px solid var(--gc-border); border-radius:var(--gc-radius-lg); overflow:hidden; position:relative; }
+.ch { --ch-other:color-mix(in srgb, var(--gc-text) 9%, var(--gc-surface)); --ch-gap:2px; display:flex; flex-direction:column; max-width:820px; height:calc(100dvh - var(--gc-appbar-h) - 2 * var(--gc-space-4)); min-height:420px; margin:0 auto; background:var(--gc-surface); border:1px solid var(--gc-border); border-radius:var(--gc-radius-lg); overflow:hidden; position:relative; }
 .ch-head { display:flex; align-items:center; gap:var(--gc-space-3); padding:var(--gc-space-2) var(--gc-space-3) var(--gc-space-2) var(--gc-space-4); border-bottom:1px solid var(--gc-border); min-height:60px; }
 .ch-group { display:flex; align-items:center; gap:var(--gc-space-3); min-width:0; color:inherit; text-decoration:none; border-radius:var(--gc-radius-md); padding:4px 8px 4px 4px; margin-left:-4px; }
 .ch-group:hover { background:var(--gc-hover); }
