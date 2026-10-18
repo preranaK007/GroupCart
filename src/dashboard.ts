@@ -61,6 +61,13 @@ const html = `<!doctype html>
     .sync { color:var(--muted); font-size:12px; margin-top:4px; }
     .live-note { padding:14px 16px; border-radius:14px; background:#edf7f0; border:1px solid #d8ecdf; color:#355c46; font-size:13px; margin-bottom:16px; }
     .live-note strong { display:block; margin-bottom:3px; color:#234a35; }
+    .list-card { border-top:1px solid #f0f2ee; padding:12px 0; }
+    .list-card:first-child { border-top:0; padding-top:0; }
+    .list-head { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
+    .list-items { margin:6px 0 0; padding-left:18px; font-size:13px; }
+    .list-meta { color:var(--muted); font-size:12px; margin-top:4px; }
+    .due { color:#865022; font-weight:650; }
+    button.small { padding:6px 10px; font-size:12px; border-radius:9px; margin-top:8px; }
     [hidden] { display:none !important; }
     @media(max-width:720px) { main{margin-top:18px}.layout{grid-template-columns:1fr}header{align-items:flex-start}.badge{max-width:150px;text-align:center} }
   </style>
@@ -104,6 +111,12 @@ const html = `<!doctype html>
           <div class="actions"><button class="secondary" id="approve">Approve my share</button><button id="checkout">Mock checkout</button></div>
           <p class="status" id="approvalStatus" role="status" aria-live="polite"></p>
           <p class="footer" id="approvalFooter">Every cart edit creates a new revision and resets approvals. Checkout is simulated; no payment is taken.</p>
+        </div>
+        <div class="card" id="listsPanel">
+          <div class="card-title"><h2>Recurring lists</h2><span class="sub">Whole household</span></div>
+          <div id="lists"></div>
+          <p class="status" id="listStatus" role="status" aria-live="polite"></p>
+          <p class="footer" id="listFooter">Manage lists in the group chat: “weekly: milk, eggs”, “load weekly list”, “weekly list on saturdays”.</p>
         </div>
       </aside>
     </div>
@@ -154,6 +167,19 @@ const html = `<!doctype html>
       document.getElementById("checkout").disabled = !demoMode || !latest.items.length || latest.members.some((member) => !member.approved);
       document.getElementById("send").disabled = !demoMode;
       document.getElementById("request").disabled = !demoMode;
+      const shortDate = (iso) => new Date(iso).toLocaleDateString([], {weekday:"short",month:"short",day:"numeric"});
+      document.getElementById("lists").innerHTML = (latest.lists || []).map((list) => {
+        const items = list.items.length
+          ? '<ul class="list-items">' + list.items.map((item) => '<li>' + esc(item.quantity + " × " + item.name) + (item.unitPriceCents === null ? "" : ' <span class="muted">' + esc(dollars(item.unitPriceCents * item.quantity) + (item.priceSource === "kroger" ? " Kroger quote" : " sample est.")) + '</span>') + '</li>').join("") + '</ul>'
+          : '<p class="list-meta">Empty. Add items with “' + esc(list.command) + ': …” in the group.</p>';
+        const status = !list.active ? "Not started" : !list.remindersEnabled ? "Reminders paused" : (list.dueNow ? '<span class="due">Due now</span>' : (list.nextReminderAt ? "Next check-in " + esc(shortDate(list.nextReminderAt)) : ""));
+        const loaded = list.lastLoadedAt ? " · last loaded " + esc(shortDate(list.lastLoadedAt)) + (list.lastLoadedByName ? " by " + esc(list.lastLoadedByName) : "") : "";
+        const load = demoMode && list.items.length ? '<button class="secondary small" data-load-list="' + esc(list.command) + '">Load into cart (demo)</button>' : "";
+        return '<div class="list-card"><div class="list-head"><strong>' + esc(list.title) + '</strong><span class="muted">' + (list.items.length ? "≈ " + dollars(list.estimatedCents) : "") + '</span></div><div class="list-meta">Due ' + esc(list.schedule) + ' · ' + status + loaded + '</div>' + items + load + '</div>';
+      }).join("");
+      document.getElementById("listFooter").textContent = demoMode
+        ? "Demo: load buttons send “load … list” as the member selected above. Kroger prices are store-specific quotes; sample prices are estimates."
+        : "View only. Manage lists in the iMessage group: “weekly: milk, eggs”, “load weekly list”, “weekly list on saturdays”.";
       document.getElementById("krogerMode").textContent = latest.krogerConfigured ? (latest.krogerLocationConfigured ? "Store prices enabled" : "Connected · choose a store for prices") : "Not connected";
       document.getElementById("krogerSearch").disabled = !latest.krogerConfigured;
     }
@@ -204,6 +230,15 @@ const html = `<!doctype html>
     document.getElementById("checkout").addEventListener("click", async () => {
       try { const result = await post("/api/checkout", {}); document.getElementById("approvalStatus").textContent = result.message; await refresh(); }
       catch (error) { document.getElementById("approvalStatus").textContent = error.message; }
+    });
+    document.getElementById("lists").addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-load-list]");
+      if (!button || !latest || !latest.demoMode) return;
+      try {
+        const result = await post("/api/demo-message", {memberId:document.getElementById("member").value,text:"load " + button.dataset.loadList + " list"});
+        document.getElementById("listStatus").textContent = result.message;
+        await refresh();
+      } catch (error) { document.getElementById("listStatus").textContent = error.message; }
     });
     const showSyncError = (error) => { document.getElementById("syncState").textContent = "Sync paused · " + (error.message || "could not reach GroupCart"); };
     refresh().catch((error) => { document.getElementById("mode").textContent = error.message; showSyncError(error); });
@@ -289,6 +324,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     if (request.method === "GET" && url.pathname === "/api/cart") {
       sendJson(response, 200, {
         ...safeSnapshot(store.snapshot()),
+        lists: store.listsSnapshot(),
         demoMode,
         krogerConfigured: Boolean(krogerClient),
         krogerLocationConfigured: Boolean(krogerClient?.hasLocation),
@@ -328,9 +364,16 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
           body.text,
           (query) => krogerClient.searchProducts(query),
           krogerClient.selectedLocationId,
+          false,
+          undefined,
+          (productId) => krogerClient.getProduct(productId),
         )
         : store.processIncomingText(`demo:${randomUUID()}`, member.id, body.text);
-        return sendJson(response, 200, { message: reply ?? "No response." });
+        // Demo mode never sends anything on its own; a due recurring-list
+        // check-in is shown with the reply and clearly labelled instead.
+        const reminder = store.claimDueListReminders();
+        const message = reminder ? `${reply ?? "No response."}\n\n[Demo reminder] ${reminder.text}` : reply ?? "No response.";
+        return sendJson(response, 200, { message });
       }
       if (url.pathname === "/api/approve") {
         if (typeof body.memberId !== "string") return sendJson(response, 400, { error: "Choose a member." });
