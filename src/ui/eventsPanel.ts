@@ -756,6 +756,7 @@ export function homeUpcomingCard(): string {
     id: "homeUpcoming",
     title: "Upcoming",
     icon: "calendar",
+    flavor: "home.upcoming", // [themes]
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/calendar" }),
     body: `<ul class="gc-list hu-list" id="homeUpcomingList"><li class="gc-empty"><p class="gc-empty-text">Loading…</p></li></ul><style>${homeStyles}</style><script>${homeScript}</script>`,
   });

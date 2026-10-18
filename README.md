@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) has two tabs: Cart (the shared cart, with any active sharing session) and Lists (the recurring weekly/biweekly/monthly lists, read-only, plus one-off lists like "Party run"), People (`/people`) shows everyone's profile, Settings (`/settings`) shows connections, and Chores (`/chores`), Bills (`/bills`), and Calendar (`/calendar`) are described below. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) has two tabs: Cart (the shared cart, with any active sharing session) and Lists (the recurring weekly/biweekly/monthly lists, read-only, plus one-off lists like "Party run"), People (`/people`) shows everyone's profile, Settings (`/settings`) shows connections, and Chores (`/chores`), Bills (`/bills`), and Calendar (`/calendar`) are described below. Settings > Appearance (or the palette button in the app bar) switches the look between Classic and the Elden Ring, Minecraft, Red Dead Redemption, and Cyberpunk 2077 skins; the choice is saved in this browser (`gc-skin` cookie), and `?skin=elden` (or `minecraft`, `rdr`, `cyberpunk`) previews one. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
 
 ## Connect your Spectrum dedicated line
 

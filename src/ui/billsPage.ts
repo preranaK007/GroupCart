@@ -561,8 +561,11 @@ ${CLIENT_SPLIT_JS}
   });
   $("blMarkPaid").addEventListener("click", async function () {
     try {
-      var data = await post("/api/bills/paid", { id: state.edit.id, paid: !state.edit.paidAt });
-      GC.closeDialog("blBill"); toast(data.message); await refresh();
+      var markingPaid = !state.edit.paidAt, paidName = state.edit.vendor || "Bill";
+      var data = await post("/api/bills/paid", { id: state.edit.id, paid: markingPaid });
+      GC.closeDialog("blBill"); toast(data.message);
+      if (markingPaid && GC.celebrate) GC.celebrate(paidName + " paid"); // [themes] completion flourish (no-op in Classic)
+      await refresh();
     } catch (error) { $("blBillErr").textContent = error.message; }
   });
   $("blDelete").addEventListener("click", async function () {
@@ -604,7 +607,9 @@ ${CLIENT_SPLIT_JS}
     if (!cents) { $("blPayErr").textContent = "Enter an amount."; return; }
     try {
       var data = await post("/api/bills/payment", { fromId: $("blPayFrom").value, toId: $("blPayTo").value, cents: cents, memberId: $("blPayFrom").value });
-      GC.closeDialog("blPay"); toast(data.message); await refresh();
+      GC.closeDialog("blPay"); toast(data.message);
+      if (GC.celebrate) GC.celebrate("Payment recorded"); // [themes]
+      await refresh();
     } catch (error) { $("blPayErr").textContent = error.message; }
   });
   $("blPay").addEventListener("close", function () { refresh().catch(showSyncError); });

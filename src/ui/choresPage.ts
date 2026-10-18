@@ -453,6 +453,7 @@ async function complete(id, buttonEl) {
     const result = await post("/api/chores/done", { choreId: id });
     const next = result.next && result.next.assigneeId ? " · " + nameOf(result.next.assigneeId) + " next" : "";
     snack(chore.emoji + " " + chore.name + " done" + next, () => post("/api/chores/undo", { logId: result.logId }));
+    if (GC.celebrate) GC.celebrate(chore.name + " done"); // [themes] completion flourish (no-op in Classic)
   } catch (error) { snack(error.message); }
   refresh();
 }
@@ -685,6 +686,7 @@ document.addEventListener("DOMContentLoaded", function () {
     button.classList.add("is-done");
     button.disabled = true;
     fetch("/api/chores/done", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ choreId: button.getAttribute("data-done") }) })
+      .then(function (response) { if (response.ok && window.GC.celebrate) window.GC.celebrate("Chore done"); }) // [themes]
       .finally(function () { load().catch(function () {}); });
   });
   load().catch(function () {});
@@ -698,6 +700,7 @@ export function choresHomeCard(): string {
     id: "homeChores",
     title: "Chores due",
     icon: "chores",
+    flavor: "home.chores", // [themes]
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/chores" }),
     body: `<ul class="gc-list" id="homeChoresList" aria-live="polite"></ul>
 <div class="gc-empty" id="homeChoresEmpty" hidden>${icon("checkCircle", { size: 32 })}<p class="gc-empty-title">All caught up</p><p class="gc-empty-text" id="homeChoresNext"></p></div>

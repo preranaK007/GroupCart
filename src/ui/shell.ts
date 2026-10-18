@@ -52,12 +52,33 @@
  *   Tokens: --gc-bg, --gc-surface, --gc-surface-2, --gc-hover, --gc-border,
  *   --gc-text, --gc-text-2, --gc-muted, --gc-accent(-soft), --gc-success(-soft),
  *   --gc-warning(-soft), --gc-danger(-soft), --gc-space-1..6, --gc-radius-sm|md|lg|pill,
- *   --gc-fs-xs|sm|md|lg|xl|2xl.
+ *   --gc-fs-xs|sm|md|lg|xl|2xl, --gc-font, --gc-font-display (headings).
+ *
+ * ── Themes / skins (src/ui/themes.ts) ───────────────────────────────────────
+ *   <html data-skin="classic|elden|minecraft|rdr|cyberpunk">; users pick one in
+ *   Settings > Appearance or the app-bar palette menu. Every skin restyles the
+ *   tokens and the .gc-* components above, so a page themes itself for free if
+ *   it: uses only --gc-* tokens for color/radius/font (no hex colors, no fixed
+ *   radii), builds with the helpers/classes above, and leaves h1–h3 font-family
+ *   alone (skins set a display font on headings).
+ *   Opt-ins:
+ *     data-flavor="nav.chores"            on a leaf text element: skin-specific wording
+ *     card({flavor}) / emptyState({flavor}) / sectionHeader(t, {flavor})
+ *                                         use keys "<flavor>.title|.meta|.text" / "<flavor>"
+ *     GC.t(key, fallback)                 same lookup in client code; GC.skin(), GC.setSkin(id)
+ *     GC.celebrate("Trash taken out")     call after marking something done (no-op in Classic)
+ *     <ul class="gc-list gc-people">      people rows; wanted posters in the Red Dead skin
+ *     document "gc:skinchange" event      re-render anything drawn with canvas/inline colors
+ *   Add flavor keys with registerFlavor({...}) from ./themes.js (see FLAVOR there).
  */
 
 // --- Profiles & chat: account menu in the app bar (Viewing as / signed in, profile, sign out) ---
 import { ACCOUNT_MENU_CSS, ACCOUNT_MENU_SCRIPT } from "./accountMenu.js";
 // --- end profiles & chat ---
+// [themes] skins and flavor text live in ./themes.ts
+import { appearanceCard, currentSkin, flavored, skinClientScript, skinHead, skinScheme, skinStylesheet, skinSwitcher } from "./themes.js";
+export { appearanceCard };
+// [/themes]
 
 // ---------------------------------------------------------------------------
 // Navigation
@@ -237,9 +258,18 @@ export function infoTip(text: string, label = "More info"): string {
   return `<button type="button" class="gc-tip" data-tip="${escapeHtml(text)}" aria-label="${escapeHtml(label)}: ${escapeHtml(text)}">${icon("info", { size: 16 })}</button>`;
 }
 
-/** Centered empty state with an icon, a short title, and an optional one-liner. `action` is HTML. */
-export function emptyState(options: { icon: IconName; title: string; text?: string; action?: string }): string {
-  return `<div class="gc-empty">${icon(options.icon, { size: 32 })}<p class="gc-empty-title">${escapeHtml(options.title)}</p>${options.text ? `<p class="gc-empty-text">${escapeHtml(options.text)}</p>` : ""}${options.action ?? ""}</div>`;
+/** [themes] ` data-flavor="key"` attribute (or "") for opt-in skin wording. */
+function flavorAttr(key: string | undefined): string {
+  return key ? ` data-flavor="${escapeHtml(key)}"` : "";
+}
+
+/**
+ * Centered empty state with an icon, a short title, and an optional one-liner. `action` is HTML.
+ * [themes] `flavor` (e.g. "empty.chores") swaps title/text per skin via "<flavor>.title" / "<flavor>.text".
+ */
+export function emptyState(options: { icon: IconName; title: string; text?: string; action?: string; flavor?: string }): string {
+  const f = options.flavor;
+  return `<div class="gc-empty">${icon(options.icon, { size: 32 })}<p class="gc-empty-title"${flavorAttr(f && `${f}.title`)}>${escapeHtml(options.title)}</p>${options.text ? `<p class="gc-empty-text"${flavorAttr(f && `${f}.text`)}>${escapeHtml(options.text)}</p>` : ""}${options.action ?? ""}</div>`;
 }
 
 /** Overlapping avatars for a group of members (e.g. who shares an item or a chore). */
@@ -273,17 +303,21 @@ export function button(options: {
   return `<button class="${classes}"${id} type="button"${options.disabled ? " disabled" : ""}${attrs}>${inner}</button>`;
 }
 
-/** Heading that sits above a group of cards. `actions` is HTML. */
-export function sectionHeader(title: string, options: { meta?: string; actions?: string; id?: string } = {}): string {
-  return `<div class="gc-section-head"><h2 class="gc-section-title"${options.id ? ` id="${escapeHtml(options.id)}"` : ""}>${escapeHtml(title)}</h2>${options.meta ? `<span class="gc-meta">${escapeHtml(options.meta)}</span>` : ""}<span class="gc-spacer"></span>${options.actions ?? ""}</div>`;
+/** Heading that sits above a group of cards. `actions` is HTML. [themes] `flavor` = flavor key for the title. */
+export function sectionHeader(title: string, options: { meta?: string; actions?: string; id?: string; flavor?: string } = {}): string {
+  return `<div class="gc-section-head"><h2 class="gc-section-title"${options.id ? ` id="${escapeHtml(options.id)}"` : ""}${flavorAttr(options.flavor)}>${escapeHtml(title)}</h2>${options.meta ? `<span class="gc-meta">${escapeHtml(options.meta)}</span>` : ""}<span class="gc-spacer"></span>${options.actions ?? ""}</div>`;
 }
 
-/** Surface with an optional header row. `body` and `actions` are HTML; `tip` becomes an info tooltip. */
-export function card(options: { title?: string; icon?: IconName; meta?: string; tip?: string; actions?: string; body: string; id?: string; className?: string }): string {
+/**
+ * Surface with an optional header row. `body` and `actions` are HTML; `tip` becomes an info tooltip.
+ * [themes] `flavor` (e.g. "home.people") swaps title/meta per skin via "<flavor>.title" / "<flavor>.meta".
+ */
+export function card(options: { title?: string; icon?: IconName; meta?: string; tip?: string; actions?: string; body: string; id?: string; className?: string; flavor?: string }): string {
   const id = options.id ? ` id="${escapeHtml(options.id)}"` : "";
   const cls = options.className ? ` ${escapeHtml(options.className)}` : "";
+  const f = options.flavor;
   const head = options.title || options.actions
-    ? `<div class="gc-card-head">${options.icon ? `<span class="gc-card-icon">${icon(options.icon, { size: 20 })}</span>` : ""}${options.title ? `<h2 class="gc-card-title">${escapeHtml(options.title)}</h2>` : ""}${options.meta ? `<span class="gc-meta">${escapeHtml(options.meta)}</span>` : ""}<span class="gc-spacer"></span>${options.actions ?? ""}${options.tip ? infoTip(options.tip) : ""}</div>`
+    ? `<div class="gc-card-head">${options.icon ? `<span class="gc-card-icon">${icon(options.icon, { size: 20 })}</span>` : ""}${options.title ? `<h2 class="gc-card-title"${flavorAttr(f && `${f}.title`)}>${escapeHtml(options.title)}</h2>` : ""}${options.meta ? `<span class="gc-meta"${flavorAttr(f && `${f}.meta`)}>${escapeHtml(options.meta)}</span>` : ""}<span class="gc-spacer"></span>${options.actions ?? ""}${options.tip ? infoTip(options.tip) : ""}</div>`
     : "";
   return `<section class="gc-card${cls}"${id}>${head}${options.body}</section>`;
 }
@@ -671,28 +705,40 @@ export type PageOptions = {
 function renderNav(active: NavKey): string {
   return NAV_ITEMS.map((item) => {
     const current = item.key === active ? ' aria-current="page"' : "";
-    return `<a class="gc-nav-item" href="${item.href}"${current}><span class="gc-nav-pill">${icon(item.icon, { size: 22 })}</span><span>${escapeHtml(item.label)}</span></a>`;
+    // [themes] skin wording for the label; the title keeps the plain name as a hint.
+    const label = flavored(`nav.${item.key}`, item.label);
+    return `<a class="gc-nav-item" href="${item.href}" title="${escapeHtml(item.label)}"${current}><span class="gc-nav-pill">${icon(item.icon, { size: 22 })}</span><span${label.attrs}>${label.html}</span></a>`;
   }).join("");
 }
 
 /** Full HTML document: app bar, navigation rail (bottom bar on phones), and the page body. */
 export function renderPage(options: PageOptions): string {
   const title = escapeHtml(options.title);
+  // [themes] request skin (cookie), flavored app-bar title when it is a nav page, subtitle slot.
+  const skin = currentSkin();
+  const navItem = NAV_ITEMS.find((item) => item.key === options.active && item.label === options.title);
+  const appTitle = navItem ? flavored(`nav.${navItem.key}`, navItem.label, skin) : { attrs: "", html: title };
+  const appSub = flavored("appbar.sub", "", skin);
+  // [/themes]
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-skin="${skin}">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="color-scheme" content="light dark" />
+<meta name="color-scheme" content="${skinScheme(skin)}" />
 <title>${title} · GroupCart</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0b57d0"/><g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS.cart}</g></svg>`)}" />
-<style>${TOKENS_CSS}${BASE_CSS}${ACCOUNT_MENU_CSS}${options.styles ?? ""}</style>
+${skinHead(skin)}
+<style>${TOKENS_CSS}${BASE_CSS}${ACCOUNT_MENU_CSS}</style>
+${skinStylesheet()}
+${options.styles ? `<style>${options.styles}</style>` : ""}
 </head>
 <body>
 <header class="gc-appbar">
   <a class="gc-brand" href="/" aria-label="GroupCart home"><span class="gc-logo">${icon("cart", { size: 22 })}</span><span class="gc-brand-name">GroupCart</span></a>
-  <h1 class="gc-appbar-title">${title}</h1>
-  <div class="gc-appbar-actions">${options.actions ?? ""}<div class="gc-me" id="gcMe"></div></div>
+  <h1 class="gc-appbar-title"${appTitle.attrs}>${appTitle.html}</h1>
+  <span class="gc-appbar-sub"${appSub.attrs}>${appSub.html}</span>
+  <div class="gc-appbar-actions">${options.actions ?? ""}${skinSwitcher(skin)}<div class="gc-me" id="gcMe"></div></div>
 </header>
 <div class="gc-frame">
   <nav class="gc-rail" aria-label="Main">${renderNav(options.active)}</nav>
@@ -701,6 +747,7 @@ export function renderPage(options: PageOptions): string {
 <script>window.GC_AVATARS=${JSON.stringify(avatarLooks()).replace(/</g, "\\u003c")};</script>
 <script>${CLIENT_HELPERS}</script>
 <script>${ACCOUNT_MENU_SCRIPT}</script>
+<script>${skinClientScript()}</script>
 ${options.script ? `<script>${options.script}</script>` : ""}
 </body>
 </html>`;
@@ -710,9 +757,11 @@ ${options.script ? `<script>${options.script}</script>` : ""}
 export function renderNotice(options: { title: string; message: string; tone?: Tone; active?: NavKey; links?: Array<{ href: string; label: string; external?: boolean }> }): string {
   const tone = options.tone ?? "neutral";
   const iconName: IconName = tone === "success" ? "checkCircle" : tone === "danger" || tone === "warning" ? "alert" : "info";
+  const eyebrow = flavored(`notice.${tone}`, ""); // [themes] e.g. "Item acquired" above the title
   const links = (options.links ?? []).map((link, index) => `<a class="gc-btn ${index ? "gc-btn-outline" : ""}" href="${escapeHtml(link.href)}"${link.external ? ' target="_blank" rel="noopener noreferrer"' : ""}>${escapeHtml(link.label)}${link.external ? icon("external", { size: 16 }) : ""}</a>`).join("");
   const body = `<section class="gc-card gc-placeholder gc-notice gc-notice-${tone}">
   <div class="gc-notice-icon">${icon(iconName, { size: 28 })}</div>
+  <p class="gc-notice-eyebrow"${eyebrow.attrs}>${eyebrow.html}</p>
   <h2 class="gc-card-title">${escapeHtml(options.title)}</h2>
   <p class="gc-muted">${escapeHtml(options.message)}</p>
   ${links ? `<div class="gc-row gc-notice-links">${links}</div>` : ""}

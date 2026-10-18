@@ -13,7 +13,7 @@ import { button, dialog, icon, infoTip, type PageOptions } from "./shell.js";
 const tabs = `
 <div class="gl-tabs" role="tablist" aria-label="Groceries views">
   <button class="gl-tab" type="button" role="tab" id="glTab-cart" data-gl-tab="cart" aria-selected="true" aria-controls="glView-cart">${icon("check", { size: 18, className: "gl-tab-check" })}${icon("cart", { size: 18, className: "gl-tab-icon" })}<span>Cart</span></button>
-  <button class="gl-tab" type="button" role="tab" id="glTab-lists" data-gl-tab="lists" aria-selected="false" aria-controls="glView-lists">${icon("check", { size: 18, className: "gl-tab-check" })}${icon("chores", { size: 18, className: "gl-tab-icon" })}<span>Lists</span><span class="gl-count" id="glListsCount"></span></button>
+  <button class="gl-tab" type="button" role="tab" id="glTab-lists" data-gl-tab="lists" aria-selected="false" aria-controls="glView-lists">${icon("check", { size: 18, className: "gl-tab-check" })}${icon("chores", { size: 18, className: "gl-tab-icon" })}<span data-flavor="nav.lists">Lists</span><span class="gl-count" id="glListsCount"></span></button>
 </div>`;
 
 const listsView = `

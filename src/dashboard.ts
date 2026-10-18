@@ -14,6 +14,7 @@ import { renderBillsPlaceholder, renderCalendarPlaceholder, renderChoresPlacehol
 import { renderSettingsPage } from "./ui/settingsPage.js";
 import { renderNotice } from "./ui/shell.js";
 import { recentFeed, runCommands, runRoutes } from "./platform.js";
+import { runWithRequestSkin } from "./ui/themes.js";
 
 
 function safeSnapshot(snapshot: CartSnapshot): Omit<CartSnapshot, "members"> & {
@@ -55,7 +56,8 @@ function krogerCheckoutStatus(store: CartStore): { status: string; revision: num
 }
 
 export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
-  const server = createServer(async (request, response) => {
+  // runWithRequestSkin: pages render the browser's theme (gc-skin cookie) without a flash.
+  const server = createServer((request, response) => runWithRequestSkin(request, async () => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     // --- Remote access guard (profiles & sign-in): LAN/tunnel requests reach only sign-in, /mcp, or a signed-in session's routes ---
     if (remoteAccessGuard(request, response, url)) return;
@@ -216,7 +218,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     } catch (error) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Request failed." });
     }
-  });
+  }));
   // GROUP_CART_HOST: 127.0.0.1 by default (this computer only). 0.0.0.0 serves the LAN; every remote request
   // then needs a signed-in session (see src/auth.ts) or a connector token.
   const host = process.env.GROUP_CART_HOST?.trim() || "127.0.0.1";

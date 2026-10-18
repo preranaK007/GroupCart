@@ -200,7 +200,7 @@ function render() {
       + (mine ? "" : '<span class="ch-av">' + (last ? avatarFor(message) : "") + '</span>')
       + '<div class="ch-col">' + col + '</div></li>';
   }
-  list.innerHTML = html || '<li class="ch-empty">' + GC.icon("message") + '<p>No messages yet. Say hi!</p></li>';
+  list.innerHTML = html || '<li class="ch-empty">' + GC.icon("message") + '<p data-flavor="empty.chat.title">No messages yet. Say hi!</p></li>';
   $("chTyping").hidden = !(state.typing || state.expectReply);
   $("chEarlier").hidden = !state.hasEarlier;
   list.querySelectorAll("img").forEach((img) => img.addEventListener("load", () => { if (stick) toBottom(); }, { once: true }));

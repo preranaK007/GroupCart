@@ -99,8 +99,9 @@ export function homeBalancesCard(): string {
     id: "homeBalances",
     title: "Balances",
     icon: "wallet",
+    flavor: "home.balances", // [themes]
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/bills" }),
-    body: `<style>${HOME_STYLES}</style><div id="homeBalancesBody">${emptyState({ icon: "receipt", title: "No bills yet", text: "Bill splits will show up here." })}</div><script>${HOME_SCRIPT}</script>`,
+    body: `<style>${HOME_STYLES}</style><div id="homeBalancesBody">${emptyState({ icon: "receipt", title: "No bills yet", text: "Bill splits will show up here.", flavor: "empty.bills" })}</div><script>${HOME_SCRIPT}</script>`,
   });
 }
 

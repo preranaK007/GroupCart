@@ -15,6 +15,7 @@ import { button, card, emptyState, renderPage } from "./shell.js";
  */
 
 function placeholderPage(options: { title: string; active: "calendar" | "bills" | "chores"; icon: "calendar" | "receipt" | "chores"; heading: string; text: string }): string {
+  // [themes] heading flavor key: soon.<page>.title
   return renderPage({
     title: options.title,
     active: options.active,
@@ -22,6 +23,7 @@ function placeholderPage(options: { title: string; active: "calendar" | "bills" 
       icon: options.icon,
       title: options.heading,
       text: options.text,
+      flavor: `soon.${options.active}`,
       action: button({ label: "Connections", variant: "outline", href: "/settings" }),
     })}</section>`,
   });
@@ -46,8 +48,9 @@ export function choresDueCard(): string {
     id: "homeChores",
     title: "Chores due",
     icon: "chores",
+    flavor: "home.chores",
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/chores" }),
-    body: emptyState({ icon: "checkCircle", title: "Nothing due", text: "Chores will show up here." }),
+    body: emptyState({ icon: "checkCircle", title: "Nothing due", text: "Chores will show up here.", flavor: "empty.chores" }),
   });
 }
 

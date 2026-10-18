@@ -12,6 +12,7 @@ import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
 const groceriesCard = card({
   id: "homeGroceries",
   title: "Groceries",
+  flavor: "home.groceries",
   icon: "cart",
   actions: button({ label: "Open", variant: "text", size: "sm", href: "/groceries" }),
   body: `
@@ -27,7 +28,8 @@ const peopleCard = card({
   icon: "users",
   meta: "Grocery shares",
   actions: button({ label: "Profiles", variant: "text", size: "sm", href: "/people" }), // profiles & chat
-  body: `<ul class="gc-list" id="homePeopleList"></ul>`,
+  flavor: "home.people",
+  body: `<ul class="gc-list gc-people" id="homePeopleList"></ul>`,
 });
 
 const body = `
