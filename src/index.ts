@@ -13,6 +13,7 @@ import { splitwiseConfig } from "./config.js";
 import { SplitwiseService } from "./splitwise.js";
 import { registerCommand, runCommands, setGroupSender, stopSchedules, type CommandAttachment } from "./platform.js";
 import { setupConnector } from "./connector.js";
+import { setupBills } from "./bills.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -63,6 +64,9 @@ registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCom
 // --- Claude connector: /mcp for each roommate's own Claude (src/connector.ts) ---
 setupConnector({ store, demoMode: !liveMode, calendar, krogerClient, port: config.port, publicUrl: config.dashboardPublicUrl });
 // --- end Claude connector ---
+// --- Bills: capture, split, balances, reminders, Splitwise logging (src/bills.ts) ---
+setupBills({ store, liveMode });
+// --- end Bills ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {

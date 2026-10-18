@@ -61,12 +61,5 @@ export function upcomingCard(): string {
   });
 }
 
-export function balancesCard(): string {
-  return card({
-    id: "homeBalances",
-    title: "Balances",
-    icon: "wallet",
-    actions: button({ label: "Open", variant: "text", size: "sm", href: "/bills" }),
-    body: emptyState({ icon: "receipt", title: "No bills yet", text: "Bill splits will show up here." }),
-  });
-}
+// Bills branch: the live Balances card (net balances + next bill) lives in ./billsHome.ts.
+export { homeBalancesCard as balancesCard } from "./billsHome.js";
