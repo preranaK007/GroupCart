@@ -6,7 +6,8 @@
 // 127.0.0.1 / localhost / [::1]. The Host check also blocks DNS-rebinding pages in a local browser.
 //
 // Remote requests may reach only:
-//   /mcp, /mcp/t/<token>          the Claude connector (own per-member token auth, src/connector.ts)
+//   /mcp, /mcp/t/<token>          the AI assistant connector (own token auth, src/connector.ts)
+//   /oauth/…, /.well-known/…      its OAuth sign-in and metadata (src/connectorOAuth.ts; pairing code + consent)
 //   /signin…, /api/auth/…         sign-in routes of a profiles module (they do their own checks)
 //   anything isRemoteAuthorized() accepts (src/platform.ts; false until a profiles module installs one)
 // Everything else answers 404, so the dashboard, /api/*, demo endpoints and OAuth starts stay local-only.
@@ -48,9 +49,13 @@ export function isConnectorPath(pathname: string): boolean {
   return pathname === "/mcp" || pathname === "/mcp/" || /^\/mcp\/t\/[^/]+\/?$/.test(pathname);
 }
 
-/** Paths a remote request may reach without isRemoteAuthorized(): the connector and sign-in routes. */
+/** Paths a remote request may reach without isRemoteAuthorized(): the connector, its OAuth, and sign-in routes. */
 export function isRemotePublicPath(pathname: string): boolean {
-  return isConnectorPath(pathname) || pathname.startsWith("/signin") || pathname.startsWith("/api/auth/");
+  return isConnectorPath(pathname)
+    || pathname.startsWith("/oauth/")
+    || pathname.startsWith("/.well-known/")
+    || pathname.startsWith("/signin")
+    || pathname.startsWith("/api/auth/");
 }
 
 /**

@@ -1,5 +1,6 @@
-// Core GroupCart tools for the Claude connector (registered through src/platform.ts registerTools).
-// Each handler runs as the household member whose connector token made the call.
+// Core GroupCart tools for the AI assistant connector (registered through src/platform.ts registerTools).
+// Each handler runs as the household member who connected the assistant; caller.via names the assistant
+// ("Claude", "ChatGPT", "Grok", or "AI assistant") for attribution.
 //
 // whats_on_my_plate is extensible: feature modules add their own section with
 //   registerSummaryProvider("chores", (caller) => ({ dueThisWeek: [...] }))
@@ -208,7 +209,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
     },
     {
       name: "approve_cart",
-      description: "Approves the current revision of the shared grocery cart as you. Any later cart change resets approvals. Review it with view_cart first. Checkout itself still happens in the group chat.",
+      description: "Approves the current revision of the shared grocery cart as you, and tells the group (\"<your name> approved the grocery cart via <assistant>\"). Any later cart change resets approvals. Review it with view_cart first. Checkout itself still happens in the group chat.",
       inputSchema: { type: "object", properties: {} },
       mutates: true,
       handler: async (_args, caller) => {
@@ -219,7 +220,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
         }
         const result = store.approveForMember(caller.memberId);
         if (!result.ok) throw new Error(result.message);
-        await notifyGroup(`${caller.memberName} approved the grocery cart via Claude.`);
+        await notifyGroup(`${caller.memberName} approved the grocery cart via ${caller.via ?? "AI assistant"}.`);
         return { approved: true, revision: store.snapshot().revision, message: result.message };
       },
     },
@@ -265,7 +266,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
     },
     {
       name: "recent_activity",
-      description: "Recent household notifications posted to the group by GroupCart features (reminders, approvals, posts from Claude), newest first.",
+      description: "Recent household notifications posted to the group by GroupCart features (reminders, approvals, posts from AI assistants), newest first.",
       inputSchema: {
         type: "object",
         properties: { limit: { type: "integer", description: "How many entries (1-50, default 20)." } },
@@ -277,7 +278,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
     },
     {
       name: "post_to_group",
-      description: "Posts a message to the household group chat on your behalf, shown as \"<your name> via Claude: …\". Only use it when you're asked to message the household.",
+      description: "Posts a message to the household group chat on your behalf, shown as \"<your name> via <assistant>: …\" (e.g. \"Maya via Claude\"). Only use it when you're asked to message the household.",
       inputSchema: {
         type: "object",
         properties: { message: { type: "string", description: "The message to post (up to 500 characters)." } },
@@ -286,7 +287,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
       mutates: true,
       handler: async (args, caller) => {
         const message = stringArg(args, "message", 500).replace(/\n{3,}/g, "\n\n");
-        const text = `${caller.memberName} via Claude: ${message}`;
+        const text = `${caller.memberName} via ${caller.via ?? "AI assistant"}: ${message}`;
         await notifyGroup(text);
         return {
           posted: text,

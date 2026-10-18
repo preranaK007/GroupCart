@@ -50,7 +50,12 @@ export type ToolSpec = {
   handler: (args: Record<string, unknown>, caller: ToolCaller) => Promise<unknown> | unknown;
 };
 
-export type ToolCaller = { memberId: string; memberName: string };
+export type ToolCaller = {
+  memberId: string;
+  memberName: string;
+  /** Which assistant made the call ("Claude", "ChatGPT", "Grok", or "AI assistant"), for attribution like "Maya via Grok". */
+  via?: string;
+};
 
 /**
  * A tool handler may return raw MCP content instead of a plain value, e.g. to hand bill
@@ -74,6 +79,25 @@ export function setRemoteAuthorizer(authorizer: RemoteAuthorizer | null): void {
 
 export function isRemoteAuthorized(request: IncomingMessage, url: URL): boolean {
   return remoteAuthorizer ? remoteAuthorizer(request, url) : false;
+}
+
+/**
+ * Signed-in member for a web request (e.g. from a profiles module's session cookie), or null.
+ * The connector's OAuth consent page uses it to skip the pairing code. Null until a module installs one.
+ */
+export type RequestMemberResolver = (request: IncomingMessage) => { memberId: string } | null;
+let requestMemberResolver: RequestMemberResolver | null = null;
+
+export function setRequestMemberResolver(resolver: RequestMemberResolver | null): void {
+  requestMemberResolver = resolver;
+}
+
+export function requestMember(request: IncomingMessage): { memberId: string } | null {
+  try {
+    return requestMemberResolver ? requestMemberResolver(request) : null;
+  } catch {
+    return null;
+  }
 }
 
 export type FeedEntry = { id: number; at: string; text: string };

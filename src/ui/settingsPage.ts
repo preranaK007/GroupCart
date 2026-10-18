@@ -1,5 +1,5 @@
 import { avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
-import { claudeConnectorCard } from "./connectorCard.js"; // Claude connector card
+import { claudeConnectorCard } from "./connectorCard.js"; // AI assistants (Claude, ChatGPT, Grok) connector card
 
 /**
  * Settings / Connections page (route "/settings"). Server-rendered on each
@@ -123,11 +123,11 @@ function splitwiseCard(): IntegrationCard {
   };
 }
 
-// --- Claude connector: per-member tokens, URLs, and tools (src/ui/connectorCard.ts) ---
+// --- AI assistants connector (Claude, ChatGPT & dots, Grok): tokens, OAuth apps, setup tabs (src/ui/connectorCard.ts) ---
 function claudeCard(): IntegrationCard {
   return claudeConnectorCard();
 }
-// --- end Claude connector ---
+// --- end AI assistants connector ---
 
 const styles = `
 .set-wrap { max-width:760px; margin:0 auto; display:grid; gap:var(--gc-space-4); }

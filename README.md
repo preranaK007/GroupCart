@@ -63,15 +63,32 @@ Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also link
 
 Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
-## Claude connector
+## AI assistants (Claude, ChatGPT & dots, Grok)
 
-Each roommate can add GroupCart to their own Claude (Claude Code, Claude Desktop, or claude.ai) as a custom connector. GroupCart serves an MCP endpoint at `/mcp` (Streamable HTTP), and every tool call runs as the roommate whose token made it. Tools include `whats_on_my_plate`, `view_cart`, `add_to_cart` / `choose_product` (the same path as a group-chat request), `approve_cart`, `household_members`, `free_times`, `recent_activity`, and `post_to_group` (posted as "Name via Claude: ..."). Tools that feature modules register through `registerTools()` in `src/platform.ts` appear automatically. Claude cannot check out, place orders, or pay.
+Each roommate can add GroupCart to their own AI assistant as a custom MCP connector: Claude (Claude Code, Claude Desktop, claude.ai), ChatGPT and its dots, or Grok. GroupCart serves an MCP endpoint at `/mcp` (Streamable HTTP), and every tool call runs as the roommate who connected the assistant. Tools include `whats_on_my_plate`, `view_cart`, `add_to_cart` / `choose_product` (the same path as a group-chat request), `approve_cart`, `household_members`, `free_times`, `recent_activity`, and `post_to_group`. Tools that feature modules register through `registerTools()` in `src/platform.ts` appear automatically. Posts and approvals are attributed to the assistant, for example "Maya via Grok: ..." or "Alex via Claude: ...". Assistants cannot check out, place orders, or pay.
 
-1. Open **Settings > Claude** and press **Connect Claude** next to your name. Copy the token: it is shown once, and GroupCart stores only its SHA-256 hash. **New token** rotates it and **Revoke** turns it off.
-2. **Claude Code** (on the computer running GroupCart): `claude mcp add --transport http groupcart http://127.0.0.1:3000/mcp --header "Authorization: Bearer <token>"`.
-3. **claude.ai or Claude Desktop**: Settings > Connectors > Add custom connector, then paste your personal URL `https://<public-host>/mcp/t/<token>`. Custom connectors need a public HTTPS URL (see below). Claude Desktop can also reach the local endpoint through `mcp-remote`; the token dialog shows the `claude_desktop_config.json` snippet.
+Open **Settings > AI assistants**. The setup tabs there walk through each assistant:
 
-**Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1`. To reach it from claude.ai or another computer, run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`. Then set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, restart GroupCart, and create a new token so the dialog shows the public URLs. Quick-tunnel addresses change on every run. Requests that come through a tunnel or proxy (non-loopback `Host`, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp` and `/mcp/t/<token>`. The dashboard, `/api/*`, demo endpoints, and OAuth starts answer 404 (see `src/remoteAccess.ts`). Because OAuth callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs when `GROUP_CART_PUBLIC_URL` points at a tunnel. Treat `/mcp/t/<token>` URLs like passwords. Repeated failed token attempts are rate-limited (10 per client and 200 overall per 15 minutes).
+- **Claude Code**: press **Connect Claude** and run the `claude mcp add --transport http groupcart http://127.0.0.1:3000/mcp --header "Authorization: Bearer <token>"` command it shows. The personal connector token is shown once; GroupCart stores only its SHA-256 hash.
+- **claude.ai or Claude Desktop**: Settings > Connectors > Add custom connector, then paste the public `https://<public-host>/mcp` URL.
+- **ChatGPT and dots**: turn on Developer mode (Settings > Apps & Connectors > Advanced). Add a custom connector with the public `/mcp` URL and OAuth authentication, leaving the client ID and secret blank. dots use the same connectors.
+- **Grok**: grok.com/connectors > New Connector > Custom, then the public `/mcp` URL.
+
+When a hosted assistant connects, it registers itself (OAuth 2.1 dynamic client registration) and opens GroupCart's sign-in page. Enter a one-time **pairing code** from Settings (press **Pairing code** next to your name; codes work once and expire after 10 minutes), then approve on the consent screen. Settings lists each roommate's connected assistants with their last use, and you can disconnect each one.
+
+The OAuth layer is in `src/connectorOAuth.ts`:
+
+- Discovery: RFC 9728 protected-resource metadata at `/.well-known/oauth-protected-resource[/mcp]`, advertised in the `WWW-Authenticate` header of a 401, and RFC 8414 server metadata at `/.well-known/oauth-authorization-server`.
+- Registration at `/oauth/register`. Redirect URIs must be https, or http on loopback, and must match exactly.
+- `/oauth/authorize` requires PKCE S256.
+- `/oauth/token` supports `authorization_code` and `refresh_token`. Access tokens last 1 hour. Refresh tokens last 30 days and rotate on every use; replaying an old refresh token or auth code revokes the connection.
+- RFC 7009 revocation at `/oauth/revoke`.
+
+Codes, tokens, client secrets, and pairing codes are stored only as hashes.
+
+**Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1`. ChatGPT, Grok, and claude.ai need a public HTTPS URL; Grok rejects localhost and private addresses. Run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`, set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, and restart GroupCart. Quick-tunnel addresses change on every run, so update the connector URL in each assistant when that happens.
+
+Requests that come through a tunnel or proxy (non-loopback `Host`, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp`, `/mcp/t/<token>`, `/oauth/*`, `/.well-known/*`, and sign-in routes (see `src/remoteAccess.ts`). The dashboard, `/api/*` (including token and pairing-code management), demo endpoints, and the Kroger/Google OAuth starts answer 404. Because those callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs. A personal URL `…/mcp/t/<token>` (in the Connect Claude dialog) works with assistants set to no authentication; treat it like a password. Failed token, pairing-code, and OAuth attempts are rate-limited.
 
 ## Configuration
 
@@ -83,7 +100,7 @@ Each roommate can add GroupCart to their own Claude (Claude Code, Claude Desktop
 | `GROUP_CART_HOUSEHOLD` | Shared cart identity | `apartment-4b` |
 | `GROUP_CART_DB` | SQLite file path | `./data/groupcart.sqlite` |
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |
-| `GROUP_CART_PUBLIC_URL` | Public base URL used in links; a non-loopback HTTPS value (e.g. a tunnel) also becomes the public Claude connector URL | `http://127.0.0.1:$PORT` |
+| `GROUP_CART_PUBLIC_URL` | Public base URL used in links; a non-loopback HTTPS value (e.g. a tunnel) also becomes the public AI assistant connector URL | `http://127.0.0.1:$PORT` |
 | `PORT` | Local dashboard port | `3000` |
 | `KROGER_CLIENT_ID` | Kroger Production app client ID for product search and user-authorized cart access | unset (live Kroger features disabled) |
 | `KROGER_CLIENT_SECRET` | Kroger Production app client secret | unset (live Kroger features disabled) |
@@ -104,7 +121,8 @@ Each roommate can add GroupCart to their own Claude (Claude Code, Claude Desktop
 npm run dev
 npm run typecheck
 node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
-node --import=tsx --test src/connector.test.ts      # Claude connector: tokens, tunnel guard, MCP over HTTP
+node --import=tsx --test src/connector.test.ts      # connector: tokens, tunnel guard, MCP over HTTP
+node --import=tsx --test src/connectorOAuth.test.ts # connector OAuth: discovery, DCR, PKCE, refresh rotation, revocation
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.
