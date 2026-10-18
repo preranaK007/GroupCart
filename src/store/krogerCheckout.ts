@@ -58,6 +58,9 @@ export class KrogerCheckout {
       return this.ctx.saveAndReturnReply(messageId, `“${missingUpc.name}” is a sample item without a Kroger UPC. Replace sample items with live Kroger selections before sending this list to Kroger.`);
     }
     const pending = this.getPendingKrogerCheckout();
+    if (pending?.status === "transfer_uncertain") {
+      return this.ctx.saveAndReturnReply(messageId, "The previous transfer was interrupted and Kroger may have received the items. Check your Kroger cart before trying again; text “cancel checkout” to unlock GroupCart. No purchase expense was recorded.");
+    }
     if (pending && pending.requesterId !== memberId) {
       const name = this.ctx.getMembers().find((member) => member.id === pending.requesterId)?.name ?? "another member";
       return this.ctx.saveAndReturnReply(messageId, `Kroger checkout is already being prepared by ${name}. Ask them to finish or text “cancel checkout”.`);
@@ -170,7 +173,9 @@ export class KrogerCheckout {
     }
     this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
     this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
-    return this.ctx.saveAndReturnReply(messageId, "Cancelled Kroger cart setup. GroupCart and Kroger carts were left unchanged.");
+    return this.ctx.saveAndReturnReply(messageId, pending.status === "transfer_uncertain"
+      ? "Unlocked GroupCart after the interrupted transfer. Kroger may already have the items; inspect that cart before sending them again. No purchase expense was recorded."
+      : "Cancelled Kroger cart setup. GroupCart and Kroger carts were left unchanged.");
   }
 
   /** True while the group is reviewing unavailable items. */
@@ -473,20 +478,22 @@ export class KrogerCheckout {
     } catch (error) {
       this.ctx.db.exec("BEGIN IMMEDIATE");
       try {
-        this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
+        this.ctx.db.prepare("UPDATE pending_kroger_checkouts SET status = 'transfer_uncertain' WHERE household_id = ?").run(this.ctx.householdId);
         this.ctx.db.exec("COMMIT");
       } catch (dbError) { this.ctx.db.exec("ROLLBACK"); throw dbError; }
       const detail = error instanceof Error ? error.message : "Kroger request failed.";
-      return { ok: false, message: `Kroger did not confirm adding the items (${detail}). GroupCart is unchanged. Check your Kroger cart before trying again, in case Kroger received the request but the response was lost.` };
+      return { ok: false, message: `Kroger did not confirm adding the items (${detail}). GroupCart is unchanged and checkout is locked because Kroger may have received the request. Check your Kroger cart, then text “cancel checkout” to unlock GroupCart before deciding whether to try again.` };
     }
 
     this.ctx.db.exec("BEGIN IMMEDIATE");
     try {
+      // Preserve the basket that actually reached Kroger even if another path edited GroupCart meanwhile.
+      const purchaseNote = this.m.purchases.stage(snapshot, memberId);
       const current = this.m.cart.snapshot();
       if (current.revision !== snapshot.revision) {
         this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
         this.ctx.db.exec("COMMIT");
-        return { ok: false, message: "The approved items were sent to Kroger, but GroupCart changed during the transfer. I left the current GroupCart untouched; review both carts before trying again." };
+        return { ok: false, message: `The approved items were sent to Kroger, but GroupCart changed during the transfer. I left the current GroupCart untouched; review both carts before trying again.\n\n${purchaseNote}` };
       }
       const accountName = this.ctx.getMembers().find((member) => member.id === memberId)?.name ?? "the selected member";
       this.ctx.db.prepare("DELETE FROM cart_items WHERE household_id = ?").run(this.ctx.householdId);
@@ -500,14 +507,13 @@ export class KrogerCheckout {
       this.ctx.db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
         .run(this.#sentCartKey(), JSON.stringify(sent));
       const message = `Added ${snapshot.items.length} item${snapshot.items.length === 1 ? "" : "s"} to ${accountName}’s Kroger cart. No order was placed or payment charged. Open Kroger to review the cart and finish checkout there.`;
-      // Splitwise: Kroger confirmed, so log the checkout (savepoint-isolated), then send it after commit.
-      const checkoutKey = this.m.splitwise.recordCheckout(snapshot, memberId, "kroger");
+      // Adding products to a retailer cart is not a purchase. Persist a receipt draft, without creating debt.
       this.ctx.db.exec("COMMIT");
-      const splitwiseNote = await this.m.splitwise.finishCheckoutLog(checkoutKey);
-      return { ok: true, message: splitwiseNote ? `${message}\n\n${splitwiseNote}` : message };
-    } catch (error) {
+      return { ok: true, message: `${message}\n\n${purchaseNote}` };
+    } catch {
       this.ctx.db.exec("ROLLBACK");
-      throw error;
+      this.ctx.db.prepare("UPDATE pending_kroger_checkouts SET status = 'transfer_uncertain' WHERE household_id = ?").run(this.ctx.householdId);
+      return { ok: false, message: "Kroger confirmed receiving the items, but GroupCart could not save the transfer result. Check the Kroger cart before retrying. Checkout stays locked; text “cancel checkout” after inspecting it. No purchase expense was recorded; record the actual receipt as a bill if needed." };
     }
   }
 }

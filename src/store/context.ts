@@ -5,6 +5,7 @@ import type { KrogerCheckout } from "./krogerCheckout.js";
 import type { ListCommands } from "./listCommands.js";
 import type { ListText } from "./listText.js";
 import type { ProductSearch } from "./productSearch.js";
+import type { Purchases } from "./purchases.js";
 import type { RecurringLists } from "./recurringLists.js";
 import type { SharingSessions } from "./sharing.js";
 import type { SplitwiseLog } from "./splitwiseLog.js";
@@ -16,6 +17,7 @@ export type StoreModules = {
   sharing: SharingSessions;
   checkout: KrogerCheckout;
   search: ProductSearch;
+  purchases: Purchases;
   lists: RecurringLists;
   listCommands: ListCommands;
   listText: ListText;

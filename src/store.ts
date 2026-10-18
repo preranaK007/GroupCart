@@ -15,6 +15,7 @@ import { ListText } from "./store/listText.js";
 import { dashboardMessage, helpMessage } from "./store/messages.js";
 import { CANCEL_REPLY_PATTERN, CART_COMMAND_PATTERN, cancellationQuery, isBanter, isHelpRequest, normalizeCancelReply, parseReviewCommand, parseSharingCommand } from "./store/parsing.js";
 import { ProductSearch } from "./store/productSearch.js";
+import { PURCHASE_COMMAND_PATTERN, Purchases } from "./store/purchases.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
 import { SharingSessions } from "./store/sharing.js";
@@ -60,7 +61,8 @@ export type {
  */
 export function isStoreCommand(text: string): boolean {
   const normalized = text.trim();
-  return CART_COMMAND_PATTERN.test(normalized) || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
+  return CART_COMMAND_PATTERN.test(normalized) || PURCHASE_COMMAND_PATTERN.test(normalized)
+    || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
 }
 
 /** Groceries-page adds and removals wait while a Kroger checkout is open, like the kitchen's cart adds. */
@@ -104,10 +106,13 @@ export class CartStore {
     m.listCommands = new ListCommands(this.#ctx, m);
     m.listText = new ListText(this.#ctx, m);
     m.splitwise = new SplitwiseLog(this.#ctx);
+    m.purchases = new Purchases(this.#ctx, m);
     m.calendarAccounts = new GoogleCalendarAccounts(this.#ctx);
     this.#m = m;
     // Product picks, milk kind, list selections, and confirmations take bare numbers and "yes"/"ok" alike.
     registerPendingQuestion("cart", (memberId) => this.pendingQuestionAt(memberId));
+    // A transfer interrupted by a process exit may have reached Kroger. Never resend it automatically.
+    db.prepare("UPDATE pending_kroger_checkouts SET status = 'transfer_uncertain' WHERE household_id = ? AND status = 'adding'").run(householdId);
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -225,6 +230,10 @@ export class CartStore {
     this.#ctx.saveMessageReply(messageId, reply);
   }
 
+  processPurchaseCommand(messageId: string, memberId: string, text: string): Promise<string | null> | undefined {
+    return PURCHASE_COMMAND_PATTERN.test(text.trim()) ? this.#m.purchases.handle(messageId, memberId, text.trim()) : undefined;
+  }
+
   /** Demo / sample-catalog conversation (also the fallback for live-mode commands). */
   processIncomingText(messageId: string, memberId: string, text: string): string | null {
     const existing = this.#ctx.existingReply(messageId);
@@ -310,6 +319,8 @@ export class CartStore {
     const { db } = this.#ctx;
     const { cart, checkout, search, listCommands } = this.#m;
     const normalized = normalizeCancelReply(text);
+    const purchaseReply = this.processPurchaseCommand(messageId, memberId, normalized);
+    if (purchaseReply !== undefined) return purchaseReply;
     // Sharing-session commands never touch the cart or Kroger, so they are
     // handled before any pending checkout, choice, list, or clarification state.
     if (parseSharingCommand(normalized)) return this.processIncomingText(messageId, memberId, normalized);
@@ -576,9 +587,11 @@ export class CartStore {
     isCommand: boolean,
   ): string | undefined {
     const { checkout } = this.#m;
-    if (pending.status === "adding") {
+    if (pending.status === "adding" || pending.status === "transfer_uncertain") {
       if (!READ_ONLY_COMMAND_PATTERN.test(normalized)) {
-        return this.#ctx.saveAndReturnReply(messageId, "GroupCart is sending the approved list to Kroger right now. Please wait for the result before changing the cart.");
+        return this.#ctx.saveAndReturnReply(messageId, pending.status === "adding"
+          ? "GroupCart is sending the approved list to Kroger right now. Please wait for the result before changing the cart."
+          : "The previous Kroger transfer was interrupted and may have reached Kroger. Check that cart first, then text “cancel checkout” to unlock GroupCart. No order is placed automatically.");
       }
     }
     if (pending.requesterId === memberId

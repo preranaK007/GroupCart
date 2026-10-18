@@ -43,6 +43,18 @@ export function initializeSchema(db: DatabaseSync, householdId: string, budgetCe
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS grocery_purchases (
+      id TEXT PRIMARY KEY,
+      household_id TEXT NOT NULL REFERENCES households(id),
+      revision INTEGER NOT NULL,
+      payer_member_id TEXT NOT NULL REFERENCES members(id),
+      snapshot_json TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'awaiting_total',
+      total_cents INTEGER,
+      created_at TEXT NOT NULL,
+      confirmed_at TEXT,
+      UNIQUE(household_id, revision)
+    );
     CREATE TABLE IF NOT EXISTS pending_clarifications (
       member_id TEXT PRIMARY KEY REFERENCES members(id),
       kind TEXT NOT NULL,

@@ -51,7 +51,7 @@ export type ListCommand =
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 export const WEEKDAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-const NAME = String.raw`(weekly|bi-?weekly|every\s+(?:two|2|other)\s+weeks?|fortnightly|two[-\s]?weeks?(?:ly)?|monthly)`;
+const NAME = String.raw`(weekly|bi-?weekly|every[-\s]+(?:two|2|other)[-\s]+weeks?|fortnightly|two[-\s]?weeks?(?:ly)?|monthly)`;
 const THE = String.raw`(?:the\s+|our\s+|my\s+)?`;
 const LIST_WORD = String.raw`(?:\s+(?:grocery\s+)?list)`;
 
@@ -70,7 +70,7 @@ const patterns = {
   overview: rx(String.raw`(?:(?:show|view|see|review)\s+)?(?:(?:all|our|the|my)\s+)?(?:recurring\s+|grocery\s+|shopping\s+)?lists|lists?\s+schedule|list\s+reminders`),
   setup: rx(String.raw`(?:set\s*up|start|create|begin)\s+(?:the\s+|our\s+)?(?:recurring\s+|grocery\s+|shopping\s+)?lists`),
   view: rx(String.raw`(?:(?:show|view|see|review|what'?s\s+on|what\s+is\s+on)\s+)?${THE}${NAME}${LIST_WORD}`),
-  load: rx(String.raw`(?:load|use|add|copy|put|move)\s+${THE}${NAME}${LIST_WORD}?(?:\s+items)?(?:\s+(?:to|into|in|onto)\s+(?:the\s+|our\s+)?cart)?(\s+again)?`),
+  load: rx(String.raw`(?:load|use|add|copy|put|move|(?:bulk\s+)?order)\s+${THE}${NAME}${LIST_WORD}?(?:\s+items)?(?:\s+(?:to|into|in|onto)\s+(?:the\s+|our\s+)?cart)?(\s+again)?`),
   addTo: rx(String.raw`(?:please\s+)?add\s+(.+?)\s+(?:to|on|onto|in|into)\s+${THE}${NAME}${LIST_WORD}?`),
   addToColon: rx(String.raw`add\s+to\s+${THE}${NAME}${LIST_WORD}?\s*:?\s+(.+)`),
   colon: rx(String.raw`${NAME}${LIST_WORD}?\s*:\s*(.+)`),

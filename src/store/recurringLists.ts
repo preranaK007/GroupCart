@@ -344,6 +344,9 @@ export class RecurringLists {
 
   /** Why a load can’t proceed (empty list or already loaded this cycle), if anything. */
   listLoadBlocker(list: ListKey, force: boolean): string | undefined {
+    if (this.m.checkout.getPendingKrogerCheckout()) {
+      return "The cart is locked while a Kroger checkout is in progress. Finish or cancel checkout before loading a recurring list.";
+    }
     const label = LIST_LABELS[list];
     const command = LIST_COMMAND_NAMES[list];
     if (!this.listItems(list).length) {
@@ -489,6 +492,7 @@ export class RecurringLists {
       `Loaded ${added.length} item${added.length === 1 ? "" : "s"} from the ${label} list into the cart ${recipients} (one change — “undo” reverts it):`,
       ...added,
       ...notes,
+      "This prepares the cart; no retailer order was placed. Everyone approves, then “checkout” sends approved products to Kroger, where the shopper finishes ordering.",
       this.m.cart.formatSummary(memberId),
     ].join("\n");
   }

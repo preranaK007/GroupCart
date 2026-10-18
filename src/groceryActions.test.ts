@@ -249,8 +249,8 @@ test("Order with Kroger is the same checkout as texting “checkout”, with the
   assert.match(callback.body, /https:\/\/www\.kroger\.com\/cart/);
   assert.deepEqual(kroger.cartAdds, sentItems);
   assert.match(group.at(-1)!, /^Added 2 items to Alex’s Kroger cart\. No order was placed/);
-  assert.match(group.at(-1)!, /Split: .*\(in Bills balances\)\./, "the split is reported");
-  assert.doesNotMatch(group.at(-1)!, /Splitwise|simulated/i, "live mode doesn't claim to log anything to Splitwise");
+  assert.match(group.at(-1)!, /Purchase [a-f0-9]{8} is awaiting the actual paid total/);
+  assert.equal(store.latestSplitwiseExpense(), undefined, "a cart transfer must not create debt or a Bills balance");
   assert.deepEqual(view.orderState(await cart("maya-remote")), { step: "sent", mine: false, accountName: "Alex", itemCount: 2, at: store.lastKrogerCart()!.at });
 });
 

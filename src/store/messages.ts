@@ -13,7 +13,7 @@ export function helpMessage(ctx: StoreContext): string {
     ctx.krogerCartEnabled
       ? "Checkout: everyone texts “approve”, then “checkout” checks Kroger availability and asks whose account to use (or tap Approve and Order with Kroger on the Groceries page). GroupCart never places an order or pays."
       : "Checkout: everyone texts “approve”, then “checkout” (simulated in the demo). GroupCart never places an order or pays.",
-    "Splits: after checkout each share counts in the Bills balances. “splitwise” shows whether it went to Splitwise.",
+    "Purchases: sending products to Kroger creates a draft. After paying, the shopper enters “purchase <id> total $12.34”, reviews the split, then “confirm purchase <id>” records the expense. “purchases” lists drafts; “cancel purchase <id>” discards one. “splitwise” shows logging status.",
     // Lines registered by feature modules (chores, bills, web chat, ...) through src/platform.ts.
     ...registeredHelp(),
   ].join("\n");
