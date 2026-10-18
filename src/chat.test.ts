@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { ChatError, ChatService, type ChatCard, type PollCard } from "./chat.js";
 import { EventsService } from "./events.js";
 import { NamedListsService } from "./namedLists.js";
-import { cardHandler, cardReply, cardText, registerCardHandler } from "./platform.js";
+import { cardHandler, cardReply, cardText, postCard, postMessage, registerCardHandler, setGroupSender } from "./platform.js";
 import { CartStore, type Member } from "./store.js";
 
 const directory = mkdtempSync(join(tmpdir(), "groupcart-chat-"));
@@ -131,4 +131,20 @@ test("events: tapping a plan's poll card votes like texting the number, and a ma
   assert.equal(result?.card?.kind === "poll" && result.card.closed, true, "two of three is a majority");
   assert.match(result?.reply ?? "", /^🎲 Game night is on: /);
   assert.equal(events.getPoll(created.poll.id)!.status, "booked");
+});
+
+test("in iMessage, the coordinator's messages are signed with its name; GroupCart's are not", async () => {
+  const sent: string[] = [];
+  setGroupSender(async (text) => { sent.push(text); });
+  try {
+    await postMessage("Booked for Thu 8pm.", { author: "Claude" });
+    const poll: ChatCard = { kind: "poll", id: "test:sign", question: "Movie night", options: [{ id: "o1", label: "Thu 8pm" }, { id: "o2", label: "Fri 9pm" }], multi: false, votes: {} };
+    await postCard("Movie night?", poll, { author: "Claude" });
+    await postCard("Movie night?", poll);
+  } finally {
+    setGroupSender(null);
+  }
+  assert.equal(sent[0], "Claude: Booked for Thu 8pm.");
+  assert.match(sent[1]!, /^Claude: Movie night\?\n/);
+  assert.match(sent[2]!, /^Movie night\?\n/);
 });

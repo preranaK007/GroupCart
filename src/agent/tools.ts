@@ -14,6 +14,8 @@ export type CoordinatorToolDeps = {
   groceriesFrom: "kroger" | "sample";
   /** The images attached to a chat message. */
   photos: (messageId: number) => Promise<Array<{ mimeType: string; data: Buffer }>>;
+  /** Runs GroupCart's built-in command handling for a member's text and returns its reply (nothing is posted). */
+  runCommand: (memberId: string, text: string) => Promise<string | null>;
   now?: () => Date;
 };
 
@@ -128,6 +130,16 @@ export function coordinatorTools(deps: CoordinatorToolDeps): ToolSpec[] {
         if (!Number.isFinite(at) || at < now().getTime() - 60_000) throw new Error("Give a future ISO time with an offset.");
         deps.coordinator.scheduleFollowUp(new Date(at), text(args.note, 500));
         return { scheduled: new Date(at).toISOString() };
+      },
+    },
+    {
+      name: "run_groupcart_command",
+      description: "Run one of GroupCart's built-in chat commands as the roommate you're answering, as if they had texted it, and get GroupCart's reply (nothing is posted; relay what matters). For what the other tools don't cover: sharing sessions (“start sharing with Sami”, “stop sharing”), recurring lists (“weekly: milk, eggs”, “load weekly list”), cart steps (“cart”, “approve”, “undo”, “remove eggs”), checkout, and numbered answers to GroupCart's own questions (“2”).",
+      inputSchema: { type: "object", properties: { text: { type: "string", description: "The command, written the way the roommate would text it." } }, required: ["text"] },
+      mutates: true,
+      handler: async (args, caller) => {
+        const reply = await deps.runCommand(caller.memberId, text(args.text, 500));
+        return { reply: reply ?? "(GroupCart had nothing to say to that.)" };
       },
     },
     {

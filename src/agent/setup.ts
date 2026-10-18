@@ -1,13 +1,14 @@
 // Wires the household coordinator into the app: Claude Code turns on the host's Claude account over the
 // connector, the coordinator's tools and card handler, follow-ups, and the Settings switch (/api/coordinator,
 // local only). index.ts routes group messages to it while a roommate has it connected.
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { isLocalRequest, isSameOriginMutation, readJsonBody } from "../auth.js";
 import type { ChatService } from "../chat.js";
 import { issueTurnToken } from "../connector.js";
 import { sendJson } from "../connectorSecurity.js";
 import type { KrogerClient } from "../kroger.js";
-import { postCard, postMessage, registerCardHandler, registerRoute, registerTools, scheduleEvery } from "../platform.js";
+import { postCard, postMessage, registerCardHandler, registerRoute, registerTools, scheduleEvery, type CommandContext } from "../platform.js";
 import type { CartStore } from "../store.js";
 import { coordinatorSettingsCard } from "../ui/coordinatorCard.js";
 import type { IntegrationCard } from "../ui/settingsPage.js";
@@ -27,7 +28,14 @@ export function coordinatorCard(): IntegrationCard | null {
   return settingsCard?.() ?? null;
 }
 
-export function setupCoordinator(options: { store: CartStore; chat: ChatService; kroger: KrogerClient | null; port: number }): HouseholdCoordinator {
+export function setupCoordinator(options: {
+  store: CartStore;
+  chat: ChatService;
+  kroger: KrogerClient | null;
+  port: number;
+  /** GroupCart's built-in command handling for one member's text, returning its reply. */
+  runCommand: (message: CommandContext) => Promise<string | null>;
+}): HouseholdCoordinator {
   const { store, chat, kroger } = options;
   const groceriesFrom = kroger ? "kroger" as const : "sample" as const;
   const channel: CoordinatorChannel = {
@@ -60,6 +68,10 @@ export function setupCoordinator(options: { store: CartStore; chat: ChatService;
     channel,
     findGroceries: (query, limit) => findGroceries(query, kroger, limit),
     groceriesFrom,
+    runCommand: (memberId, text) => {
+      const member = store.getMembers().find((candidate) => candidate.id === memberId);
+      return member ? options.runCommand({ messageId: `coordinator:${randomUUID()}`, memberId, memberName: member.name, text, attachments: [] }) : Promise.resolve(null);
+    },
     photos: async (messageId) => {
       const message = chat.get(messageId);
       const photos: Array<{ mimeType: string; data: Buffer }> = [];

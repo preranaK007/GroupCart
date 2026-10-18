@@ -103,6 +103,11 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
     await coordinator.handleMessage(message);
     return null;
   }
+  return runGroupCartCommand(message);
+}
+
+/** GroupCart's built-in command handling: feature commands, then the cart (also the coordinator's run_groupcart_command). */
+async function runGroupCartCommand(message: CommandContext): Promise<string | null> {
   // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
   // recurring-list phrases the store owns (upstream), which go straight to the store.
   const commandReply = store.ownsMessage(message.text, message.memberId) ? null : await runCommands(message);
@@ -152,7 +157,7 @@ const social = setupProfilesAndChat({
 });
 // --- end profiles, web sign-in, and web chat ---
 // --- Household coordinator: one Claude for the apartment, on the connecting roommate's account (src/agent/) ---
-coordinator = setupCoordinator({ store, chat: social.chat, kroger: krogerClient ?? null, port: config.port });
+coordinator = setupCoordinator({ store, chat: social.chat, kroger: krogerClient ?? null, port: config.port, runCommand: runGroupCartCommand });
 // --- end household coordinator ---
 // --- Money & points: pay-back links, points/streaks/leaderboard, Sunday digest (src/moneyPoints.ts) ---
 setupMoneyPoints({ store, demoMode: !liveMode, checkoutHooks: splitwise, paymentHandle: (memberId) => social.profiles.get(memberId)?.paymentHandle ?? "" });

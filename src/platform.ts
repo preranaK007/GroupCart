@@ -309,7 +309,8 @@ export function setCardSink(sink: CardSink | null): void {
 
 /**
  * Posts a bot message with a card: recorded in the web chat (as `author`, default "GroupCart") and the feed, and in
- * live mode sent to the household group as text plus cardText(card). Returns the web chat message (id and card).
+ * live mode sent to the household group as text plus cardText(card), signed "Author: …" when an author is given.
+ * Returns the web chat message (id and card).
  */
 export async function postCard(text: string, card: ChatCard, options: { author?: string } = {}): Promise<ChatMessage | null> {
   const fallback = [text.trim(), cardText(card)].filter(Boolean).join("\n");
@@ -317,12 +318,20 @@ export async function postCard(text: string, card: ChatCard, options: { author?:
   const message = cardSink?.record(text.trim(), card, options.author) ?? null;
   if (groupSender) {
     try {
-      await groupSender(fallback);
+      await groupSender(signed(fallback, options.author));
     } catch (error) {
       console.warn("Could not send a card to the group:", error instanceof Error ? error.message : error);
     }
   }
   return message;
+}
+
+/**
+ * iMessage shows every bot message from the same line, so a message posted under its own author (the household
+ * coordinator) carries the name there: "Claude: …". The web chat shows the author on its own.
+ */
+function signed(text: string, author: string | undefined): string {
+  return author ? `${author}: ${text}` : text;
 }
 
 /** Posts a plain bot message as `author` (web chat, feed, and the household group in live mode). */
@@ -331,7 +340,7 @@ export async function postMessage(text: string, options: { author: string }): Pr
   const message = cardSink?.recordText(text.trim(), options.author) ?? null;
   if (groupSender) {
     try {
-      await groupSender(text);
+      await groupSender(signed(text, options.author));
     } catch (error) {
       console.warn("Could not send a message to the group:", error instanceof Error ? error.message : error);
     }

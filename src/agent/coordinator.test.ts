@@ -38,9 +38,10 @@ function setup(replies: Array<string | null>) {
     timeZone: "America/Los_Angeles",
     pollSettleMs: 0,
   });
-  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [] });
+  const commands: Array<{ memberId: string; text: string }> = [];
+  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
   const tool = (name: string) => tools.find((spec) => spec.name === name)!;
-  return { coordinator, posted, turns, tool, channel };
+  return { coordinator, posted, turns, tool, channel, commands };
 }
 
 const message = (memberId: string, text: string) => ({ messageId: `x:${text}`, memberId, memberName: members.find((m) => m.id === memberId)!.name, text, attachments: [] });
@@ -114,4 +115,11 @@ test("no recap when a tool already posted to the group during the turn", async (
   coordinator.connect("m-ben");
   await coordinator.handleMessage(message("m-ben", "split this bill"));
   assert.deepEqual(log.map((entry) => entry.text), ["Ben added ⚡ Gas $46.82."]);
+});
+
+test("run_groupcart_command runs a built-in command as the roommate being answered", async () => {
+  const { tool, commands } = setup([]);
+  const result = await tool("run_groupcart_command").handler({ text: "start sharing with Ana" }, { memberId: "m-ben", memberName: "Ben", via: "Claude" });
+  assert.deepEqual(commands, [{ memberId: "m-ben", text: "start sharing with Ana" }]);
+  assert.deepEqual(result, { reply: "Started sharing for Ben and Ana." });
 });

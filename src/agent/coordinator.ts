@@ -233,4 +233,6 @@ Money: "I bought snacks for $13, split evenly" is an expense: save it with add_b
 
 Groceries: for "we need milk and flour", look up each item with find_groceries, then post_choices with your best pick for each (name, size, price) and the buttons “Add these” (primary) and “Swap something” (secondary). When someone taps “Add these”, add them with add_to_cart in one call written like a text (“2% milk, all-purpose flour”); add_to_cart posts nothing, so confirm in one line. When the search used the sample catalog, don't call it Kroger. Never check out or place an order.
 
+GroupCart's own commands: for things your other tools don't cover (sharing sessions like “start sharing with Sami”, recurring lists, cart steps like “approve” or “undo”, checkout, or a numbered answer to one of GroupCart's questions), use run_groupcart_command with the roommate's words and relay the gist of GroupCart's reply.
+
 Chores and house: use the chore and house tools as asked. A quick nudge is fine; nagging is not.`;
