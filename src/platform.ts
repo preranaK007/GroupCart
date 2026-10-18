@@ -7,6 +7,7 @@
 //   scheduleEvery(name, ms, fn) background job (nudges, recurring lists, reminders)
 //   notifyGroup(text)          proactive message to the household group chat (also shown in the web chat)
 //   registerHelp(line)         one line appended to the "help" reply
+//   registerPendingQuestion(owner, source)  a feature's open questions, so a bare "ok"/number goes to the newest one
 //   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
 // Live mode sends notifyGroup() messages to the household group that the store persists (upstream's
@@ -143,6 +144,36 @@ export async function runCommands(context: CommandContext): Promise<string | nul
   }
   return null;
 }
+
+// --- Pending questions: who answers a bare "yes"/"ok" or a bare number ---
+/** Bare replies that more than one feature might be waiting for: "ok" (yes/ok/no) or "number" (an option pick). */
+export type BareReply = "ok" | "number";
+/** When (ISO) the feature last asked this member a still-open question that a bare reply of this kind answers. */
+export type PendingQuestionSource = (memberId: string, kind: BareReply) => string | null;
+const pendingQuestionSources = new Map<string, PendingQuestionSource>();
+
+/**
+ * Each feature (cart, kitchen, bills, events, house) registers how to find a member's open question from its own
+ * state. Registering an owner again replaces it, so the newest service instance answers (tests build several).
+ */
+export function registerPendingQuestion(owner: string, source: PendingQuestionSource): void {
+  pendingQuestionSources.set(owner, source);
+}
+
+/**
+ * The newest open question of this kind that any other feature asked the member (ISO), or null. A feature takes a
+ * bare reply only when its own question is newer, so the most recent question wins.
+ */
+export function otherPendingQuestionAt(owner: string, memberId: string, kind: BareReply): string | null {
+  let latest: string | null = null;
+  for (const [name, source] of pendingQuestionSources) {
+    if (name === owner) continue;
+    const at = source(memberId, kind);
+    if (at && (!latest || at > latest)) latest = at;
+  }
+  return latest;
+}
+// --- end pending questions ---
 
 export function registerRoute(handler: RouteHandler): void {
   routes.push(handler);

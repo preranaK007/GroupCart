@@ -617,7 +617,7 @@ export function possessive(name: string): string {
 
 /**
  * Overdue nudge, e.g. "🍽️ Maya hasn’t done the dishes in 3 weeks. Maya’s up next."
- * Falls back to "🗑️ Take out trash is 2 days overdue. Alex’s up next." when the person
+ * Falls back to "🗑️ Take out trash: 2 days overdue. Alex’s up next." when the person
  * did it recently (or never).
  */
 export function overdueNudge(options: { name: string; emoji: string; assigneeName: string; daysSinceAssignee: number | null; lateDays: number }): string {
@@ -625,7 +625,7 @@ export function overdueNudge(options: { name: string; emoji: string; assigneeNam
   if (options.daysSinceAssignee !== null && options.daysSinceAssignee >= 7) {
     return `${options.emoji} ${who} hasn’t ${choreDonePhrase(options.name)} in ${durationPhrase(options.daysSinceAssignee)}. ${possessive(who)} up next.`;
   }
-  return `${options.emoji} ${options.name} is ${durationPhrase(options.lateDays)} overdue. ${possessive(who)} up next.`;
+  return `${options.emoji} ${options.name}: ${durationPhrase(options.lateDays)} overdue. ${possessive(who)} up next.`;
 }
 
 /** "Alex", "Alex and Maya", "Alex, Maya, and Jordan". */

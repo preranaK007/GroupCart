@@ -85,7 +85,7 @@ export class SharingSessions {
 
   startSharing(memberId: string, list: string): string {
     const others = this.ctx.getMembers().filter((member) => member.id !== memberId).map((member) => member.name);
-    const example = `“start sharing with ${others.slice(0, 2).join(" and ") || "Maya"}”`;
+    const example = others.length ? `“start sharing with ${others.slice(0, 2).join(" and ")}”` : "“start sharing with” plus member names";
     if (!list) return `Who should share with you? Text ${example}. Nothing changed.`;
     const resolved = this.resolveMemberNames(list, memberId);
     if ("error" in resolved) return resolved.error;

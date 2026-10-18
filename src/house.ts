@@ -33,8 +33,8 @@ import {
 } from "./houseParse.js";
 import { NamedListsService } from "./namedLists.js";
 import {
-  notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery,
-  type CommandAttachment, type CommandContext, type ToolCaller, type ToolSpec,
+  notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery,
+  type BareReply, type CommandAttachment, type CommandContext, type ToolCaller, type ToolSpec,
 } from "./platform.js";
 import { avatarFor, sniffImage } from "./profiles.js";
 import type { CartStore } from "./store.js";
@@ -150,6 +150,8 @@ export class HouseService {
       CREATE TABLE IF NOT EXISTS house_nudges (key TEXT PRIMARY KEY, sent_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS house_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
+    // A guest heads-up waits for “ok”/“concern” from the others; the newest open poll takes bare numbers.
+    registerPendingQuestion("house", (memberId, kind) => kind === "ok" ? this.#headsUpFor(memberId)?.announcedAt ?? null : this.openPolls()[0]?.createdAt ?? null);
   }
 
   // --- Basics ----------------------------------------------------------------
@@ -724,21 +726,9 @@ export class HouseService {
 
   // --- Group chat ------------------------------------------------------------
 
-  /** When this member was last asked something else that a bare number (or "ok") could answer. */
-  #otherQuestionAt(memberId: string, kind: "number" | "ok"): string | null {
-    let latest = this.#store.pendingQuestionAt(memberId);
-    const later = (at: string | null | undefined) => { if (at && (!latest || at > latest)) latest = at; };
-    if (kind === "number" && this.#events) {
-      // Mirrors the events module: an open plan vote (or the member's own pick list) takes bare numbers too.
-      for (const poll of this.#events.openPolls()) if (poll.mode === "vote" || poll.organizerId === memberId) later(poll.createdAt);
-    }
-    if (kind === "ok") {
-      // A bill draft waiting for "ok" (src/bills.ts) is newer than the heads-up → leave "ok" to bills.
-      try {
-        later((this.#db.prepare("SELECT updated_at AS at FROM bill_pending WHERE household_id = ? AND member_id = ?").get(this.#household, memberId) as { at: string } | undefined)?.at);
-      } catch { /* bills not set up */ }
-    }
-    return latest;
+  /** When another feature (cart, kitchen, bills, an events plan vote) last asked this member something a bare number or "ok" answers. */
+  #otherQuestionAt(memberId: string, kind: BareReply): string | null {
+    return otherPendingQuestionAt("house", memberId, kind);
   }
 
   /** Replies to house phrases; null for anything else. Idempotent by message id. */
@@ -1418,42 +1408,41 @@ export class HouseService {
       return false;
     }
     this.setMeta("demo_seeded", this.#iso());
-    const byName = (name: string, fallback: number) => members.find((member) => member.name.toLowerCase() === name)?.id ?? members[fallback % members.length]!.id;
-    const alex = byName("alex", 0);
-    const maya = byName("maya", 1);
-    const jordan = byName("jordan", 2);
+    // Cast from the roster in order (any names); with two members the third role repeats the first.
+    const cast = (index: number) => members[index % members.length]!.id;
+    const [one, two, three] = [cast(0), cast(1), cast(2)];
     const now = this.#now();
 
-    this.saveCard({ kind: "wifi", title: "Wi-Fi", fields: { network: "Apt4B-5G", password: "sunny-otter-42" } }, alex);
-    this.saveCard({ kind: "door", title: "Front door", fields: { code: "4821", note: "press # after" } }, maya);
-    this.saveCard({ kind: "trash", title: "Trash day", fields: { trash: "Tuesday night", recycling: "Every other Thursday" } }, jordan);
-    this.saveCard({ kind: "landlord", title: "Landlord", fields: { name: "Pat Rivera", phone: "555-0100", email: "pat@example.com", note: "Text first for repairs; call for emergencies." } }, alex);
-    this.saveCard({ kind: "rules", title: "House rules", fields: { text: "Quiet hours 11pm–8am on weeknights\nLabel your food in the fridge\nDishes done by bedtime\nGive a heads-up before overnight guests" } }, maya, );
-    this.saveCard({ kind: "emergency", title: "Emergency", fields: { text: "Water shutoff: under the kitchen sink\nBreaker panel: hall closet\nBuilding emergency line: 555-0199" } }, jordan);
-    this.saveCard({ kind: "door", title: "Bike room", pinned: false, fields: { code: "1357" } }, jordan);
-    this.saveCard({ kind: "note", title: "Parking", fields: { text: "Spot #12 is ours. Guests park on the street after 6pm." } }, alex);
+    this.saveCard({ kind: "wifi", title: "Wi-Fi", fields: { network: "Apt4B-5G", password: "sunny-otter-42" } }, one);
+    this.saveCard({ kind: "door", title: "Front door", fields: { code: "4821", note: "press # after" } }, two);
+    this.saveCard({ kind: "trash", title: "Trash day", fields: { trash: "Tuesday night", recycling: "Every other Thursday" } }, three);
+    this.saveCard({ kind: "landlord", title: "Landlord", fields: { name: "Pat Rivera", phone: "555-0100", email: "pat@example.com", note: "Text first for repairs; call for emergencies." } }, one);
+    this.saveCard({ kind: "rules", title: "House rules", fields: { text: "Quiet hours 11pm–8am on weeknights\nLabel your food in the fridge\nDishes done by bedtime\nGive a heads-up before overnight guests" } }, two, );
+    this.saveCard({ kind: "emergency", title: "Emergency", fields: { text: "Water shutoff: under the kitchen sink\nBreaker panel: hall closet\nBuilding emergency line: 555-0199" } }, three);
+    this.saveCard({ kind: "door", title: "Bike room", pinned: false, fields: { code: "1357" } }, three);
+    this.saveCard({ kind: "note", title: "Parking", fields: { text: "Spot #12 is ours. Guests park on the street after 6pm." } }, one);
 
-    void this.createRepair({ title: "Kitchen faucet dripping", memberId: jordan, createdAt: now - 3 * DAY - 2 * HOUR, photoFile: this.storeGenerated(sampleRepairSvg(), "svg") }).then((created) => {
-      if (created.ok) this.updateRepair(created.repair.id, { assigneeId: alex }, maya, now - 2 * DAY);
+    void this.createRepair({ title: "Kitchen faucet dripping", memberId: three, createdAt: now - 3 * DAY - 2 * HOUR, photoFile: this.storeGenerated(sampleRepairSvg(), "svg") }).then((created) => {
+      if (created.ok) this.updateRepair(created.repair.id, { assigneeId: one }, two, now - 2 * DAY);
     });
-    void this.createRepair({ title: "Hallway light out", memberId: maya, createdAt: now - 12 * DAY }).then((created) => {
-      if (created.ok) this.updateRepair(created.repair.id, { status: "fixed" }, alex, now - 9 * DAY);
+    void this.createRepair({ title: "Hallway light out", memberId: two, createdAt: now - 12 * DAY }).then((created) => {
+      if (created.ok) this.updateRepair(created.repair.id, { status: "fixed" }, one, now - 9 * DAY);
     });
 
     if (this.#events) {
       const today = this.today();
       const saturday = addDays(today, ((6 - dayOfWeek(today) + 7) % 7) || 7);
-      const guest = this.announceGuest({ title: "Jordan’s friends over", date: saturday, startMin: 20 * 60, durationMin: 180, hostId: jordan, announcedAt: now - 5 * HOUR });
-      if (guest.ok) this.react(guest.event.id, alex, "ok");
+      const guest = this.announceGuest({ title: this.guestTitle("my friends over", three, 20 * 60, null), date: saturday, startMin: 20 * 60, durationMin: 180, hostId: three, announcedAt: now - 5 * HOUR });
+      if (guest.ok) this.react(guest.event.id, one, "ok");
     }
 
     const tonight = this.#night(now);
-    this.addQuiet({ date: tonight, startMin: 22 * 60, endMin: null, reason: "Exam tomorrow", memberId: maya });
+    this.addQuiet({ date: tonight, startMin: 22 * 60, endMin: null, reason: "Exam tomorrow", memberId: two });
 
-    const poll = this.createPoll({ question: "Thermostat at night: 68 or 70?", options: ["68°F", "70°F"], memberId: alex, createdAt: now - 2 * HOUR });
+    const poll = this.createPoll({ question: "Thermostat at night: 68 or 70?", options: ["68°F", "70°F"], memberId: one, createdAt: now - 2 * HOUR });
     if (poll.ok) {
-      this.vote(poll.poll.id, alex, 2);
-      this.vote(poll.poll.id, maya, 1);
+      this.vote(poll.poll.id, one, 2);
+      this.vote(poll.poll.id, two, 1);
     }
     return true;
   }

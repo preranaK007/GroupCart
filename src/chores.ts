@@ -440,7 +440,7 @@ export class ChoreService {
     if (!name) return fail("Give the chore a name.");
     if (name.length > 60) return fail("Keep the name under 60 characters.");
     const duplicate = this.#chores().find((chore) => chore.name.toLowerCase() === name.toLowerCase() && chore.nextDue);
-    if (duplicate) return fail(`${duplicate.emoji} ${duplicate.name} is already a chore (${lowerFirst(scheduleLabel(duplicate.schedule))}).`, 409);
+    if (duplicate) return fail(`${duplicate.emoji} ${duplicate.name} is already on the chore list (${lowerFirst(scheduleLabel(duplicate.schedule))}).`, 409);
     const scheduleInput = input.schedule;
     if (scheduleInput.kind === "once") {
       if (!isDateString(scheduleInput.date)) return fail("Pick a due date.");
@@ -478,12 +478,12 @@ export class ChoreService {
     const chore = this.#chore(choreId);
     if (!chore || chore.archived) return fail("That chore no longer exists.", 404);
     const open = this.#open(chore, ctx);
-    if (!open) return fail(`${chore.emoji} ${chore.name} is already done.`, 409);
+    if (!open) return fail(`${chore.emoji} ${chore.name}: already done.`, 409);
     const doer = memberId ?? open.assigneeId;
     if (doer && !ctx.ids.includes(doer)) return fail("That person isn’t in the household.", 404);
     const today = this.#db.prepare("SELECT member_id FROM chore_log WHERE chore_id = ? AND kind = 'done' AND on_date = ? ORDER BY at DESC LIMIT 1").get(chore.id, ctx.today) as { member_id: string | null } | undefined;
-    if (today) return fail(`${chore.emoji} ${chore.name} was already done today (${this.#name(ctx, today.member_id)}).`, 409);
-    if (!open.canComplete) return fail(`${chore.emoji} ${chore.name} is done for now. Next one is ${shortDate(open.dueDate)}.`, 409);
+    if (today) return fail(`${chore.emoji} ${chore.name}: already done today by ${this.#name(ctx, today.member_id)}.`, 409);
+    if (!open.canComplete) return fail(`${chore.emoji} ${chore.name}: all done for now. The next one is ${shortDate(open.dueDate)}.`, 409);
     const nextDue = nextDueAfterCompletion(chore.schedule, open.dueDate, ctx.today);
     const logId = this.#tx(() => {
       const inserted = this.#db.prepare(
@@ -704,7 +704,7 @@ export class ChoreService {
         if (!result.ok) return result.error;
         const label = `${result.chore.emoji} ${result.chore.name}`;
         const thanks = result.wasTurn || !result.chore.assigneeId ? `✅ Nice, ${context.memberName}!` : `✅ Thanks for covering, ${context.memberName}!`;
-        if (!result.next) return `${thanks} ${label} is done.`;
+        if (!result.next) return `${thanks} ${label} done.`;
         const nextWho = result.next.assigneeId ? `${possessive(this.#name(ctx, result.next.assigneeId))} up next` : "Next one";
         return `${thanks} ${label} done. ${nextWho}, ${dueLabel(result.next.dueDate, ctx.today)}.`;
       }
@@ -962,26 +962,27 @@ export class ChoreService {
     if (!ctx.people.length) return false;
     const t = ctx.today;
     const who = (index: number) => ctx.people[index % ctx.people.length]!.id;
-    const [alex, jordan, maya] = [who(0), who(1), who(2)];
+    // Cast from the roster in order (any names, any size); with fewer members the roles repeat.
+    const [one, two, three, four, five] = [who(0), who(1), who(2), who(3), who(4)];
     const weekdayOf = (date: string) => new Date(`${date}T12:00:00Z`).getUTCDay();
     const nextSunday = firstDueOnOrAfter({ kind: "weekly", weekday: 0, everyWeeks: 1, anchor: "1970-01-04" }, t);
     const endOfLastMonth = addDays(`${t.slice(0, 7)}-01`, -1);
     type Seed = { name: string; emoji: string; schedule: ScheduleInput; pool?: string[]; anchor?: string; nextDue: string; history: Array<[string, string, string?]> };
     const seeds: Seed[] = [
-      { name: "Dishes", emoji: "🍽️", schedule: { kind: "weekly", weekday: weekdayOf(addDays(t, -2)) }, pool: [alex, maya], nextDue: addDays(t, -2),
-        history: [[addDays(t, -23), alex], [addDays(t, -16), maya], [addDays(t, -9), alex]] },
+      { name: "Dishes", emoji: "🍽️", schedule: { kind: "weekly", weekday: weekdayOf(addDays(t, -2)) }, pool: [one, three], nextDue: addDays(t, -2),
+        history: [[addDays(t, -23), one], [addDays(t, -16), three], [addDays(t, -9), one]] },
       { name: "Take out trash", emoji: "🗑️", schedule: { kind: "weekly", weekday: weekdayOf(t) }, nextDue: t,
-        history: [[addDays(t, -21), alex], [addDays(t, -14), jordan], [addDays(t, -7), maya]] },
+        history: [[addDays(t, -21), one], [addDays(t, -14), two], [addDays(t, -7), three]] },
       { name: "Water plants", emoji: "🪴", schedule: { kind: "weekly", weekday: weekdayOf(addDays(t, -1)) }, nextDue: addDays(t, 6),
-        history: [[addDays(t, -15), maya], [addDays(t, -8), alex], [addDays(t, -1), jordan]] },
+        history: [[addDays(t, -15), three], [addDays(t, -8), one], [addDays(t, -1), two]] },
       { name: "Vacuum", emoji: "🧹", schedule: { kind: "weekly", weekday: 0 }, nextDue: nextSunday,
-        history: [[addDays(nextSunday, -14), alex], [addDays(nextSunday, -7), maya]] },
+        history: [[addDays(nextSunday, -14), one], [addDays(nextSunday, -7), three]] },
       { name: "Clean bathroom", emoji: "🛁", schedule: { kind: "weekly", weekday: weekdayOf(addDays(t, 3)), everyWeeks: 2 }, anchor: addDays(t, 3), nextDue: addDays(t, 3),
-        history: [[addDays(t, -25), alex], [addDays(t, -11), maya, addDays(t, -10)]] },
+        history: [[addDays(t, -25), one], [addDays(t, -11), three, addDays(t, -10)]] },
       { name: "Recycling", emoji: "♻️", schedule: { kind: "weekly", weekday: weekdayOf(addDays(t, -3)) }, nextDue: addDays(t, 4),
-        history: [[addDays(t, -10), jordan], [addDays(t, -3), maya]] },
+        history: [[addDays(t, -10), four], [addDays(t, -3), three]] },
       { name: "Deep clean fridge", emoji: "🧊", schedule: { kind: "monthly", day: 31 }, nextDue: firstDueOnOrAfter({ kind: "monthly", day: 31 }, t),
-        history: [[endOfLastMonth, jordan]] },
+        history: [[endOfLastMonth, five]] },
     ];
     this.#tx(() => {
       const createdAt = new Date(this.#now() - 35 * 86_400_000).toISOString();
@@ -1116,7 +1117,7 @@ export function setupChores(options: { store: CartStore; demoMode: boolean }): C
   activeChores = service; // money & points
   if (options.demoMode && service.seedDemo()) console.log("Chores: added sample chores and history for the demo.");
   registerCommand("chores", (context) => (context.text ? service.handleCommand(context) : null));
-  registerHelp("Chores: “chores” for this week, “my chores”, “done dishes” when finished, “skip dishes” or “swap dishes with Maya” to trade a turn.");
+  registerHelp("Chores: “chores” for this week, “my chores”, “done dishes” when finished, “skip dishes” or “swap dishes with <name>” to trade a turn.");
   registerHelp(`Add a chore: ${EXAMPLES}.`);
   registerHelp("Away: “away until Oct 30” takes you out of chore rotations; “I’m back” puts you back.");
   registerRoute((request, response, url) => handleChoresRequest(service, request, response, url));

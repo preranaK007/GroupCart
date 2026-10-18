@@ -31,6 +31,11 @@ const CATEGORY_KEYWORDS: Array<[BillCategory, RegExp]> = [
   ["household", /\b(household|cleaning|supplies|toilet paper|paper towels?|detergent|ikea|amazon|home depot|lowe'?s|furniture|repair|plumber|cleaner)\b/i],
 ];
 
+/** A photo caption that says it's a bill: mentions a bill, receipt, rent, something due, or a $ amount. */
+export function mentionsBill(text: string): boolean {
+  return /\b(?:bills?|receipts?|rent|due)\b/i.test(text) || /\$\s?\d/.test(text);
+}
+
 export function inferCategory(text: string): BillCategory {
   for (const [category, pattern] of CATEGORY_KEYWORDS) if (pattern.test(text)) return category;
   return "other";

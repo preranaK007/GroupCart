@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { maskHandle, normalizeHandle } from "./config.js";
 import type { KrogerCartAvailabilityIssue } from "./kroger.js";
 import { parseListCommand } from "./lists.js";
+import { registerPendingQuestion } from "./platform.js";
 import { CartLedger } from "./store/cartLedger.js";
 import { StoreContext, type StoreModules } from "./store/context.js";
 import { GoogleCalendarAccounts } from "./store/googleCalendarAccounts.js";
@@ -12,7 +13,7 @@ import { KrogerCheckout } from "./store/krogerCheckout.js";
 import { ListCommands } from "./store/listCommands.js";
 import { ListText } from "./store/listText.js";
 import { dashboardMessage, helpMessage } from "./store/messages.js";
-import { CART_COMMAND_PATTERN, cancellationQuery, isHelpRequest, parseSharingCommand } from "./store/parsing.js";
+import { CART_COMMAND_PATTERN, cancellationQuery, isBanter, isHelpRequest, parseSharingCommand } from "./store/parsing.js";
 import { ProductSearch } from "./store/productSearch.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
@@ -98,6 +99,8 @@ export class CartStore {
     m.splitwise = new SplitwiseLog(this.#ctx);
     m.calendarAccounts = new GoogleCalendarAccounts(this.#ctx);
     this.#m = m;
+    // Product picks, milk kind, list selections, and confirmations take bare numbers and "yes"/"ok" alike.
+    registerPendingQuestion("cart", (memberId) => this.pendingQuestionAt(memberId));
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -178,6 +181,14 @@ export class CartStore {
     return latest;
   }
 
+  /**
+   * Group banter (“lol”, “👍”, “thanks”) while the store has nothing to ask this member: stay quiet instead of
+   * answering “I couldn’t match that” (or running a live product search). With a question open it goes through as usual.
+   */
+  #isIdleBanter(memberId: string, text: string): boolean {
+    return isBanter(text) && this.pendingQuestionAt(memberId) === null;
+  }
+
   hasPendingChoice(memberId: string): boolean {
     return this.pendingQuestionAt(memberId) !== null;
   }
@@ -196,6 +207,7 @@ export class CartStore {
   processIncomingText(messageId: string, memberId: string, text: string): string | null {
     const existing = this.#ctx.existingReply(messageId);
     if (existing !== undefined) return existing;
+    if (this.#isIdleBanter(memberId, text)) return null;
 
     const { db } = this.#ctx;
     const { cart, sharing, listCommands } = this.#m;
@@ -271,6 +283,7 @@ export class CartStore {
   ): Promise<string | null> {
     const existing = this.#ctx.existingReply(messageId);
     if (existing !== undefined) return existing;
+    if (this.#isIdleBanter(memberId, text)) return null;
 
     const { db } = this.#ctx;
     const { cart, checkout, search, listCommands } = this.#m;

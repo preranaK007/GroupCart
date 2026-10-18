@@ -16,7 +16,7 @@ import { promisify } from "node:util";
 import type { DatabaseSync } from "node:sqlite";
 import {
   addDays, addMonths, CATEGORY_EMOJI, CATEGORY_LABEL, cleanLabel, daysBetween, decimalToCents, dollarsInputToCents, findMemberByName,
-  inferCategory, isCategory, isoDate, parseBillCommand, parseDateText, relativeDue, shortDate, titleCase, validIsoDate,
+  inferCategory, isCategory, isoDate, mentionsBill, parseBillCommand, parseDateText, relativeDue, shortDate, titleCase, validIsoDate,
   type BillCategory, type BillCommand, type DraftEdit, type SplitInput,
 } from "./billParse.js";
 import { computeSplit, dollars, MAX_BILL_CENTS, simplifyDebts, type BillItem, type Share, type SplitMode, type SplitSpec } from "./billSplit.js";
@@ -27,7 +27,7 @@ import {
 import { demoExtractionFor, renderSampleBill, SAMPLE_KINDS, type SampleKind } from "./billSample.js";
 import { config, splitwiseConfig } from "./config.js";
 import {
-  isRemoteAuthorized, notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, scheduleEvery,
+  isRemoteAuthorized, notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, scheduleEvery,
   type CommandAttachment, type CommandContext, type McpContent, type ToolCaller, type ToolSpec,
 } from "./platform.js";
 import { buildCreateExpenseBody, parseSplitwiseMembers, SplitwiseClient, SplitwiseError, splitwiseDashboardView, splitwiseExpenseUrl, type SplitwiseFetch, type SplitwiseUserRef } from "./splitwise.js";
@@ -202,6 +202,12 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(JSON.stringify(value));
 }
 
+/** A roommate’s first name for example commands (“paid Sami $20”), preferring someone other than the sender. */
+function exampleName(members: readonly Member[], senderId: string | null): string {
+  const member = members.find((candidate) => candidate.id !== senderId) ?? members[0];
+  return member ? member.name.split(/\s+/)[0]! : "a roommate";
+}
+
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
@@ -244,6 +250,14 @@ export class BillsService {
     };
     mkdirSync(this.#filesDir, { recursive: true });
     this.#ensureTables();
+    // A draft waiting for “ok” (or a typed amount) is this member's open bills question for a day.
+    registerPendingQuestion("bills", (memberId, kind) => kind === "ok" ? this.#openDraftAt(memberId) : null);
+  }
+
+  /** When the member's pending bill draft was last touched, while it can still be confirmed (ISO), or null. */
+  #openDraftAt(memberId: string): string | null {
+    const pending = this.#pending(memberId);
+    return pending && this.#now().getTime() - Date.parse(pending.updatedAt) <= CONFIRM_WINDOW_MS ? pending.updatedAt : null;
   }
 
   get demoMode(): boolean { return !this.#liveMode; }
@@ -658,6 +672,10 @@ export class BillsService {
       return "I couldn’t download that file. Try sending it again.";
     }
     if (data.length < MIN_ATTACHMENT_BYTES) return null; // stickers, tiny images
+    // Without a reader (no ANTHROPIC_API_KEY) every photo would become an unread draft, so only take one the caption
+    // calls a bill. Demo sample bills are read from their known fields, so they count as read.
+    const isSample = () => this.demoMode && demoExtractionFor(createHash("sha256").update(data).digest("hex"), this.#now()) !== null;
+    if (!this.#apiKey && !mentionsBill(context.text) && !isSample()) return null;
     const result = await this.createFromFile({ data, fileName: attachment.name, memberId: context.memberId, source: "chat", messageId: context.messageId });
     if (!result.ok) return result.error;
     if (result.notABill) return null;
@@ -678,7 +696,7 @@ export class BillsService {
     const members = this.members();
     switch (command.kind) {
       case "help":
-        return "Bills: send a photo or screenshot of a bill, or text “bill internet $80 due Nov 1”. Then “bills” shows what’s due, “who owes” shows balances, “paid Maya $20” records a payment, and “mark internet paid” stops reminders.";
+        return `Bills: send a photo or screenshot of a bill, or text “bill internet $80 due Nov 1”. Then “bills” shows what’s due, “who owes” shows balances, “paid ${exampleName(members, context.memberId)} $20” records a payment, and “mark internet paid” stops reminders.`;
       case "list":
         return this.billsReply();
       case "balances":
@@ -686,7 +704,7 @@ export class BillsService {
       case "payment": {
         const from = command.fromName ? findMemberByName(command.fromName, members, context.memberId) : members.find((member) => member.id === context.memberId);
         const to = findMemberByName(command.toName.replace(/\s+back$/i, ""), members, context.memberId);
-        if (!from || !to) return `I don’t know who “${cleanLabel(command.fromName && !from ? command.fromName : command.toName, 24)}” is. Try “paid ${members.find((member) => member.id !== context.memberId)?.name ?? "Maya"} $20”.`;
+        if (!from || !to) return `I don’t know who “${cleanLabel(command.fromName && !from ? command.fromName : command.toName, 24)}” is. Try “paid ${exampleName(members, context.memberId)} $20”.`;
         const result = this.recordPayment({ fromId: from.id, toId: to.id, cents: command.cents, createdBy: context.memberId, messageId: context.messageId });
         return result.message;
       }
@@ -777,6 +795,10 @@ export class BillsService {
     const age = this.#now().getTime() - Date.parse(pending.updatedAt);
     if (age > CONFIRM_WINDOW_MS) return null;
     if (edit.kind === "cancel" && !edit.explicit && age > CANCEL_WINDOW_MS) return null;
+    // A bare “ok” or “cancel” answers the newest question: leave it to a feature that asked this member later.
+    const bare = edit.kind === "confirm" || (edit.kind === "cancel" && !edit.explicit);
+    const other = bare ? otherPendingQuestionAt("bills", context.memberId, "ok") : null;
+    if (other && other > pending.updatedAt) return null;
     const bill = pending.bill;
     const members = this.members();
     const resolveAll = (names: string[]): Member[] | null => {
@@ -804,7 +826,7 @@ export class BillsService {
         if (!found) return null; // e.g. "remove bread" belongs to the grocery cart
         const remove = new Set(found.map((member) => member.id));
         const remaining = bill.split.memberIds.filter((id) => !remove.has(id));
-        if (!remaining.length) return "Someone has to share the bill. Try “only Maya”.";
+        if (!remaining.length) return `Someone has to share the bill. Try “only ${exampleName(members, null)}”.`;
         if (bill.split.mode === "exact" || bill.split.mode === "percent") { bill.split = { mode: "equal", memberIds: remaining }; note = " Switched to an even split."; }
         else bill.split = { ...bill.split, memberIds: remaining };
         bill.items = bill.items.map((item) => ({ ...item, memberIds: item.memberIds?.filter((id) => !remove.has(id)) }));
@@ -1653,53 +1675,52 @@ export class BillsService {
     if (existing.count > 0) { this.#setMeta("demo_seeded", "skipped"); return; }
     const members = this.members();
     if (members.length < 2) return;
-    const [alex, maya, jordan] = [members.find((member) => /alex/i.test(member.name)) ?? members[0]!, members.find((member) => /maya/i.test(member.name)) ?? members[1]!, members.find((member) => /jordan/i.test(member.name)) ?? members[2] ?? members[0]!];
+    // Cast from the roster in order (any names); with two members the third role repeats the first.
+    const cast = (index: number) => members[index % members.length]!;
+    const [one, two, three] = [cast(0), cast(1), cast(2)];
     const everyone = members.map((member) => member.id);
     const today = this.#todayIso();
     const now = this.#now();
-    const firstOfNext = isoDate(new Date(now.getFullYear(), now.getMonth() + 1, 1, 12));
     const firstOfThis = isoDate(new Date(now.getFullYear(), now.getMonth(), 1, 12));
     const at = (iso: string) => new Date(`${iso}T17:00:00`).toISOString();
-    const rentSplit: SplitSpec = members.length >= 3
-      ? { mode: "exact", memberIds: [alex.id, maya.id, jordan.id], amounts: { [alex.id]: 90_000, [maya.id]: 80_000, [jordan.id]: 70_000 } }
-      : { mode: "equal", memberIds: everyone };
     const make = (fields: Partial<Bill>, savedOn: string): Bill => {
-      const bill = this.#newBill({ source: "demo", createdBy: fields.payerId ?? alex.id, ...fields, state: "saved", createdAt: at(savedOn), savedAt: at(savedOn) });
+      const bill = this.#newBill({ source: "demo", createdBy: fields.payerId ?? one.id, ...fields, state: "saved", createdAt: at(savedOn), savedAt: at(savedOn) });
       bill.updatedAt = bill.createdAt;
       this.#recompute(bill);
       this.#insertBill(bill);
       this.#db.prepare("UPDATE bill_bills SET sw_status = 'simulated', sw_mode = 'simulated' WHERE id = ?").run(bill.id);
       return bill;
     };
-    const lastRent = make({ vendor: "Oak Street Apartments", category: "rent", totalCents: 240_000, dueDate: firstOfThis, payerId: alex.id, split: rentSplit, recurring: true, paidAt: at(firstOfThis), reading: { method: "manual", confidence: "high", notes: null } }, addDays(firstOfThis, -6));
-    make({ vendor: "Oak Street Apartments", category: "rent", totalCents: 240_000, dueDate: firstOfNext, payerId: alex.id, split: rentSplit, recurring: true, parentId: lastRent.id, reading: { method: "manual", confidence: "high", notes: null } }, addDays(today, -1));
-    make({ vendor: "City Light", category: "utilities", totalCents: 11_240, dueDate: addDays(today, 3), periodStart: addDays(today, -40), periodEnd: addDays(today, -10), payerId: maya.id, split: { mode: "equal", memberIds: everyone }, recurring: true, items: [{ description: "Energy charge", cents: 9_618 }, { description: "Base charge", cents: 850 }, { description: "Taxes", cents: 772 }], reading: { method: "demo", confidence: "high", notes: null } }, addDays(today, -4));
-    make({ vendor: "Xfinity", category: "internet", totalCents: 8_000, dueDate: addDays(today, 11), payerId: jordan.id, split: { mode: "equal", memberIds: everyone }, recurring: true, reading: { method: "manual", confidence: "high", notes: null } }, addDays(today, -2));
+    // This month's rent, already settled: everyone paid their share back (below), so balances stay in the tens of
+    // dollars. Next month's rent is drafted by the monthly repeat a week before it's due (runSchedules).
+    const rent = make({ vendor: "Oak Street Apartments", category: "rent", totalCents: 240_000, dueDate: firstOfThis, payerId: one.id, split: { mode: "equal", memberIds: everyone }, recurring: true, paidAt: at(firstOfThis), reading: { method: "manual", confidence: "high", notes: null } }, addDays(firstOfThis, -6));
+    make({ vendor: "City Light", category: "utilities", totalCents: 11_240, dueDate: addDays(today, 3), periodStart: addDays(today, -40), periodEnd: addDays(today, -10), payerId: two.id, split: { mode: "equal", memberIds: everyone }, recurring: true, items: [{ description: "Energy charge", cents: 9_618 }, { description: "Base charge", cents: 850 }, { description: "Taxes", cents: 772 }], reading: { method: "demo", confidence: "high", notes: null } }, addDays(today, -4));
+    make({ vendor: "Xfinity", category: "internet", totalCents: 8_000, dueDate: addDays(today, 11), payerId: three.id, split: { mode: "equal", memberIds: everyone }, recurring: true, reading: { method: "manual", confidence: "high", notes: null } }, addDays(today, -2));
     const costcoItems: BillItem[] = [
       { description: "Paper towels 12 pk", cents: 2_499 },
       { description: "Olive oil 2 L", cents: 1_799 },
-      { description: "Coffee beans 2.5 lb", cents: 2_199, memberIds: [maya.id, jordan.id] },
-      { description: "Chicken thighs", cents: 2_849, memberIds: [alex.id, jordan.id] },
+      { description: "Coffee beans 2.5 lb", cents: 2_199, memberIds: [two.id, three.id] },
+      { description: "Chicken thighs", cents: 2_849, memberIds: [one.id, three.id] },
       { description: "Laundry detergent", cents: 2_299 },
-      { description: "Sparkling water 35 pk", cents: 1_349, memberIds: [alex.id] },
-      { description: "Berries", cents: 1_098, memberIds: [maya.id] },
+      { description: "Sparkling water 35 pk", cents: 1_349, memberIds: [one.id] },
+      { description: "Berries", cents: 1_098, memberIds: [two.id] },
     ];
     const costcoItemsTotal = costcoItems.reduce((sum, item) => sum + item.cents, 0);
-    make({ vendor: "Costco", category: "groceries", totalCents: costcoItemsTotal + 1_064, dueDate: null, payerId: alex.id, split: { mode: "item", memberIds: everyone }, items: costcoItems, paidAt: at(addDays(today, -5)), reading: { method: "demo", confidence: "high", notes: null } }, addDays(today, -5));
+    make({ vendor: "Costco", category: "groceries", totalCents: costcoItemsTotal + 1_064, dueDate: null, payerId: one.id, split: { mode: "item", memberIds: everyone }, items: costcoItems, paidAt: at(addDays(today, -5)), reading: { method: "demo", confidence: "high", notes: null } }, addDays(today, -5));
     const pay = (from: Member, to: Member, cents: number, on: string) => this.#db.prepare("INSERT INTO bill_payments (id, household_id, from_member_id, to_member_id, cents, note, message_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)")
       .run(randomUUID(), this.#household, from.id, to.id, cents, "Rent", from.id, at(on));
-    if (members.length >= 3) {
-      pay(maya, alex, 80_000, firstOfThis);
-      pay(jordan, alex, 70_000, addDays(firstOfThis, 1));
-      pay(maya, alex, 80_000, addDays(today, -1));
-    }
+    rent.shares.filter((share) => share.memberId !== one.id && share.cents > 0).forEach((share, index) => {
+      const from = members.find((member) => member.id === share.memberId)!;
+      const on = addDays(firstOfThis, index);
+      pay(from, one, share.cents, on > today ? today : on);
+    });
     // A bill image waiting to be read (by a member's Claude through the connector, or typed in).
     const sample = renderSampleBill("water", now);
     const fileId = randomUUID();
     writeFileSync(join(this.#filesDir, `${fileId}.png`), sample.png);
     this.#db.prepare("INSERT INTO bill_files (id, household_id, file_name, stored_name, mime_type, size, sha256, preview_name, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)")
-      .run(fileId, this.#household, sample.fileName, `${fileId}.png`, "image/png", sample.png.length, `seed:${sample.sha256}`, maya.id, this.#nowIso());
-    const waiting = this.#newBill({ source: "demo", createdBy: maya.id, state: "needs_reading", fileId });
+      .run(fileId, this.#household, sample.fileName, `${fileId}.png`, "image/png", sample.png.length, `seed:${sample.sha256}`, two.id, this.#nowIso());
+    const waiting = this.#newBill({ source: "demo", createdBy: two.id, state: "needs_reading", fileId });
     this.#insertBill(waiting);
     this.#setMeta("demo_seeded", this.#nowIso());
   }
@@ -1727,7 +1748,7 @@ export function setupBills(options: { store: CartStore; liveMode: boolean }): Bi
   registerRoute((request, response, url) => service.handleRequest(request, response, url));
   registerTools(service.tools());
   registerHelp("Bills: send a photo or screenshot of a bill (or “bill internet $80 due Nov 1”) and I’ll split it; reply “ok” to save. “bills” lists what’s due; “mark internet paid” stops reminders.");
-  registerHelp("Balances: “who owes” shows who owes whom; “paid Maya $20” records a payback.");
+  registerHelp("Balances: “who owes” shows who owes whom; “paid <name> $20” records a payback.");
   scheduleEvery("bills", 15 * 60_000, () => service.runSchedules());
   setBillsIntegrationStatus(() => service.integrationStatus());
   console.log(service.readerConfigured

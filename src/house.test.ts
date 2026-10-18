@@ -9,11 +9,12 @@ import { join } from "node:path";
 import { after, before, test } from "node:test";
 import { EventsService } from "./events.js";
 import { HouseService } from "./house.js";
+import { Kitchen } from "./kitchen.js";
 import {
   buildPoll, maskFields, maskSecret, parseGuest, parseHouseCommand, parseQuiet, parseReaction, parseRepairNew, parseVoteText, SECRET_MASK, trashHint,
 } from "./houseParse.js";
 import { NamedListsService } from "./namedLists.js";
-import { registerCommand, runCommands, type CommandContext } from "./platform.js";
+import { otherPendingQuestionAt, registerCommand, runCommands, type CommandContext } from "./platform.js";
 import { CartStore, type Member } from "./store.js";
 
 let directory: string;
@@ -276,6 +277,27 @@ test("quiet hours: weeknight default, an ad-hoc night replaces it, cancel falls 
   assert.match(await say(alex, "set quiet hours 10pm-7am every night") ?? "", /every night 10pm–7am/);
   assert.equal(house.inQuiet(Date.UTC(2026, 9, 15, 6, 0)), true);
   assert.equal(house.inQuiet(Date.UTC(2026, 9, 15, 12, 0)), false);
+});
+
+test("a bare “ok” goes to the member's newest question across features (pending-question registry)", async () => {
+  const { store, clock, say, alex, maya } = setup("pending-registry");
+  const kitchen = new Kitchen({ store, demoMode: true, timeZone: "UTC", now: clock.now });
+  const kitchenSay = (member: Member, text: string) => kitchen.handle({ messageId: id(), memberId: member.id, memberName: member.name, text, attachments: [] });
+
+  // Newer kitchen offer than the guest heads-up: House leaves “ok” to the kitchen, which adds the eggs.
+  await say(maya, "having friends over Fri 8pm");
+  clock.advance(60_000);
+  assert.match(await kitchenSay(alex, "out of eggs") ?? "", /Out of eggs\. Add it to the cart\?/);
+  assert.equal(otherPendingQuestionAt("house", alex.id, "ok"), new Date(clock.now()).toISOString());
+  assert.equal(await say(alex, "ok"), null);
+  assert.match(await kitchenSay(alex, "ok") ?? "", /Added 1: eggs/);
+
+  // Newer heads-up than the kitchen offer: the kitchen leaves “ok” to House, which records the reaction.
+  assert.match(await kitchenSay(alex, "low on rice") ?? "", /Running low on rice\. Add it/);
+  clock.advance(60_000);
+  await say(maya, "my sister is staying Sat–Sun");
+  assert.equal(await kitchenSay(alex, "ok"), null);
+  assert.match(await say(alex, "ok") ?? "", /Alex is OK with Maya’s sister staying/);
 });
 
 test("registerCommand({ before }) puts a narrow handler ahead of a broader one", async () => {

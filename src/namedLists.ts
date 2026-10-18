@@ -29,15 +29,6 @@ export function cartRequestText(name: string): string {
   return `add ${name.replace(/\s+and\s+/gi, " & ").replace(/[,;\n]+/g, " ").replace(/\s+/g, " ").trim()}`;
 }
 
-/**
- * Latest time (ISO) the store asked this member something they still have to
- * answer (product pick, milk type, list selection, …), or null. The store owns
- * those pending-question tables, so this asks it (CartStore.pendingQuestionAt).
- */
-export function cartPromptAt(store: CartStore, memberId: string): string | null {
-  return store.pendingQuestionAt(memberId);
-}
-
 // ---------------------------------------------------------------------------
 // Service
 
@@ -289,7 +280,7 @@ export class NamedListsService {
     const open = list.items.filter((item) => !item.checked);
     if (!open.length) return { ok: false, message: `Nothing left on ${list.name}.`, added: [], missing: [], pending: [] };
     if (this.#store.pendingKrogerCheckout()) return { ok: false, message: "The cart is locked while a Kroger checkout is in progress. Try again after it finishes.", added: [], missing: [], pending: [] };
-    if (cartPromptAt(this.#store, memberId)) {
+    if (this.#store.pendingQuestionAt(memberId)) {
       return { ok: false, message: `${this.memberName(memberId)}, you have an open grocery question. Answer it (or text “cancel”), then try again.`, added: [], missing: [], pending: [] };
     }
     const markCarted = (ids: string[]) => {

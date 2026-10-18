@@ -13,8 +13,8 @@ import {
 } from "./eventsParse.js";
 import { CalendarService } from "./googleCalendar.js";
 import type { KrogerClient } from "./kroger.js";
-import { NamedListsService, RECURRING_LIST_WORDS, cartPromptAt, type ListView } from "./namedLists.js";
-import { notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
+import { NamedListsService, RECURRING_LIST_WORDS, type ListView } from "./namedLists.js";
+import { notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
 import type { CartStore } from "./store.js";
 
 export type ListsEventsOptions = {
@@ -255,14 +255,14 @@ class ChatCommands {
       // A late vote right after a plan was booked: point to the booked event instead of the cart.
       const booked = events.recentlyBooked();
       const event = booked?.eventId ? events.getEvent(booked.eventId) : undefined;
-      if (!booked || !event || !parseVote(text, booked.options.length) || cartPromptAt(this.store, memberId)) return null;
+      if (!booked || !event || !parseVote(text, booked.options.length) || otherPendingQuestionAt("events", memberId, "number")) return null;
       return `${event.emoji} ${event.title} is already booked: ${events.nextOccurrence(event)?.label ?? "soon"}. Reply “I’m in” or “can’t make it”.`;
     }
     const parsed = parseVote(text, poll.options.length);
     if (!parsed) return null;
-    // A grocery question asked after this poll owns bare numbers ("2" = the second product, and "1, 2, 1" = one
-    // pick per item for a multi-item cart or recurring-list search).
-    const askedAt = cartPromptAt(this.store, memberId);
+    // A question another feature asked after this poll owns bare numbers (a grocery pick: "2" = the second product,
+    // "1, 2, 1" = one pick per item for a multi-item cart or recurring-list search; or a newer house poll).
+    const askedAt = otherPendingQuestionAt("events", memberId, "number");
     if (askedAt && askedAt > poll.createdAt && /^\s*\d{1,2}(?:\s*(?:,|\s)\s*\d{1,2})*\s*$/.test(text)) return null;
     if (poll.mode === "pick") {
       if (parsed.yes.length !== 1) return `Reply with one number (1–${poll.options.length}) to book ${poll.title}.`;
@@ -865,42 +865,42 @@ async function seedDemo(store: CartStore, lists: NamedListsService, events: Even
   }
   lists.setMeta("demo_seeded", new Date().toISOString());
   events.setMeta("demo_seeded", new Date().toISOString());
-  const byName = (name: string, fallback: number) => members.find((member) => member.name.toLowerCase() === name)?.id ?? members[fallback % members.length]!.id;
-  const alex = byName("alex", 0);
-  const jordan = byName("jordan", 1);
-  const maya = byName("maya", 2);
+  // Cast from the roster in order (any names); with two members the third role repeats the first.
+  const cast = (index: number) => members[index % members.length]!;
+  const [one, two, three] = [cast(0), cast(1), cast(2)];
+  const [oneId, twoId, threeId] = [one.id, two.id, three.id];
   const today = lists.today();
 
-  const pasta = lists.createList({ name: "Pasta night", items: ["Pasta", "Tomato sauce", "Parmesan", "Garlic bread"], createdBy: maya, emoji: "🍝" });
+  const pasta = lists.createList({ name: "Pasta night", items: ["Pasta", "Tomato sauce", "Parmesan", "Garlic bread"], createdBy: threeId, emoji: "🍝" });
   if (pasta.ok) {
     const parmesan = pasta.list.items.find((item) => item.name === "Parmesan");
     if (parmesan) lists.setItemChecked(parmesan.id, true);
   }
 
-  events.create({ title: "Cleaning day", emoji: "🧹", date: nextWeekdayDate(today, 6), startMin: 10 * 60, durationMin: 120, recurrence: "weekly" }, alex);
-  events.create({ title: "Rent due", emoji: "💸", date: nextMonthDay(addDays(today, 1), 1), recurrence: "monthly" }, maya);
-  events.create({ title: "House meeting", emoji: "🏠", date: nextWeekdayDate(today, 0, { strict: true }), startMin: 19 * 60, durationMin: 60 }, jordan);
+  events.create({ title: "Cleaning day", emoji: "🧹", date: nextWeekdayDate(today, 6), startMin: 10 * 60, durationMin: 120, recurrence: "weekly" }, oneId);
+  events.create({ title: "Rent due", emoji: "💸", date: nextMonthDay(addDays(today, 1), 1), recurrence: "monthly" }, threeId);
+  events.create({ title: "House meeting", emoji: "🏠", date: nextWeekdayDate(today, 0, { strict: true }), startMin: 19 * 60, durationMin: 60 }, twoId);
   const guestsStart = (() => { const friday = nextWeekdayDate(today, 5, { strict: true }); return friday < addDays(today, 4) ? addDays(friday, 7) : friday; })();
-  events.create({ title: "Guests visiting", emoji: "🧳", date: guestsStart, endDate: addDays(guestsStart, 2), notes: "Maya’s parents are staying in the living room." }, maya);
+  events.create({ title: "Guests visiting", emoji: "🧳", date: guestsStart, endDate: addDays(guestsStart, 2), notes: `${three.name.split(/\s+/)[0]}’s parents are staying in the living room.` }, threeId);
 
   // A booked game night with RSVPs, tasks, and a snack list.
   const gameDates = [addDays(today, 2), addDays(today, 3), addDays(today, 4)];
   const gameSlot = (await events.suggest(planShape("game"), { dates: gameDates, count: 1 })).slots[0];
   const gameDate = gameSlot ? localDate(gameSlot.start, events.timeZone) : gameDates[1]!;
   const gameStart = gameSlot ? minutesNow(gameSlot.start, events.timeZone) : 19 * 60 + 30;
-  events.create({ title: "Game night", emoji: "🎲", kind: "game", date: gameDate, startMin: gameStart, durationMin: 150 }, alex, { rsvps: { [alex]: "going", [maya]: "going", [jordan]: "maybe" } });
+  events.create({ title: "Game night", emoji: "🎲", kind: "game", date: gameDate, startMin: gameStart, durationMin: 150 }, oneId, { rsvps: { [oneId]: "going", [threeId]: "going", [twoId]: "maybe" } });
 
   // A movie night vote in progress, plus a few movie ideas.
-  const movie = await events.createPoll({ shape: planShape("movie"), organizerId: maya, mode: "vote" });
+  const movie = await events.createPoll({ shape: planShape("movie"), organizerId: threeId, mode: "vote" });
   if (movie.ok && movie.poll.options.length >= 2) {
-    events.vote(movie.poll.id, alex, { yes: [1], no: [] });
-    events.vote(movie.poll.id, maya, { yes: [2], no: [] });
+    events.vote(movie.poll.id, oneId, { yes: [1], no: [] });
+    events.vote(movie.poll.id, threeId, { yes: [2], no: [] });
   }
-  events.addIdea("movie", "Dune: Part Two", alex);
-  events.addIdea("movie", "Paddington 2", maya);
-  const spirited = events.addIdea("movie", "Spirited Away", jordan);
+  events.addIdea("movie", "Dune: Part Two", oneId);
+  events.addIdea("movie", "Paddington 2", threeId);
+  const spirited = events.addIdea("movie", "Spirited Away", twoId);
   const paddington = events.findIdea("movie", "Paddington 2");
-  if (spirited.ok && paddington) events.voteIdea(paddington.id, jordan);
+  if (spirited.ok && paddington) events.voteIdea(paddington.id, twoId);
   console.log("Seeded a demo one-off list, household events, a game night, and a movie night vote.");
 }
 

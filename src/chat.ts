@@ -16,6 +16,7 @@ import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { attachment, type Space } from "spectrum-ts";
 import type { CommandAttachment, CommandContext } from "./platform.js";
+import { joinNames } from "./choresLogic.js";
 import { isStoredImageName, sniffImage } from "./profiles.js";
 import type { Member } from "./store.js";
 
@@ -360,33 +361,36 @@ export class ChatService {
   // ---------------------------------------------------------------------------
 
   /**
-   * Demo mode: a short, realistic history (game night, a chore nudge, a bill, groceries) for the default demo
-   * members. Grocery requests run through the real processor so the cart matches the conversation.
+   * Demo mode: a short, realistic history (game night, a chore nudge, a bill, groceries) cast from the first three
+   * members, whatever their names. Grocery requests run through the real processor so the cart matches the conversation.
    */
   async seedDemo(): Promise<void> {
     if (this.#live || !this.isEmpty) return;
-    const byName = new Map(this.#members().map((member) => [member.name.toLowerCase(), member]));
-    const alex = byName.get("alex");
-    const maya = byName.get("maya");
-    const jordan = byName.get("jordan");
-    if (!alex || !maya || !jordan) return;
+    const members = this.#members();
+    if (members.length < 2) return;
+    const cast = (index: number) => members[index % members.length]!;
+    const [host, snacker, trashDuty] = [cast(0), cast(1), cast(2)];
+    const first = (member: Member) => member.name.split(/\s+/)[0] ?? member.name;
+    const others = (member: Member) => members.filter((candidate) => candidate.id !== member.id).map(first);
+    const internetShare = (6_000 / members.length / 100).toFixed(2);
+    const month = new Date().toLocaleString("en-US", { month: "long" });
     const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
     type Step = { at: number; from?: Member; bot?: string; text?: string; process?: boolean };
     const steps: Step[] = [
-      { at: 1_560, from: maya, text: "Game night Friday? I can host 🎲" },
-      { at: 1_557, from: jordan, text: "I’m in. Codenames or Catan?" },
-      { at: 1_555, from: alex, text: "Catan!! I’ll bring chips 🍟" },
-      { at: 1_554, bot: "🎲 Game night: Friday 8 PM at Maya’s. Alex, Jordan, and Maya are in." },
-      { at: 600, bot: "🧹 Friendly nudge: Jordan, it’s your week for trash and recycling. Pickup is tomorrow morning." },
-      { at: 596, from: jordan, text: "On it 👍" },
-      { at: 240, from: alex, text: "Internet bill came in: $60 for October" },
-      { at: 239, bot: "🧾 Logged Internet: $60.00 split 3 ways, $20.00 each. Pay Alex (Venmo @alex-k)." },
-      { at: 45, from: maya, text: "We’re out of eggs and pasta 😩" },
+      { at: 1_560, from: host, text: "Game night Friday? I can host 🎲" },
+      { at: 1_557, from: trashDuty, text: "I’m in. Codenames or Catan?" },
+      { at: 1_555, from: snacker, text: "Catan!! I’ll bring chips 🍟" },
+      { at: 1_554, bot: `🎲 Game night: Friday 8 PM at ${first(host)}’s. ${joinNames([...new Set([snacker, trashDuty, host].map(first))])} are in.` },
+      { at: 600, bot: `🧹 Friendly nudge: ${first(trashDuty)}, it’s your week for trash and recycling. Pickup is tomorrow morning.` },
+      { at: 596, from: trashDuty, text: "On it 👍" },
+      { at: 240, from: snacker, text: `Internet bill came in: $60 for ${month}` },
+      { at: 239, bot: `🧾 Logged Internet: $60.00 split ${members.length} ways, $${internetShare} each. ${first(snacker)} paid it.` },
+      { at: 45, from: host, text: "We’re out of eggs and pasta 😩" },
       // Splits come from upstream's sharing sessions (per-item “for everyone” no longer shares anything).
-      { at: 44, from: maya, text: "start sharing with Alex and Jordan", process: true },
-      { at: 43, from: maya, text: "eggs and pasta", process: true },
-      { at: 42, from: maya, text: "stop sharing", process: true },
-      { at: 12, from: jordan, text: "oat milk please", process: true },
+      { at: 44, from: host, text: `start sharing with ${joinNames(others(host))}`, process: true },
+      { at: 43, from: host, text: "eggs and pasta", process: true },
+      { at: 42, from: host, text: "stop sharing", process: true },
+      { at: 12, from: trashDuty, text: "oat milk please", process: true },
     ];
     let index = 0;
     for (const step of steps) {

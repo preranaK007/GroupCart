@@ -345,33 +345,39 @@ export class ProfileService {
     return entries;
   }
 
-  /** Demo mode: friendly sample profiles for the default demo members (only where none exist yet). */
+  /**
+   * Demo mode: friendly sample profiles for the members, in roster order and whatever their names (only where none
+   * exist yet). Pronouns are left for each person to share; pay-back handles are made from the member's name.
+   */
   seedDemo(): void {
-    const samples: Record<string, ProfilePatch> = {
-      alex: {
-        avatarEmoji: "🧗", avatarKind: "emoji", pronouns: "he/him",
-        bio: "Climbs on weekends. Usually cooking Sunday dinner.",
-        dietary: "No shellfish", snacks: "Kettle chips, clementines", genres: "Sci-fi, co-op board games",
-        birthday: "--03-14", paymentHandle: "Venmo @alex-k · Cash App $alexk", // money & points: two pay-back options
+    const samples: Array<{ patch: ProfilePatch; payment: (slug: string) => string }> = [
+      {
+        patch: { avatarEmoji: "🧗", avatarKind: "emoji", bio: "Climbs on weekends. Usually cooking Sunday dinner.", dietary: "No shellfish", snacks: "Kettle chips, clementines", genres: "Sci-fi, co-op board games", birthday: "--03-14" },
+        payment: (slug) => `Venmo @${slug} · Cash App $${slug.replace(/-/g, "")}`, // money & points: two pay-back options
       },
-      maya: {
-        avatarEmoji: "🌿", avatarKind: "emoji", pronouns: "she/her",
-        bio: "Plant parent. Hosts game nights.",
-        dietary: "Vegetarian", snacks: "Dark chocolate, hummus", genres: "Rom-coms, Codenames",
-        birthday: "--06-02", paymentHandle: "Venmo @maya-r",
+      {
+        patch: { avatarEmoji: "🌿", avatarKind: "emoji", bio: "Plant parent. Hosts game nights.", dietary: "Vegetarian", snacks: "Dark chocolate, hummus", genres: "Rom-coms, Codenames", birthday: "--06-02" },
+        payment: (slug) => `Venmo @${slug}`,
       },
-      jordan: {
-        avatarEmoji: "🎧", avatarKind: "emoji",
-        bio: "Night owl. Makes a playlist for everything.",
-        dietary: "Lactose intolerant (oat milk, please)", snacks: "Popcorn, gummy bears", genres: "Horror, Mario Kart",
-        paymentHandle: "Venmo @jordan-p · PayPal.me/jordanp", // money & points: two pay-back options
+      {
+        patch: { avatarEmoji: "🎧", avatarKind: "emoji", bio: "Night owl. Makes a playlist for everything.", dietary: "Lactose intolerant (oat milk, please)", snacks: "Popcorn, gummy bears", genres: "Horror, Mario Kart" },
+        payment: (slug) => `Venmo @${slug} · PayPal.me/${slug.replace(/-/g, "")}`, // money & points: two pay-back options
       },
-    };
-    for (const member of this.#members()) {
-      const sample = samples[member.name.toLowerCase()];
-      if (!sample || this.#row(member.id)) continue;
-      const result = this.update(member.id, sample);
+      {
+        patch: { avatarEmoji: "🏀", avatarKind: "emoji", bio: "Pickup basketball most evenings. Always up for takeout.", snacks: "Trail mix, mangoes", genres: "Sports docs, Smash Bros", birthday: "--09-21" },
+        payment: (slug) => `Venmo @${slug}`,
+      },
+      {
+        patch: { avatarEmoji: "📚", avatarKind: "emoji", bio: "Grad student. Bakes when stressed.", dietary: "Gluten-free", snacks: "Rice cakes, grapes", genres: "Mysteries, Wingspan" },
+        payment: (slug) => `Cash App $${slug.replace(/-/g, "")}`,
+      },
+    ];
+    this.#members().forEach((member, index) => {
+      const sample = samples[index % samples.length]!;
+      if (this.#row(member.id)) return;
+      const slug = member.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `roommate-${index + 1}`;
+      const result = this.update(member.id, { ...sample.patch, paymentHandle: sample.payment(slug) });
       if (!result.ok) console.warn(`Demo profile for ${member.name} was not seeded: ${result.error}`);
-    }
+    });
   }
 }

@@ -80,7 +80,7 @@ test("“out of olive oil” → “yes” adds it as the sender; checkout marks
   const { store, kitchen, alex, maya, jordan } = setup("offer");
   for (const daysAgo of [42, 28, 14]) kitchen.pantry.logEvent(itemKey("olive oil"), "out", new Date(Date.now() - daysAgo * DAY).toISOString());
   const reply = await say(kitchen, jordan, "we're out of olive oil") ?? "";
-  assert.match(reply, /^🫙 Olive oil is out\. Add it to the cart\? Reply “yes”\./);
+  assert.match(reply, /^🫙 Out of olive oil\. Add it to the cart\? Reply “yes”\./);
   assert.match(reply, /Text “biweekly: olive oil” to add it to the every-two-weeks list/);
   assert.equal(kitchen.pantry.find("olive oil")?.status, "out");
   // Someone else's "yes" isn't an answer to Jordan's offer.
@@ -124,7 +124,7 @@ test("a bare “yes” goes to the sender's newest question: a later grocery que
 test("items already in the cart or on a recurring list aren't offered or suggested again", async () => {
   const { store, kitchen, alex } = setup("no-repeat");
   store.processIncomingText(id(), alex.id, "eggs");
-  assert.equal(await say(kitchen, alex, "out of eggs"), "🫙 Eggs is out. Eggs is already in the cart.");
+  assert.equal(await say(kitchen, alex, "out of eggs"), "🫙 Out of eggs. Already in the cart.");
   assert.equal(kitchen.pantry.pendingOffer(alex.id), null);
   for (const daysAgo of [21, 14, 7]) kitchen.pantry.logEvent(itemKey("coffee"), "out", new Date(Date.now() - daysAgo * DAY).toISOString());
   store.processIncomingText(id(), alex.id, "weekly: coffee"); // the store's own command adds it to the weekly list
@@ -132,7 +132,7 @@ test("items already in the cart or on a recurring list aren't offered or suggest
   assert.ok(!(await say(kitchen, alex, "out of coffee") ?? "").includes("weekly:"));
   // "got X" only counts for things the pantry knows; "restocked" always does.
   assert.equal(await say(kitchen, alex, "got it"), null);
-  assert.match(await say(kitchen, alex, "got eggs") ?? "", /^✓ Eggs is in stock\./);
+  assert.match(await say(kitchen, alex, "got eggs") ?? "", /^✓ Eggs back in stock\./);
   assert.match(await say(kitchen, alex, "pantry") ?? "", /^🫙 Pantry\nOut: coffee\nIn stock: eggs/);
   store.close();
 });

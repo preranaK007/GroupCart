@@ -12,6 +12,7 @@ import {
   type Recurrence, type RsvpStatus,
 } from "./eventsParse.js";
 import type { CalendarService } from "./googleCalendar.js";
+import { registerPendingQuestion } from "./platform.js";
 import { normalizeName, type ListView, type NamedListsService } from "./namedLists.js";
 import { awardPoints, revokePoints } from "./points.js"; // money & points
 import type { CartStore } from "./store.js";
@@ -234,6 +235,13 @@ export class EventsService {
       );
       CREATE TABLE IF NOT EXISTS event_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
+    registerPendingQuestion("events", (memberId, kind) => kind === "number" ? this.numberQuestionAt(memberId) : null);
+  }
+
+  /** When the newest plan this member can answer with a bare number was posted: an open vote, or their own pick list. */
+  numberQuestionAt(memberId: string): string | null {
+    const polls = this.openPolls().filter((poll) => poll.mode === "vote" || poll.organizerId === memberId);
+    return polls.reduce<string | null>((latest, poll) => !latest || poll.createdAt > latest ? poll.createdAt : latest, null);
   }
 
   get calendarMode(): "demo" | "google" | "none" {

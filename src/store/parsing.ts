@@ -97,6 +97,26 @@ export function parsePriceLimit(text: string): { cents: number; inclusive: boole
   };
 }
 
+// Group-chat chatter that never names groceries: laughter, thanks, reactions, acknowledgements. Every word of a
+// banter message is in this set ("haha ok thanks 👍"); greetings stay out because "hi" answers with help.
+const BANTER_WORDS = new Set([
+  "lol", "lmao", "lmfao", "rofl", "haha", "hahaha", "hah", "hehe", "omg", "wow", "ooh", "oh", "ah", "aw", "aww", "oops", "yay", "woo",
+  "nice", "cool", "great", "awesome", "sweet", "perfect", "dope", "lit", "love", "it", "this", "that", "same", "true", "fr", "ikr", "bet", "word",
+  "thanks", "thank", "you", "thx", "ty", "tysm", "np", "no", "problem", "sorry", "ok", "okay", "k", "kk", "yes", "yeah", "yep", "yup",
+  "nope", "nah", "sure", "sounds", "good", "got", "will", "do", "on", "my", "way", "brb", "gn", "night", "gm", "morning",
+]);
+
+/**
+ * True for banter like “lol”, “👍”, “thanks!”, or “ok” — text with no digits whose words are all chatter (emoji-only
+ * counts). The store stays quiet on these when it has nothing pending for the member.
+ */
+export function isBanter(text: string): boolean {
+  const lowered = text.trim().toLowerCase().replace(/[’']/g, "");
+  if (!lowered || /\d/.test(lowered)) return false;
+  const words = lowered.split(/[^\p{L}]+/u).filter(Boolean);
+  return words.every((word) => BANTER_WORDS.has(word) || /^(?:ha)+h?$|^(?:he)+$|^lo+l$|^lma+o+$/.test(word));
+}
+
 export function isHelpRequest(text: string): boolean {
   return /^(?:(?:hi|hello|hey)(?: there)?|help|commands|menu|start|show commands|what can you do)[!.?]*$/i.test(text.trim());
 }

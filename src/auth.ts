@@ -326,7 +326,10 @@ export class AuthService {
     if (!byClient.ok) return { ok: false, status: 429, error: "Too many sign-in requests. Try again in a few minutes.", retryAfterSeconds: Math.ceil(byClient.retryAfterMs / 1000) };
     const target = this.#resolve(input);
     if (!target) {
-      if (this.#demo) return { ok: false, status: 404, error: "No household member matches that. Try a name like “Maya”." };
+      if (this.#demo) {
+        const example = this.#members()[0]?.name;
+        return { ok: false, status: 404, error: example ? `No household member matches that. Try a name like “${example}”.` : "No household member matches that." };
+      }
       // Same answer as a real send, so the form doesn't reveal who is in the household.
       return { ok: true, challengeId: randomBytes(18).toString("base64url"), destination: maskHandle(input) };
     }

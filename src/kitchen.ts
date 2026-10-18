@@ -9,8 +9,8 @@
 //   - The store's phrases (cart, sharing, recurring lists) never reach this module (index.ts routes them to the
 //     store). Recurring lists are never written here; the pantry suggests the store command (“biweekly: olive oil”).
 //   - A bare “yes”/“ok”/“no” is only claimed when this member's newest open question is a kitchen one: a pantry
-//     cart offer or a dinner plan suggestion asked after any store question (CartStore.pendingQuestionAt) or
-//     bill draft. Otherwise it falls through to the other features.
+//     cart offer or a dinner plan suggestion asked after any other feature's question (the pending-question
+//     registry in src/platform.ts). Otherwise it falls through to the other features.
 //   - Checkouts are observed, not hooked (the Splitwise service owns the store's checkout hooks): the cart is
 //     remembered by revision, and when that revision is checked out its items become In stock in the pantry.
 //   - Away status comes from the chores feature (read only); dietary notes from profiles (read only).
@@ -24,7 +24,7 @@ import type { KrogerClient } from "./kroger.js";
 import { DIET_TAGS, MealsService, TAG_SHORT, WEEKDAY_SHORT, assignCooks, parseMealCommand, parseRecipeText, type DayRef, type MealCommand, type MealDay, type MealDraft, type RecipeView } from "./meals.js";
 import { NamedListsService, cartRequestText } from "./namedLists.js";
 import { PANTRY_STATUSES, PantryService, STATUS_LABEL, catalogProduct, itemKey, parsePantryCommand, splitItemNames, type PantryCommand, type PantryItem, type PantryStatus } from "./pantry.js";
-import { notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller, type ToolSpec } from "./platform.js";
+import { notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller, type ToolSpec } from "./platform.js";
 import { avatarFor } from "./profiles.js";
 import type { CartStore } from "./store.js";
 
@@ -50,11 +50,12 @@ const DECLINE = /^(?:n|no|nope|nah|no thanks|not now|nvm|never ?mind|cancel|don'
 /** A plan suggestion's “ok” window: the proposer for 12 hours, everyone else for 30 minutes after it was posted. */
 const PROPOSER_WINDOW_MS = 12 * 3_600_000;
 const OTHERS_WINDOW_MS = 30 * 60_000;
-const BILL_CONFIRM_WINDOW_MS = 24 * 3_600_000;
 const DINNERS_LIST = "Dinners this week";
 const RESTOCK_LIST = "Pantry restock";
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+/** "Out of eggs", "Running low on rice", "Eggs back in stock" (no "eggs is out" agreement problems). */
+const statusLine = (status: PantryStatus, label: string) => status === "out" ? `Out of ${label}` : status === "low" ? `Running low on ${label}` : `${capitalize(label)} back in stock`;
 const firstName = (name: string) => name.split(/\s+/)[0] ?? name;
 function joinNames(names: readonly string[]): string {
   if (names.length <= 1) return names.join("");
@@ -79,6 +80,8 @@ export class Kitchen {
     this.meals.inStockKeys = () => this.pantry.inStockKeys();
     // One-off lists (src/namedLists.ts) for items that need a product choice; same tables as the Lists tab.
     this.lists = new NamedListsService(options.store, { timeZone, kroger: options.kroger, now: options.now });
+    // A pantry cart offer or a dinner plan suggestion waits for a bare “yes”/“no”.
+    registerPendingQuestion("kitchen", (memberId, kind) => kind === "ok" ? this.kitchenQuestion(memberId)?.at ?? null : null);
   }
 
   get mode(): "sample" | "kroger" {
@@ -147,16 +150,6 @@ export class Kitchen {
     return reply;
   }
 
-  /** When this member was last asked something by another feature that a bare yes/no could answer. */
-  otherQuestionAt(memberId: string): string | null {
-    let latest = this.store.pendingQuestionAt(memberId);
-    try {
-      const bill = this.store.database.prepare("SELECT p.updated_at AS at FROM bill_pending p JOIN bill_bills b ON b.id = p.bill_id WHERE p.member_id = ? AND b.state IN ('draft', 'needs_reading')").get(memberId) as { at: string } | undefined;
-      if (bill && this.meals.now() - Date.parse(bill.at) < BILL_CONFIRM_WINDOW_MS && (!latest || bill.at > latest)) latest = bill.at;
-    } catch { /* bills not set up */ }
-    return latest;
-  }
-
   /** The kitchen question a bare yes/no from this member would answer: their cart offer or a plan suggestion. */
   kitchenQuestion(memberId: string): { kind: "pantry" | "plan"; at: string } | null {
     const candidates: Array<{ kind: "pantry" | "plan"; at: string }> = [];
@@ -173,8 +166,8 @@ export class Kitchen {
   async #answer(context: CommandContext, yes: boolean): Promise<string | null> {
     const question = this.kitchenQuestion(context.memberId);
     if (!question) return null;
-    const other = this.otherQuestionAt(context.memberId);
-    if (other && other >= question.at) return null; // a newer grocery/bill question owns this reply
+    const other = otherPendingQuestionAt("kitchen", context.memberId, "ok");
+    if (other && other >= question.at) return null; // a newer grocery, bill, or house question owns this reply
     return this.#once(context, async () => {
       if (question.kind === "plan") {
         if (!yes) { this.meals.discardDraft(); return "Okay, dropped that plan. “plan dinners” for another."; }
@@ -284,20 +277,19 @@ export class Kitchen {
     if (!command.explicit && !names.every((name) => known.has(itemKey(name)) || pantry.find(name) || catalogProduct(name))) return null;
     const items = names.map((name) => pantry.set(name, command.status, context.memberId).item);
     const label = joinNames(items.map((item) => item.name.toLowerCase()));
-    const be = items.length === 1 ? "is" : "are";
     if (command.status === "stock") {
       pantry.clearOffer(context.memberId, items.map((item) => item.key));
-      return `✓ ${capitalize(label)} ${be} in stock.`;
+      return `✓ ${statusLine("stock", label)}.`;
     }
     const inCart = pantry.cartKeys();
     const offer = items.filter((item) => !inCart.has(item.key));
     const already = items.filter((item) => inCart.has(item.key));
-    let line = `🫙 ${capitalize(label)} ${be} ${command.status === "out" ? "out" : "low"}.`;
+    let line = `🫙 ${statusLine(command.status, label)}.`;
     if (offer.length) {
       pantry.offer(context.memberId, offer.map((item) => item.key), context.messageId);
       line += ` Add ${offer.length === 1 ? (already.length ? offer[0]!.name.toLowerCase() : "it") : "them"} to the cart? Reply “yes”.`;
     }
-    if (already.length) line += ` ${capitalize(joinNames(already.map((item) => item.name.toLowerCase())))} ${already.length === 1 ? "is" : "are"} already in the cart.`;
+    if (already.length) line += already.length === items.length ? " Already in the cart." : ` Already in the cart: ${joinNames(already.map((item) => item.name.toLowerCase()))}.`;
     const suggestions = items.map((item) => pantry.chatSuggestion(item)).filter((value): value is string => Boolean(value));
     return [line, ...suggestions].join("\n");
   }
@@ -534,28 +526,28 @@ export class Kitchen {
       return false;
     }
     pantry.setMeta("demo_seeded", new Date(meals.now()).toISOString());
-    const byName = (name: string, fallback: number) => members.find((member) => member.name.toLowerCase() === name)?.id ?? members[fallback % members.length]!.id;
-    const alex = byName("alex", 0);
-    const maya = byName("maya", 2);
+    // Cast from the roster in order (any names); with two members the third role repeats the first.
+    const cast = (index: number) => members[index % members.length]!.id;
+    const [one, two, three] = [cast(0), cast(1), cast(2)];
     const ago = (days: number) => new Date(meals.now() - days * 86_400_000).toISOString();
 
     // Pantry: what's at home, plus run-out history so cadence suggestions show (olive oil ~2 weeks, coffee weekly).
-    for (const name of ["Garlic", "Onions", "Pasta", "Tomato sauce", "Soy sauce", "Peanut butter", "Butter", "Black beans", "Tortillas", "Curry paste", "Frozen peas", "Chili powder", "Bread", "Salsa", "Carrots", "Salt"]) pantry.set(name, "stock", alex);
-    pantry.set("Rice", "low", maya);
-    pantry.set("Olive oil", "low", byName("jordan", 1));
-    for (const name of ["Eggs", "Coffee", "Avocados"]) pantry.set(name, "out", maya);
-    for (const days of [42, 28, 14]) { pantry.logEvent(itemKey("olive oil"), "out", ago(days), maya); pantry.logEvent(itemKey("olive oil"), "purchase", ago(days - 2)); }
-    for (const days of [21, 14, 7]) { pantry.logEvent(itemKey("coffee"), "out", ago(days), alex); pantry.logEvent(itemKey("coffee"), "purchase", ago(days - 1)); }
+    for (const name of ["Garlic", "Onions", "Pasta", "Tomato sauce", "Soy sauce", "Peanut butter", "Butter", "Black beans", "Tortillas", "Curry paste", "Frozen peas", "Chili powder", "Bread", "Salsa", "Carrots", "Salt"]) pantry.set(name, "stock", one);
+    pantry.set("Rice", "low", three);
+    pantry.set("Olive oil", "low", two);
+    for (const name of ["Eggs", "Coffee", "Avocados"]) pantry.set(name, "out", three);
+    for (const days of [42, 28, 14]) { pantry.logEvent(itemKey("olive oil"), "out", ago(days), three); pantry.logEvent(itemKey("olive oil"), "purchase", ago(days - 2)); }
+    for (const days of [21, 14, 7]) { pantry.logEvent(itemKey("coffee"), "out", ago(days), one); pantry.logEvent(itemKey("coffee"), "purchase", ago(days - 1)); }
 
-    // Meals: this week planned every night with recipes that suit everyone; tacos tonight, Maya cooks.
+    // Meals: this week planned every night with recipes that suit everyone; tacos tonight, cooked by the third member.
     const today = meals.today();
     const monday = mondayOf(today);
     const dates = Array.from({ length: 7 }, (_, offset) => addDays(monday, offset));
     const order = ["b:lentil-soup", "b:veggie-fried-rice", "b:chickpea-curry", "b:tofu-stir-fry", "b:peanut-noodles", "b:black-bean-tacos", "b:shakshuka"];
     const shift = (order.indexOf("b:black-bean-tacos") - dates.indexOf(today) + 7) % 7;
     const sunday = dates[6]!;
-    const cooks = assignCooks({ dates, memberIds: members.map((member) => member.id), history: [], fixed: new Map([[today, maya], ...(sunday !== today ? [[sunday, alex] as [string, string]] : [])]) });
-    dates.forEach((date, index) => meals.setNight(date, { recipeId: order[(index + shift) % 7]!, cookId: cooks.get(date) ?? null }, alex));
+    const cooks = assignCooks({ dates, memberIds: members.map((member) => member.id), history: [], fixed: new Map([[today, three], ...(sunday !== today ? [[sunday, one] as [string, string]] : [])]) });
+    dates.forEach((date, index) => meals.setNight(date, { recipeId: order[(index + shift) % 7]!, cookId: cooks.get(date) ?? null }, one));
     return true;
   }
 
@@ -695,7 +687,7 @@ export class Kitchen {
           let cart: CartAddResult | null = null;
           if (args.addToCart === true && status !== "stock") {
             cart = await this.addToCart(caller.memberId, [{ name: item.name, quantity: 1 }], `claude:${randomUUID()}`, RESTOCK_LIST);
-            if (cart.status === "added" || cart.status === "listed") await notifyGroup(`${via(caller)}: 🫙 ${item.name} is ${status}. ${cart.message}`);
+            if (cart.status === "added" || cart.status === "listed") await notifyGroup(`${via(caller)}: 🫙 ${statusLine(status, item.name.toLowerCase())}. ${cart.message}`);
           }
           return { ok: true, item: item.name, status: STATUS_LABEL[status], runsOutEveryDays: cadence?.days ?? null, suggestion, cart };
         },

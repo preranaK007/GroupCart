@@ -71,6 +71,20 @@ test("splitwise status never feeds a pending recurring-list selection; pending q
   store.close();
 });
 
+test("quiet bot: banter gets no reply unless a question is open; grocery items still reach the cart", () => {
+  const { store, alex, maya } = newStore("quiet");
+  for (const text of ["lol", "👍", "thanks!", "ok", "haha ok 👍", "sounds good", "LMAOOO", "thank you 🙏"]) {
+    assert.equal(store.processIncomingText(id(), alex.id, text), null, `no reply to “${text}”`);
+  }
+  assert.match(store.processIncomingText(id(), alex.id, "we need eggs") ?? "", /Eggs/);
+  assert.match(store.processIncomingText(id(), maya.id, "bread") ?? "", /Bread/);
+  assert.deepEqual(store.snapshot().items.map((item) => item.name), ["Eggs", "Bread"]);
+  // With a question open (which milk?), a reply still gets an answer instead of silence.
+  assert.match(store.processIncomingText(id(), alex.id, "milk") ?? "", /What kind of milk/);
+  assert.notEqual(store.processIncomingText(id(), alex.id, "ok"), null);
+  store.close();
+});
+
 test("member handles are normalized, aliases map to one member, and old rows keep their ids", () => {
   const path = join(directory, "members.sqlite");
   const first = new CartStore(path, "household-test", 5000);
