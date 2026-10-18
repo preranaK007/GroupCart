@@ -8,7 +8,7 @@
 // Tool calls run as the roommate being answered ("Tanmay via Claude"); proactive turns run as the roommate who
 // connected it. It never checks out, places orders, or moves money; the connector tools can't.
 import type { DatabaseSync } from "node:sqlite";
-import type { ChatCard, ChatMessage } from "../chat.js";
+import { togglePollVote, type ChatCard, type ChatMessage } from "../chat.js";
 import type { CommandContext } from "../platform.js";
 import type { Member } from "../store.js";
 
@@ -44,7 +44,11 @@ export type CoordinatorOptions = {
   groceriesFrom: "kroger" | "sample";
   timeZone: string;
   now?: () => Date;
+  /** How long a poll must sit untouched after everyone has voted before the coordinator acts (people tap several times). */
+  pollSettleMs?: number;
 };
+
+const POLL_SETTLE_MS = 12_000;
 
 export type CoordinatorStatus = { active: boolean; connectedBy: Member | null };
 
@@ -53,6 +57,8 @@ export class HouseholdCoordinator {
   readonly #now: () => Date;
   /** Turns run one at a time, in arrival order, so tool calls and posts never interleave. */
   #queue: Promise<unknown> = Promise.resolve();
+  /** Polls everyone has voted on, waiting to settle before the coordinator acts on them. */
+  readonly #settling = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: CoordinatorOptions) {
     this.#options = options;
@@ -131,14 +137,20 @@ export class HouseholdCoordinator {
     const active = this.status().active;
     if (card.kind === "poll") {
       if (card.closed) return null;
-      const picked = (input.optionIds ?? (input.actionId ? [input.actionId] : [])).filter((id) => card.options.some((option) => option.id === id));
-      const votes: Record<string, string[]> = {};
-      for (const option of card.options) votes[option.id] = (card.votes[option.id] ?? []).filter((id) => id !== member.id);
-      for (const id of card.multi ? picked : picked.slice(0, 1)) votes[id]!.push(member.id);
-      const updated: ChatCard = { ...card, votes };
-      const voters = new Set(Object.values(votes).flat());
+      // A tap toggles one option; a texted answer ("1 3") replaces the member's picks.
+      const updated = input.optionIds && input.optionIds.length !== 1
+        ? togglePollVote(togglePollVote(card, member.id, card.options.filter((option) => card.votes[option.id]?.includes(member.id)).map((option) => option.id)), member.id, input.optionIds)
+        : togglePollVote(card, member.id, input.optionIds ?? (input.actionId ? [input.actionId] : []));
+      const voters = new Set(Object.values(updated.votes).flat());
+      clearTimeout(this.#settling.get(card.id));
+      this.#settling.delete(card.id);
       if (active && members.every((candidate) => voters.has(candidate.id))) {
-        void this.handleEvent(`Everyone has voted on your poll “${card.question}” (card ${card.id}). ${pollTally(updated, members)} Close it with close_poll and act on the result.`, member.id);
+        this.#settling.set(card.id, setTimeout(() => {
+          this.#settling.delete(card.id);
+          const latest = this.#options.channel.findCard(card.id)?.card;
+          const final = latest?.kind === "poll" && !latest.closed ? latest : updated;
+          void this.handleEvent(`Everyone has voted on your poll “${card.question}” (card ${card.id}). ${pollTally(final, members)} Close it with close_poll and act on the result.`, member.id);
+        }, this.#options.pollSettleMs ?? POLL_SETTLE_MS));
       }
       return { card: updated };
     }
@@ -212,7 +224,7 @@ How you work:
 - Reply "(no reply)" to banter, reactions and people talking among themselves, unless someone asks you something.
 - Many tools post their own message to the group (saving a bill, adding an event, chores, cards). When one already said it, your reply is "(no reply)". The same after you post a card: the card carries its own line.
 - Do the work instead of asking. If a request is clear enough, act and confirm in one line. Ask one short question only when a wrong guess would cost money or annoy people.
-- Write like a thoughtful roommate texting: one or two short lines, plain text, no markdown, no lists, at most one emoji. Never paste links, ids, or tool output; use a card. Call roommates by name and never guess anyone's pronouns.
+- Write like a thoughtful roommate texting: one or two short lines and under 40 words, recaps included, plain text, no markdown, no lists, at most one emoji. Never paste links, ids, or tool output; use a card. Call roommates by name and never guess anyone's pronouns.
 - Cards: post_poll for group decisions, post_choices for options people confirm (grocery picks), post_buttons for pay-back links.
 
 Plans: for "movie night?", "dinner this week?" and the like, find times when everyone is free (suggest_event_times or free_times), post a poll with the best two or three, and schedule a follow-up to nudge people who haven't voted. When everyone has voted you'll get an event: close the poll, book the winner with add_event, and post one line. Respect privacy: only say free or busy, never what is on someone else's calendar.

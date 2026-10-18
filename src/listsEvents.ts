@@ -890,17 +890,12 @@ async function seedDemo(store: CartStore, lists: NamedListsService, events: Even
   const gameStart = gameSlot ? minutesNow(gameSlot.start, events.timeZone) : 19 * 60 + 30;
   events.create({ title: "Game night", emoji: "🎲", kind: "game", date: gameDate, startMin: gameStart, durationMin: 150 }, oneId, { rsvps: { [oneId]: "going", [threeId]: "going", [twoId]: "maybe" } });
 
-  // A movie night vote in progress, plus a few movie ideas.
-  const movie = await events.createPoll({ shape: planShape("movie"), organizerId: threeId, mode: "vote" });
-  if (movie.ok && movie.poll.options.length >= 2) {
-    events.vote(movie.poll.id, oneId, { yes: [1], no: [] });
-    events.vote(movie.poll.id, threeId, { yes: [2], no: [] });
-  }
+  // A few movie ideas for whenever someone plans a movie night.
   events.addIdea("movie", "Dune: Part Two", oneId);
   events.addIdea("movie", "Paddington 2", threeId);
   const spirited = events.addIdea("movie", "Spirited Away", twoId);
   const paddington = events.findIdea("movie", "Paddington 2");
   if (spirited.ok && paddington) events.voteIdea(paddington.id, twoId);
-  console.log("Seeded a demo one-off list, household events, a game night, and a movie night vote.");
+  console.log("Seeded a demo one-off list, household events, a game night, and movie ideas.");
 }
 

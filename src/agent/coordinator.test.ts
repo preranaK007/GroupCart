@@ -36,10 +36,11 @@ function setup(replies: Array<string | null>) {
     channel,
     groceriesFrom: "sample",
     timeZone: "America/Los_Angeles",
+    pollSettleMs: 0,
   });
   const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [] });
   const tool = (name: string) => tools.find((spec) => spec.name === name)!;
-  return { coordinator, posted, turns, tool };
+  return { coordinator, posted, turns, tool, channel };
 }
 
 const message = (memberId: string, text: string) => ({ messageId: `x:${text}`, memberId, memberName: members.find((m) => m.id === memberId)!.name, text, attachments: [] });
@@ -65,15 +66,22 @@ test("banter gets no post", async () => {
 });
 
 test("a poll card collects votes, and everyone voting starts a proactive turn", async () => {
-  const { coordinator, posted, turns, tool } = setup(["Thursday at 8 it is 🎬"]);
+  const { coordinator, posted, turns, tool, channel } = setup(["Thursday at 8 it is 🎬"]);
+  // Like POST /api/chat/cards: run the handler, then store the card it returns.
+  const tap = (memberId: string, card: ChatCard, optionIds: string[]) => {
+    const updated = coordinator.handleCardAction({ memberId, card, optionIds })!.card!;
+    channel.updateCard(1, updated);
+    return updated;
+  };
   coordinator.connect("m-ana");
   await tool("post_poll").handler({ text: "Movie night? Tap what works.", question: "Movie night", options: [{ label: "Wed 9pm" }, { label: "Thu 8pm" }] }, { memberId: "m-ana", memberName: "Ana", via: "Claude" });
   const card = posted[0]!.card!;
   assert.equal(card.kind, "poll");
-  const afterAna = coordinator.handleCardAction({ memberId: "m-ana", card, optionIds: ["o2"] })!.card!;
+  const afterAna = tap("m-ana", card, ["o2"]);
   assert.equal(turns.length, 0, "one vote isn't everyone");
-  const afterBen = coordinator.handleCardAction({ memberId: "m-ben", card: afterAna, optionIds: ["o1", "o2"] })!.card!;
+  const afterBen = tap("m-ben", afterAna, ["o1", "o2"]);
   assert.deepEqual(afterBen.kind === "poll" && afterBen.votes, { o1: ["m-ben"], o2: ["m-ana", "m-ben"] });
+  await new Promise((resolve) => setTimeout(resolve, 5)); // the poll settles
   await coordinator.handleEvent("(drain)").catch(() => undefined);
   assert.match(turns[0]!.prompt, /Everyone has voted on your poll “Movie night”.*Thu 8pm: 2 \(Ana, Ben\)/);
   assert.equal(turns[0]!.memberId, "m-ben");
