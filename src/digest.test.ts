@@ -25,25 +25,26 @@ function fullData(): DigestData {
   };
 }
 
-test("digest text: header plus one emoji line per section, under ten lines", () => {
+test("digest text: header plus one short line per section, under ten lines", () => {
   const text = buildDigest(fullData(), { now: sunday6pm });
   const lines = text.split("\n");
   assert.ok(lines.length <= 10, text);
   assert.equal(lines[0], "📬 Sunday digest · week of Oct 19");
-  assert.equal(lines[1], "🧽 Chores: 🍽️ Dishes (Maya, late) · 🗑️ Take out trash (Alex) · 🧹 Vacuum (open) +1");
-  assert.equal(lines[2], "💸 Settle up: Jordan → Alex $26.67 · Maya → Alex $12 ($38.67 total)");
-  assert.equal(lines[3], "📅 Coming up: 🗳️ Movie night vote open · 🎲 Game night Fri 7pm · 🏠 House meeting Sun 7pm");
-  assert.equal(lines[4], "🛒 Lists due: weekly list Sun");
-  assert.equal(lines[5], "🧾 Bills: ⚡ City Light $112.40 Tue · 📶 Xfinity $80 overdue");
+  assert.equal(lines[1], "Chores: Dishes (Maya, late) · Take out trash (Alex) · Vacuum (open) +1");
+  assert.equal(lines[2], "Settle up: Jordan → Alex $26.67 · Maya → Alex $12");
+  assert.equal(lines[3], "Coming up: Movie night vote · Game night Fri 7pm · House meeting Sun 7pm");
+  assert.equal(lines[4], "Lists due: weekly list Sun");
+  assert.equal(lines[5], "Bills: City Light $112.40 Tue · Xfinity $80 overdue");
   assert.equal(lines[6], "🔥 Longest streak: Alex, 4 weeks of chores on time");
-  for (const line of lines) assert.match(line, /^\p{Extended_Pictographic}/u);
+  // Only the header and the fun stat carry an emoji.
+  assert.equal(lines.filter((line) => /^\p{Extended_Pictographic}/u.test(line)).length, 2);
 });
 
 test("digest text: empty sections are left out; a quiet week says so", () => {
   const quiet = buildDigest(emptyDigestData(), { now: sunday6pm, preview: true }).split("\n");
-  assert.deepEqual(quiet, ["📬 Digest preview · week of Oct 19", "💸 Everyone’s settled up.", "🎉 A quiet week: nothing due."]);
+  assert.deepEqual(quiet, ["📬 Digest preview · week of Oct 19", "Everyone’s settled up.", "A quiet week: nothing due."]);
   const some = buildDigest({ ...emptyDigestData(), bills: [{ emoji: "⚡", vendor: "City Light", cents: 11_240, when: "Tue", overdue: false }] }, { now: new Date(2026, 9, 14, 9) });
-  assert.equal(some, "📬 Sunday digest · week of Oct 19\n💸 Everyone’s settled up.\n🧾 Bills: ⚡ City Light $112.40 Tue");
+  assert.equal(some, "📬 Sunday digest · week of Oct 19\nEveryone’s settled up.\nBills: City Light $112.40 Tue");
 });
 
 test("send window: Sunday from 6pm, catching up until Monday noon", () => {

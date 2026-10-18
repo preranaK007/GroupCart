@@ -12,7 +12,8 @@ import {
   type Recurrence, type RsvpStatus,
 } from "./eventsParse.js";
 import type { CalendarService } from "./googleCalendar.js";
-import { registerPendingQuestion } from "./platform.js";
+import type { ChatCard, PollCard } from "./chat.js";
+import { cardReply, refreshCard, registerCardHandler, registerPendingQuestion, type CardActionResult } from "./platform.js";
 import { normalizeName, type ListView, type NamedListsService } from "./namedLists.js";
 import { awardPoints, revokePoints } from "./points.js"; // money & points
 import type { CartStore } from "./store.js";
@@ -236,6 +237,8 @@ export class EventsService {
       CREATE TABLE IF NOT EXISTS event_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
     registerPendingQuestion("events", (memberId, kind) => kind === "number" ? this.numberQuestionAt(memberId) : null);
+    // Web chat: tapping a plan's poll card votes (or, on the organizer's pick list, books) like texting the number.
+    registerCardHandler("events", ({ memberId, card, optionIds }) => this.#onPollCard(memberId, card, optionIds ?? []));
   }
 
   /** When the newest plan this member can answer with a bare number was posted: an open vote, or their own pick list. */
@@ -508,10 +511,9 @@ export class EventsService {
     const when = next ? (event.allDay ? next.label : formatSlot(next.start, next.end, this.timeZone, this.today())) : formatDay(event.startDate, this.today());
     const lines = [`${event.emoji} ${event.title} ${verb}: ${when}${event.recurrence !== "none" ? ` (${event.recurrence})` : ""}`];
     const tasks = this.taskLine(event.id);
-    if (tasks) lines.push(`Tasks: ${tasks}`);
+    if (tasks) lines.push(tasks);
     const list = this.#lists.listForEvent(event.id);
-    if (list && list.remaining) lines.push(`${list.name}: ${list.items.filter((item) => !item.checked).map((item) => item.name.toLowerCase()).join(", ")}. Text “${list.name.toLowerCase()} to cart” to add them.`);
-    if (event.kind === "movie") lines.push("Movie ideas? Text “add movie <title>”.");
+    if (list && list.remaining) lines.push(`${list.name}: ${list.items.filter((item) => !item.checked).map((item) => item.name.toLowerCase()).join(", ")}`);
     return lines.join("\n");
   }
 
@@ -656,14 +658,59 @@ export class EventsService {
     return { ok: true, poll: this.getPoll(id)!, basis };
   }
 
-  /** Chat text for a new poll. */
+  /** The web chat poll card for a plan (id "events:<pollId>"); option ids are the option numbers. */
+  pollCard(poll: PollView): PollCard {
+    const booked = poll.eventId ? this.getEvent(poll.eventId) : undefined;
+    const closedAs: Record<PollStatus, string | undefined> = {
+      open: undefined,
+      booked: `Booked: ${poll.options.find((option) => booked && option.start === zonedTimeToEpoch(booked.startDate, booked.startMin ?? 0, this.timeZone))?.label ?? "see Events"}`,
+      cancelled: "Cancelled",
+      expired: "Expired: every time has passed",
+      replaced: "Replaced by a newer plan",
+    };
+    return {
+      kind: "poll",
+      id: `events:${poll.id}`,
+      question: poll.mode === "pick" ? `${poll.emoji} ${poll.title} (${durationLabel(poll.durationMin)}): pick a time` : `${poll.emoji} ${poll.title}: what works?`,
+      options: poll.options.map((option) => ({
+        id: String(option.index),
+        label: option.label,
+        ...(option.busy.length ? { detail: `${option.busy.map((id) => this.memberName(id)).join(", ")} busy` } : {}),
+      })),
+      multi: poll.mode === "vote",
+      votes: Object.fromEntries(poll.options.map((option) => [String(option.index), option.yes])),
+      ...(poll.status === "open" ? {} : { closed: true, result: closedAs[poll.status] }),
+    };
+  }
+
+  /** Chat text for a new poll: a poll card in the web chat, numbered options in iMessage (cardReply). */
   pollText(poll: PollView, basis?: { included: number; total: number; mode: string }): string {
-    const options = poll.options.map((option) => `${option.index}) ${option.label}${option.busy.length ? ` (${option.busy.map((id) => this.memberName(id)).join(", ")} busy)` : ""}`);
-    const note = basis && basis.mode === "google" && basis.included < basis.total ? `\n(Based on ${basis.included} of ${basis.total} calendars.)` : "";
+    const note = basis && basis.mode === "google" && basis.included < basis.total ? `Based on ${basis.included} of ${basis.total} calendars.` : "";
+    return cardReply(note, this.pollCard(poll));
+  }
+
+  /** Redraws the plan's card in the web chat after a vote, booking, or cancel from any path. */
+  #refreshPollCard(pollId: string): void {
+    const poll = this.getPoll(pollId);
+    if (poll) refreshCard(this.pollCard(poll));
+  }
+
+  async #onPollCard(memberId: string, card: ChatCard, optionIds: string[]): Promise<CardActionResult> {
+    const poll = card.kind === "poll" ? this.getPoll(card.id.slice("events:".length)) : undefined;
+    if (!poll) return null;
+    if (poll.status !== "open") return { card: this.pollCard(poll) };
+    const option = poll.options.find((candidate) => String(candidate.index) === optionIds[0]);
+    if (!option) return { error: "Pick one of the times." };
     if (poll.mode === "pick") {
-      return `${poll.emoji} ${poll.title} (${durationLabel(poll.durationMin)}) — everyone’s free:\n${options.join("\n")}\nReply ${poll.options.map((option) => option.index).join(", ").replace(/, (\d)$/, ", or $1")} to book.${note}`;
+      if (poll.organizerId && poll.organizerId !== memberId) return { error: `${this.memberName(poll.organizerId)} is picking the time for this one.` };
+      const booked = this.book(poll.id, option.index, memberId);
+      if (!booked.ok) return { error: booked.error };
+      return { card: this.pollCard(this.getPoll(poll.id)!), reply: this.announcement(booked.event, "is booked") };
     }
-    return `${poll.emoji} ${poll.title}! Vote: ${options.join(" ")}\nReply with every number that works (e.g. “1 3”).${note}`;
+    // A second tap takes the vote back (recorded as “can’t do”, like texting “can’t do 2”).
+    const voted = option.yes.includes(memberId);
+    const result = this.vote(poll.id, memberId, voted ? { yes: [], no: [option.index] } : { yes: [option.index], no: [] });
+    return { card: this.pollCard(result.poll), ...(result.booked ? { reply: this.announcement(result.booked) } : {}) };
   }
 
   tallyLine(poll: PollView): string {
@@ -680,8 +727,9 @@ export class EventsService {
     const winner = poll.options
       .filter((option) => option.yes.filter((id) => poll.attendeeIds.includes(id)).length >= poll.majority && option.start > this.#now())
       .sort((a, b) => b.yes.length - a.yes.length || a.no.length - b.no.length || a.start - b.start)[0];
-    if (!winner || poll.mode !== "vote") return { poll, booked: null };
+    if (!winner || poll.mode !== "vote") { refreshCard(this.pollCard(poll)); return { poll, booked: null }; }
     const booked = this.book(pollId, winner.index, null);
+    if (!booked.ok) this.#refreshPollCard(pollId);
     return { poll: this.getPoll(pollId)!, booked: booked.ok ? booked.event : null };
   }
 
@@ -707,11 +755,14 @@ export class EventsService {
     }, poll.organizerId ?? actorId, { pollId, rsvps });
     if (!created.ok) return created;
     this.#db.prepare("UPDATE event_polls SET status = 'booked', event_id = ?, closed_at = ? WHERE id = ?").run(created.event.id, new Date(this.#now()).toISOString(), pollId);
+    this.#refreshPollCard(pollId);
     return created;
   }
 
   cancelPoll(pollId: string): boolean {
-    return Number(this.#db.prepare("UPDATE event_polls SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'open'").run(new Date(this.#now()).toISOString(), pollId).changes) > 0;
+    const cancelled = Number(this.#db.prepare("UPDATE event_polls SET status = 'cancelled', closed_at = ? WHERE id = ? AND status = 'open'").run(new Date(this.#now()).toISOString(), pollId).changes) > 0;
+    if (cancelled) this.#refreshPollCard(pollId);
+    return cancelled;
   }
 
   // --- Movie ideas -----------------------------------------------------------
@@ -757,8 +808,8 @@ export class EventsService {
 
   ideasLine(kind = "movie"): string {
     const ideas = this.ideas(kind);
-    if (!ideas.length) return "No movie ideas yet. Add one with “add movie <title>”.";
-    return `🍿 Movie ideas: ${ideas.slice(0, 6).map((idea) => `${idea.title}${idea.votes.length ? ` (${idea.votes.length})` : ""}`).join(" · ")}\nVote with “vote <title>”.`;
+    if (!ideas.length) return "No movie ideas yet. Text “add movie” and a title.";
+    return `🍿 Movie ideas: ${ideas.slice(0, 6).map((idea) => `${idea.title}${idea.votes.length ? ` (${idea.votes.length})` : ""}`).join(" · ")}\nText “vote” and a title to vote.`;
   }
 
   // --- Reminders -------------------------------------------------------------

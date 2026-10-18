@@ -33,9 +33,10 @@ import {
 } from "./houseParse.js";
 import { NamedListsService } from "./namedLists.js";
 import {
-  notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery,
-  type BareReply, type CommandAttachment, type CommandContext, type ToolCaller, type ToolSpec,
+  cardReply, notifyGroup, otherPendingQuestionAt, refreshCard, registerCardHandler, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery,
+  type BareReply, type CardActionResult, type CommandAttachment, type CommandContext, type ToolCaller, type ToolSpec,
 } from "./platform.js";
+import type { ChatCard, PollCard } from "./chat.js";
 import { avatarFor, sniffImage } from "./profiles.js";
 import type { CartStore } from "./store.js";
 import { renderHousePage, setQuietCalendarProvider } from "./ui/housePage.js";
@@ -152,6 +153,8 @@ export class HouseService {
     `);
     // A guest heads-up waits for “ok”/“concern” from the others; the newest open poll takes bare numbers.
     registerPendingQuestion("house", (memberId, kind) => kind === "ok" ? this.#headsUpFor(memberId)?.announcedAt ?? null : this.openPolls()[0]?.createdAt ?? null);
+    // Web chat: tapping a quick poll's option votes like texting its number.
+    registerCardHandler("house", ({ memberId, card, optionIds }) => this.#onPollCard(memberId, card, optionIds ?? []));
   }
 
   // --- Basics ----------------------------------------------------------------
@@ -685,9 +688,36 @@ export class HouseService {
     return { ok: true, poll: this.getPoll(id)! };
   }
 
+  /** The web chat card for a quick poll (id "house:poll:<pollId>"); option ids are the option numbers. */
+  pollCard(poll: HousePoll): PollCard {
+    const verdict = poll.status === "closed" ? this.resultText(poll).split("\n")[1]?.replace(/^→ /, "") : undefined;
+    return {
+      kind: "poll",
+      id: `house:poll:${poll.id}`,
+      question: poll.question,
+      options: poll.options.map((label, index) => ({ id: String(index + 1), label })),
+      multi: false,
+      votes: Object.fromEntries(poll.options.map((_, index) => [String(index + 1), Object.keys(poll.votes).filter((memberId) => poll.votes[memberId] === index + 1)])),
+      ...(poll.status === "closed" ? { closed: true, result: verdict ?? "Closed" } : {}),
+    };
+  }
+
+  /** A new poll: a poll card in the web chat; numbered options in iMessage (cardReply). */
   pollText(poll: HousePoll, via?: string): string {
-    const by = poll.createdBy ? ` from ${this.#actor(poll.createdBy, via)}` : "";
-    return `📊 Poll${by}: ${poll.question}\n${poll.options.map((option, index) => `${index + 1}) ${option}`).join("\n")}\nReply with a number. Closes in 24h or when everyone votes.`;
+    // The asker's own message sits right above a typed poll; one an AI assistant posts says whose it is.
+    const by = poll.createdBy && via ? `Poll from ${this.#actor(poll.createdBy, via)}` : "";
+    return cardReply(by, this.pollCard(poll), "Closes in 24h or when everyone votes.");
+  }
+
+  async #onPollCard(memberId: string, card: ChatCard, optionIds: string[]): Promise<CardActionResult> {
+    const poll = card.kind === "poll" ? this.getPoll(card.id.slice("house:poll:".length)) : undefined;
+    if (!poll) return null;
+    if (poll.status !== "open") return { card: this.pollCard(poll) };
+    const option = Number(optionIds[0]);
+    if (poll.votes[memberId] === option) return { card: this.pollCard(poll) }; // one vote each; tap another to change it
+    const result = this.vote(poll.id, memberId, option);
+    if (!result.ok) return { error: result.error };
+    return { card: this.pollCard(result.poll), ...(result.closedText ? { reply: result.closedText } : {}) };
   }
 
   tally(poll: HousePoll): string {
@@ -715,13 +745,17 @@ export class HouseService {
     const updated = this.getPoll(pollId)!;
     const everyone = this.members().every((member) => updated.votes[member.id]);
     const closedText = everyone ? this.closePoll(pollId, "everyone") : null;
+    if (!closedText) refreshCard(this.pollCard(updated));
     return { ok: true, poll: this.getPoll(pollId)!, closedText };
   }
 
   /** Closes an open poll once (atomic) and returns the result text, or null when it was already closed. */
   closePoll(pollId: string, reason: "time" | "everyone" | "manual"): string | null {
     const changed = Number(this.#db.prepare("UPDATE house_polls SET status = 'closed', closed_at = ?, closed_reason = ? WHERE id = ? AND household_id = ? AND status = 'open'").run(this.#iso(), reason, pollId, this.#household).changes);
-    return changed ? this.resultText(this.getPoll(pollId)!) : null;
+    if (!changed) return null;
+    const poll = this.getPoll(pollId)!;
+    refreshCard(this.pollCard(poll));
+    return this.resultText(poll);
   }
 
   // --- Group chat ------------------------------------------------------------

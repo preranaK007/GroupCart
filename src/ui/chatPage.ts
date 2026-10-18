@@ -3,12 +3,20 @@ import { button, card, icon, infoTip, renderPage } from "./shell.js";
 /**
  * Web chat (route "/chat"): the household group conversation, iMessage-style in the app's flat look.
  * Mine on the right in the accent color; others on the left with avatar + name; GroupCart replies in an
- * outlined bubble. Data: GET /api/chat/messages (polled every 1.5 s), POST /api/chat/messages (JSON text,
- * or a raw image body with x-gc-text / x-gc-filename headers).
+ * outlined bubble. Data: GET /api/chat/messages (polled every 1.5 s, with updatedSince= so changed cards redraw),
+ * POST /api/chat/messages (JSON text, or a raw image body with x-gc-text / x-gc-filename headers).
+ * Bot messages may carry a card (src/chat.ts ChatCard): a poll (tap rows to vote), choices (items + buttons), or
+ * action buttons. Taps go to POST /api/chat/cards; buttons with a url open it in a new tab instead.
+ * Messages from the household coordinator (bot author "Claude") get their own mark instead of the cart.
  * chatPreviewCard() is the small Home card (last few messages + a link to the composer).
  */
 
 const BOT_AVATAR = (size: number) => `<span class="gc-avatar ch-bot-avatar" style="--gc-avatar-size:${size}px" aria-hidden="true">${icon("cart", { size: Math.round(size * 0.56) })}</span>`;
+/** The coordinator's mark: an eight-ray asterisk. */
+const CLAUDE_MARK = (size: number) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 3.5v17M3.5 12h17M6 6l12 12M18 6 6 18"/></svg>`;
+const CLAUDE_AVATAR = (size: number) => `<span class="gc-avatar ch-claude-avatar" style="--gc-avatar-size:${size}px" title="Claude" aria-hidden="true">${CLAUDE_MARK(Math.round(size * 0.55))}</span>`;
+/** Bot author whose messages use CLAUDE_AVATAR (the household coordinator). */
+const CLAUDE_AUTHOR = "Claude";
 
 const styles = `
 .gc-main { padding-top:var(--gc-space-4); padding-bottom:var(--gc-space-4); }
@@ -53,6 +61,48 @@ const styles = `
 .ch-status button { border:0; background:none; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; padding:0; }
 .ch-row.is-pending .ch-bubble, .ch-row.is-pending .ch-img-link { opacity:.6; }
 .ch-bot-avatar { background:var(--gc-accent-soft) !important; color:var(--gc-on-accent-soft); }
+/* Claude (household coordinator): a warm terracotta mixed from the skin's danger and warning tones. */
+.ch { --ch-claude:color-mix(in srgb, var(--gc-danger) 62%, var(--gc-warning)); }
+.ch-claude-avatar { background:color-mix(in srgb, var(--ch-claude) 16%, var(--gc-surface)) !important; color:var(--ch-claude); }
+.ch-row.is-claude .ch-name { color:var(--ch-claude); }
+/* Cards: polls, choices, and buttons under a bot message */
+.ch-card { width:320px; max-width:100%; box-sizing:border-box; display:grid; gap:10px; padding:12px; border:1px solid var(--gc-border); border-radius:var(--gc-radius-lg); background:var(--gc-surface); color:var(--gc-text); font-size:14px; }
+.ch-card-kicker { display:flex; align-items:center; gap:6px; color:var(--gc-muted); font-size:var(--gc-fs-xs); }
+.ch-card-title { font-weight:500; font-size:15px; line-height:1.3; overflow-wrap:anywhere; }
+.ch-opts { display:grid; gap:6px; }
+.ch-opt { display:flex; align-items:center; gap:10px; width:100%; min-height:44px; box-sizing:border-box; padding:8px 10px; border:1px solid var(--gc-border); border-radius:var(--gc-radius-md); background:var(--gc-surface); color:var(--gc-text); font:inherit; text-align:left; cursor:pointer; }
+.ch-opt:not(:disabled):hover { background:var(--gc-hover); }
+.ch-opt.is-on { border-color:var(--gc-accent); background:color-mix(in srgb, var(--gc-accent) 8%, var(--gc-surface)); }
+.ch-opt:disabled { cursor:default; }
+.ch-tick { flex:none; width:18px; height:18px; box-sizing:border-box; display:grid; place-items:center; border:2px solid var(--gc-border-strong); border-radius:50%; color:transparent; }
+.ch-poll.is-multi .ch-tick { border-radius:5px; }
+.ch-opt.is-on .ch-tick { background:var(--gc-accent); border-color:var(--gc-accent); color:var(--gc-on-accent); }
+.ch-opt-body { flex:1; min-width:0; display:grid; gap:4px; }
+.ch-opt-top { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
+.ch-opt-label { overflow-wrap:anywhere; }
+.ch-opt-count { flex:none; color:var(--gc-muted); font-size:var(--gc-fs-xs); font-variant-numeric:tabular-nums; }
+.ch-opt-detail { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
+.ch-bar { height:4px; border-radius:2px; background:var(--gc-track); overflow:hidden; }
+.ch-bar i { display:block; height:100%; border-radius:inherit; background:var(--gc-accent); transition:width .2s ease; }
+.ch-voters { flex:none; display:flex; padding-left:6px; }
+.ch-voters .gc-avatar { margin-left:-6px; box-shadow:0 0 0 2px var(--gc-surface); }
+.ch-card-foot { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
+.ch-card-done { display:flex; align-items:flex-start; gap:6px; color:var(--gc-success); font-size:var(--gc-fs-sm); font-weight:500; overflow-wrap:anywhere; }
+.ch-card-done svg { flex:none; margin-top:1px; }
+.ch-card-error { color:var(--gc-danger); font-size:var(--gc-fs-xs); }
+.ch-items { list-style:none; margin:0; padding:0; display:grid; }
+.ch-item { display:flex; align-items:center; gap:10px; padding:8px 0; border-top:1px solid var(--gc-border); }
+.ch-item:first-child { border-top:0; padding-top:0; }
+.ch-item img { flex:none; width:40px; height:40px; border-radius:var(--gc-radius-sm); object-fit:cover; background:var(--gc-surface-2); }
+.ch-item-main { flex:1; min-width:0; display:grid; gap:2px; }
+.ch-item-detail { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
+.ch-item-price { flex:none; font-weight:500; font-variant-numeric:tabular-nums; }
+.ch-card-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.ch-card-actions .gc-btn { max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+.ch-card-actions .gc-btn:disabled { opacity:.5; cursor:default; }
+.ch-card.is-busy { opacity:.75; }
+/* Buttons with no title sit right under the bubble, without a box. */
+.ch-card.is-bare { width:auto; padding:2px 0 0; border:0; background:transparent; }
 .ch-typing { margin-top:var(--gc-space-3); }
 .ch-dots { display:inline-flex; gap:4px; padding:12px 14px; border-radius:20px; background:var(--gc-surface); border:1px solid var(--gc-border); }
 .ch-dots span { width:7px; height:7px; border-radius:50%; background:var(--gc-muted); animation:ch-blink 1.2s infinite ease-in-out; }
@@ -81,7 +131,7 @@ const styles = `
   .gc-main { padding:0 0 calc(var(--gc-bottomnav-h) + 12px + env(safe-area-inset-bottom)); }
   .ch { height:calc(100dvh - 56px - var(--gc-bottomnav-h) - 12px - env(safe-area-inset-bottom)); min-height:0; border:0; border-radius:0; max-width:none; }
   .ch-scroll { padding:var(--gc-space-2) var(--gc-space-3); }
-  .ch-col { max-width:82%; }
+  .ch-col { max-width:84%; }
   .ch-av { width:28px; }
   .ch-foot { padding:var(--gc-space-2); }
   .ch-jump { bottom:110px; }
@@ -120,7 +170,13 @@ const GC = window.GC;
 const $ = (id) => document.getElementById(id);
 const scroller = $("chScroll"), list = $("chList"), input = $("chInput"), sendButton = $("chSend");
 const BOT_AVATAR = ${JSON.stringify(BOT_AVATAR(32))};
-const state = { messages: [], ids: new Set(), pending: [], me: null, household: [], typing: false, expectReply: false, live: false, groupConnected: true, hasEarlier: false, file: null, fileUrl: null };
+const CLAUDE_AVATAR = ${JSON.stringify(CLAUDE_AVATAR(32))};
+const CLAUDE_AUTHOR = ${JSON.stringify(CLAUDE_AUTHOR)};
+const CHECK = ${JSON.stringify(icon("check", { size: 14 }))};
+const DONE = ${JSON.stringify(icon("checkCircle", { size: 16 }))};
+const EXTERNAL = ${JSON.stringify(icon("external", { size: 14 }))};
+const POLL = ${JSON.stringify(icon("chores", { size: 14 }))};
+const state = { messages: [], ids: new Set(), pending: [], me: null, household: [], typing: false, expectReply: false, live: false, groupConnected: true, hasEarlier: false, file: null, fileUrl: null, since: null, changed: false, cardBusy: new Set(), cardErrors: {} };
 let stick = true;
 
 const dayKey = (date) => date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
@@ -154,12 +210,12 @@ function emojiOnly(text) {
 function memberLook(id) { return state.household.find((member) => member.id === id) || null; }
 const allIds = () => state.household.map((member) => member.id);
 function avatarFor(message) {
-  if (message.kind === "bot") return BOT_AVATAR;
+  if (message.kind === "bot") return message.name === CLAUDE_AUTHOR ? CLAUDE_AVATAR : BOT_AVATAR;
   const member = memberLook(message.memberId) || { id: message.memberId || message.name, name: message.name };
   return GC.avatar(member, allIds(), 32);
 }
 // A member's messages sent through an AI assistant group apart from their own, so each run is labeled.
-const authorKey = (message) => message.kind === "bot" ? "bot" : (message.memberId || message.name) + (message.via ? "|" + message.via : "");
+const authorKey = (message) => message.kind === "bot" ? "bot|" + message.name : (message.memberId || message.name) + (message.via ? "|" + message.via : "");
 const isMine = (message) => message.kind === "member" && state.me && message.memberId === state.me.id;
 
 function attachmentHtml(item) {
@@ -167,6 +223,64 @@ function attachmentHtml(item) {
     return '<a class="ch-img-link" href="' + GC.esc(item.url) + '" target="_blank" rel="noopener"><img class="ch-img" src="' + GC.esc(item.url) + '" alt="' + GC.esc(item.name || "Photo") + '" loading="lazy" /></a>';
   }
   return '<span class="ch-file">' + GC.icon("photo") + GC.esc(item.name || "Attachment") + '</span>';
+}
+
+// --- Cards ---
+/** Only web links and app paths become hrefs or image sources. */
+function safeUrl(url) { return typeof url === "string" && /^(https?:\\/\\/|\\/(?!\\/))/i.test(url) ? url : null; }
+function cardButton(action, disabled) {
+  const cls = "gc-btn gc-btn-sm" + (action.style === "primary" ? "" : " gc-btn-outline");
+  const url = safeUrl(action.url);
+  if (url && !disabled) return '<a class="' + cls + '" href="' + GC.esc(url) + '" target="_blank" rel="noopener noreferrer">' + GC.esc(action.label) + EXTERNAL + '</a>';
+  return '<button type="button" class="' + cls + '" data-action="' + GC.esc(action.id) + '"' + (disabled || action.url ? " disabled" : "") + '>' + GC.esc(action.label) + '</button>';
+}
+function voterAvatars(ids) {
+  const all = allIds();
+  return ids.slice(0, 3).map((id) => GC.avatar(memberLook(id) || { id, name: id }, all, 20)).join("");
+}
+function pollHtml(card) {
+  const open = !card.closed;
+  const votes = card.votes || {};
+  const voted = new Set(Object.values(votes).flat());
+  const base = Math.max(state.household.length, 1);
+  let html = '<div class="ch-card-kicker">' + POLL + (card.multi ? "Poll · pick any" : "Poll") + '</div><div class="ch-card-title">' + GC.esc(card.question) + '</div><div class="ch-opts">';
+  for (const option of card.options) {
+    const ids = votes[option.id] || [];
+    const on = Boolean(state.me && ids.includes(state.me.id));
+    html += '<button type="button" class="ch-opt' + (on ? " is-on" : "") + '" data-opt="' + GC.esc(option.id) + '" aria-pressed="' + on + '"' + (open ? "" : " disabled") + '>'
+      + '<span class="ch-tick">' + CHECK + '</span><span class="ch-opt-body"><span class="ch-opt-top"><span class="ch-opt-label">' + GC.esc(option.label) + '</span>'
+      + (ids.length ? '<span class="ch-opt-count">' + ids.length + '</span>' : "") + '</span>'
+      + (option.detail ? '<span class="ch-opt-detail">' + GC.esc(option.detail) + '</span>' : "")
+      + '<span class="ch-bar"><i style="width:' + Math.round(100 * Math.min(ids.length, base) / base) + '%"></i></span></span>'
+      + (ids.length ? '<span class="ch-voters">' + voterAvatars(ids) + '</span>' : "") + '</button>';
+  }
+  html += '</div>';
+  if (!open) html += '<div class="ch-card-done">' + DONE + '<span>' + GC.esc(card.result || "Voting closed") + '</span></div>';
+  else html += '<div class="ch-card-foot">' + (voted.size ? voted.size + " of " + state.household.length + " voted" : "Tap to vote") + '</div>';
+  return html;
+}
+function cardHtml(message) {
+  const card = message.card;
+  const done = card.kind === "poll" ? Boolean(card.closed) : Boolean(card.resolved);
+  let html = "";
+  if (card.kind === "poll") html = pollHtml(card);
+  else {
+    if (card.title) html += '<div class="ch-card-title">' + GC.esc(card.title) + '</div>';
+    if (card.kind === "choices" && card.items.length) {
+      html += '<ul class="ch-items">' + card.items.map((item) => {
+        const image = safeUrl(item.imageUrl);
+        return '<li class="ch-item">' + (image ? '<img src="' + GC.esc(image) + '" alt="" loading="lazy" />' : "")
+          + '<span class="ch-item-main"><span>' + GC.esc(item.label) + '</span>' + (item.detail ? '<span class="ch-item-detail">' + GC.esc(item.detail) + '</span>' : "") + '</span>'
+          + (item.price ? '<span class="ch-item-price">' + GC.esc(item.price) + '</span>' : "") + '</li>';
+      }).join("") + '</ul>';
+    }
+    if (card.actions.length) html += '<div class="ch-card-actions">' + card.actions.map((action) => cardButton(action, done)).join("") + '</div>';
+    if (done) html += '<div class="ch-card-done">' + DONE + '<span>' + GC.esc(card.resolved) + '</span></div>';
+  }
+  const error = state.cardErrors[message.id];
+  if (error) html += '<div class="ch-card-error" role="alert">' + GC.esc(error) + '</div>';
+  const bare = card.kind === "actions" && !card.title;
+  return '<div class="ch-card ch-' + card.kind + (bare ? " is-bare" : "") + (card.kind === "poll" && card.multi ? " is-multi" : "") + (state.cardBusy.has(message.id) ? " is-busy" : "") + '" data-card-msg="' + message.id + '">' + html + '</div>';
 }
 
 function render() {
@@ -187,11 +301,13 @@ function render() {
     const last = !next || nextSeparator || authorKey(next) !== authorKey(message) || nextAt - at > 5 * 60e3;
     const mine = isMine(message) || message.pending;
     const kind = message.kind === "bot" ? "is-bot" : mine ? "is-mine" : "is-other";
-    const classes = ["ch-row", kind, first ? "is-first" : "", last ? "is-last" : "", message.pending ? "is-pending" : ""].filter(Boolean).join(" ");
+    const claude = message.kind === "bot" && message.name === CLAUDE_AUTHOR;
+    const classes = ["ch-row", kind, claude ? "is-claude" : "", first ? "is-first" : "", last ? "is-last" : "", message.pending ? "is-pending" : ""].filter(Boolean).join(" ");
     let col = "";
     if (first && (!mine || message.via)) col += '<div class="ch-name">' + GC.esc(mine ? "via " + message.via : message.name + (message.via ? " · via " + message.via : "")) + '</div>';
     for (const item of message.attachments || []) col += attachmentHtml(item);
     if (message.text) col += emojiOnly(message.text) ? '<div class="ch-emoji" title="' + GC.esc(fullTime(at)) + '">' + GC.esc(message.text) + '</div>' : '<div class="ch-bubble" title="' + GC.esc(fullTime(at)) + '">' + linkify(message.text) + '</div>';
+    if (message.card) col += cardHtml(message);
     if (message === lastMine) {
       col += message.failed
         ? '<div class="ch-status is-failed">' + GC.esc(message.error || "Not sent") + ' · <button type="button" data-retry="' + GC.esc(message.tempId) + '">Retry</button></div>'
@@ -212,10 +328,15 @@ function toBottom() { scroller.scrollTop = scroller.scrollHeight; $("chJump").hi
 scroller.addEventListener("scroll", () => { stick = nearBottom(); if (stick) $("chJump").hidden = true; });
 $("chJump").addEventListener("click", () => { stick = true; toBottom(); });
 
+/** Adds new messages and replaces changed ones (a card someone voted on, flagged in state.changed); returns how many were new. */
 function merge(messages) {
   let added = 0;
   for (const message of messages) {
-    if (state.ids.has(message.id)) continue;
+    if (state.ids.has(message.id)) {
+      const index = state.messages.findIndex((item) => item.id === message.id);
+      if (index >= 0 && state.messages[index].updatedAt !== message.updatedAt && !state.cardBusy.has(message.id)) { state.messages[index] = message; state.changed = true; }
+      continue;
+    }
     state.ids.add(message.id);
     state.messages.push(message);
     added += 1;
@@ -256,6 +377,7 @@ async function initial() {
   $("chTip").innerHTML = data.live
     ? ${JSON.stringify(infoTip("Same conversation as the iMessage group. What you send here posts to the group as “Your name: …”."))}
     : ${JSON.stringify(infoTip("Demo: try “2 bananas”, “cart”, or “help”. Nothing is sent to iMessage."))};
+  state.since = data.serverTime;
   merge(data.messages);
   renderHeader();
   render();
@@ -267,15 +389,18 @@ async function poll() {
   clearTimeout(pollTimer);
   try {
     const last = state.messages.length ? state.messages[state.messages.length - 1].id : 0;
-    const data = await load("after=" + last + "&limit=100");
+    const data = await load("after=" + last + "&limit=100" + (state.since ? "&updatedSince=" + encodeURIComponent(state.since) : ""));
     const wasNear = nearBottom();
-    const added = merge(data.messages);
+    state.since = data.serverTime || state.since;
+    state.changed = false;
+    const added = merge(data.messages) + merge(data.changed || []);
+    const cardsChanged = state.changed;
     const typingChanged = state.typing !== data.typing;
     state.typing = data.typing;
     if (added && data.messages.some((message) => message.kind === "bot")) state.expectReply = false;
     if (!data.typing && state.expectReply && !added) state.expectReply = state.expectReply === "first" ? false : "first";
     if (state.groupConnected !== data.groupConnected) { state.groupConnected = data.groupConnected; renderHeader(); }
-    if (added || typingChanged) {
+    if (added || typingChanged || cardsChanged) {
       render();
       if (wasNear || stick) toBottom(); else if (added) $("chJump").hidden = false;
     }
@@ -336,7 +461,49 @@ async function send(text, file, retryOf) {
   }
 }
 
+/** A tap on a poll option or card button. Poll taps show right away; the server's card then replaces the guess. */
+async function actOnCard(cardEl, input) {
+  const id = Number(cardEl.getAttribute("data-card-msg"));
+  const message = state.messages.find((item) => item.id === id);
+  if (!message || state.cardBusy.has(id)) return;
+  const before = message.card;
+  if (input.optionIds && state.me && before.kind === "poll") {
+    const me = state.me.id, picked = input.optionIds[0];
+    const had = ((before.votes || {})[picked] || []).includes(me);
+    const votes = {};
+    for (const option of before.options) {
+      let ids = ((before.votes || {})[option.id] || []).slice();
+      if (option.id === picked || !before.multi) ids = ids.filter((voter) => voter !== me);
+      if (option.id === picked && !had) ids.push(me);
+      votes[option.id] = ids;
+    }
+    message.card = Object.assign({}, before, { votes });
+  }
+  state.cardBusy.add(id); delete state.cardErrors[id];
+  render();
+  try {
+    const response = await fetch("/api/chat/cards", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(Object.assign({ messageId: id }, input)) });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || "That didn’t go through.");
+    state.cardBusy.delete(id);
+    message.updatedAt = null; // take the server's card even if the timestamp matches
+    merge([data.message].concat(data.reply ? [data.reply] : []));
+    if (data.reply) stick = true;
+  } catch (error) {
+    state.cardBusy.delete(id);
+    message.card = before;
+    state.cardErrors[id] = error.message;
+  }
+  render();
+  if (stick) toBottom();
+}
+
 list.addEventListener("click", (event) => {
+  const cardEl = event.target.closest("[data-card-msg]");
+  const option = event.target.closest("[data-opt]");
+  const action = event.target.closest("button[data-action]");
+  if (cardEl && option && !option.disabled) { actOnCard(cardEl, { optionIds: [option.getAttribute("data-opt")] }); return; }
+  if (cardEl && action && !action.disabled) { actOnCard(cardEl, { actionId: action.getAttribute("data-action") }); return; }
   const retry = event.target.closest("[data-retry]");
   if (!retry) return;
   const temp = state.pending.find((item) => item.tempId === retry.getAttribute("data-retry"));
@@ -409,7 +576,9 @@ const previewStyles = `
 .hc-compose:hover { background:var(--gc-hover); }
 .hc-compose span:first-child { flex:1; }
 .hc-send { width:32px; height:32px; display:grid; place-items:center; border-radius:50%; background:var(--gc-accent); color:var(--gc-on-accent); }
-.hc-list .ch-bot-avatar { background:var(--gc-accent-soft); color:var(--gc-on-accent-soft); }`;
+.hc-list .ch-bot-avatar { background:var(--gc-accent-soft); color:var(--gc-on-accent-soft); }
+.hc-list { --ch-claude:color-mix(in srgb, var(--gc-danger) 62%, var(--gc-warning)); }
+.hc-list .ch-claude-avatar { background:color-mix(in srgb, var(--ch-claude) 16%, var(--gc-surface)); color:var(--ch-claude); }`;
 
 const previewScript = `
 document.addEventListener("DOMContentLoaded", function () {
@@ -417,6 +586,13 @@ document.addEventListener("DOMContentLoaded", function () {
   var listEl = document.getElementById("homeChatList");
   if (!listEl) return;
   var bot = ${JSON.stringify(BOT_AVATAR(28))};
+  var claude = ${JSON.stringify(CLAUDE_AVATAR(28))};
+  // One line for a card: "📊 Poll: Movie night".
+  function cardLine(card) {
+    if (!card) return "";
+    if (card.kind === "poll") return "📊 Poll: " + card.question;
+    return card.title || (card.actions[0] ? card.actions[0].label : "");
+  }
   function load() {
     fetch("/api/chat/messages?limit=3", { headers: { accept: "application/json" } })
       .then(function (response) { return response.ok ? response.json() : null; })
@@ -425,8 +601,8 @@ document.addEventListener("DOMContentLoaded", function () {
         var ids = data.household.map(function (member) { return member.id; });
         listEl.innerHTML = data.messages.length ? data.messages.map(function (message) {
           var member = data.household.find(function (m) { return m.id === message.memberId; }) || { id: message.memberId || message.name, name: message.name };
-          var text = message.text || (message.attachments.length ? "📷 Photo" : "");
-          return '<li class="gc-list-item">' + (message.kind === "bot" ? bot : GC.avatar(member, ids, 28))
+          var text = message.text || cardLine(message.card) || (message.attachments.length ? "📷 Photo" : "");
+          return '<li class="gc-list-item">' + (message.kind === "bot" ? (message.name === ${JSON.stringify(CLAUDE_AUTHOR)} ? claude : bot) : GC.avatar(member, ids, 28))
             + '<div class="gc-list-main"><div class="hc-top"><span class="hc-name">' + GC.esc(message.name) + '</span><span class="hc-time">' + GC.esc(GC.time(new Date(message.at))) + '</span></div>'
             + '<div class="hc-text">' + GC.esc(text.split("\\n")[0]) + '</div></div></li>';
         }).join("") : '<li class="gc-empty"><p class="gc-empty-text">No messages yet.</p></li>';

@@ -8,6 +8,11 @@
 // exactly like a group message from that member (the shared processMemberMessage in index.ts).
 // Demo mode: the web chat is the group; nothing is sent anywhere.
 //
+// Rich cards: a bot message may carry a ChatCard (poll, choices, or action buttons) in card_json. The web chat draws
+// it and posts taps to POST /api/chat/cards, which runs the card handler registered for the card id's owner
+// (registerCardHandler in src/platform.ts) and stores the updated card (updated_at tells pollers what changed).
+// iMessage gets cardText(card) instead.
+//
 // Tables use the chat_ prefix; image files live in <data dir>/chat-files and are served at /chat/files/<file>.
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
@@ -15,7 +20,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { attachment, type Space } from "spectrum-ts";
-import type { CommandAttachment, CommandContext } from "./platform.js";
+import { cardHandler, cardOwner, claimReplyCard, type CardActionResult, type CommandAttachment, type CommandContext } from "./platform.js";
 import { joinNames } from "./choresLogic.js";
 import { isStoredImageName, sniffImage } from "./profiles.js";
 import type { Member } from "./store.js";
@@ -23,7 +28,36 @@ import type { Member } from "./store.js";
 export const CHAT_TEXT_LIMIT = 2_000;
 export const CHAT_IMAGE_LIMIT = 15 * 1024 * 1024;
 
-export type ChatSource = "imessage" | "web" | "connector" | "reply" | "notify" | "seed";
+export type ChatSource = "imessage" | "web" | "connector" | "reply" | "notify" | "seed" | "card";
+
+// --- Rich message cards (web chat). Card ids are namespaced "<owner>:<rest>", e.g. "events:12", "agent:abc". ---
+export type ChatCardOption = { id: string; label: string; detail?: string };
+export type ChatCardItem = { id: string; label: string; detail?: string; price?: string; imageUrl?: string };
+/** A button. With `url` it opens that link in a new tab (e.g. a Venmo pay link) instead of posting an action. */
+export type ChatCardAction = { id: string; label: string; style?: "primary" | "secondary"; url?: string };
+export type ChatCard =
+  /** votes maps optionId → memberIds. */
+  | { kind: "poll"; id: string; question: string; options: ChatCardOption[]; multi: boolean; votes: Record<string, string[]>; closed?: boolean; result?: string }
+  | { kind: "choices"; id: string; title: string; items: ChatCardItem[]; actions: ChatCardAction[]; resolved?: string }
+  | { kind: "actions"; id: string; title?: string; actions: ChatCardAction[]; resolved?: string };
+export type PollCard = Extract<ChatCard, { kind: "poll" }>;
+
+/**
+ * The default poll behavior: toggles the member's vote on each tapped option. A single-choice poll keeps at most one
+ * vote per member (tapping another option moves it there; tapping the same one again removes it).
+ */
+export function togglePollVote(card: PollCard, memberId: string, optionIds: readonly string[]): PollCard {
+  const known = card.options.map((option) => option.id);
+  const votes: Record<string, string[]> = Object.fromEntries(known.map((id) => [id, [...(card.votes[id] ?? [])]]));
+  for (const optionId of optionIds) {
+    if (!votes[optionId]) continue;
+    const had = votes[optionId].includes(memberId);
+    if (!card.multi) for (const id of known) votes[id] = votes[id]!.filter((voter) => voter !== memberId);
+    votes[optionId] = had ? votes[optionId]!.filter((voter) => voter !== memberId) : [...votes[optionId]!, memberId];
+  }
+  return { ...card, votes };
+}
+// --- end cards ---
 export type ChatKind = "member" | "bot";
 
 type StoredAttachment = { name: string; mimeType: string; size: number | null; file: string | null };
@@ -40,6 +74,10 @@ export type ChatMessage = {
   /** The AI assistant that sent a connector message for the member ("Claude", "Grok", …), else null. */
   via: string | null;
   at: string;
+  /** Rich card under a bot message, or null. */
+  card: ChatCard | null;
+  /** Last change (a card update bumps it), so pollers can ask for messages updated since their last poll. */
+  updatedAt: string;
 };
 
 /** Processes one member message (feature commands, then the cart) and returns GroupCart's reply. */
@@ -67,7 +105,10 @@ export class ChatError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-type Row = { id: number; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string };
+type Row = { id: number; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string; card_json: string | null; updated_at: string | null };
+
+/** Author of a bot message that names none. */
+export const BOT_AUTHOR = "GroupCart";
 
 function memoize(read: () => Promise<Buffer>): () => Promise<Buffer> {
   let pending: Promise<Buffer> | null = null;
@@ -118,6 +159,9 @@ export class ChatService {
     `);
     const columns = this.#db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
     if (!columns.some((column) => column.name === "via")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN via TEXT");
+    if (!columns.some((column) => column.name === "card_json")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN card_json TEXT");
+    if (!columns.some((column) => column.name === "updated_at")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN updated_at TEXT");
+    this.#db.exec("CREATE INDEX IF NOT EXISTS chat_messages_updated ON chat_messages (updated_at)");
   }
 
   get liveMode(): boolean {
@@ -147,11 +191,12 @@ export class ChatService {
   // Recording
   // ---------------------------------------------------------------------------
 
-  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; via?: string; at?: Date }): ChatMessage | null {
+  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; via?: string; at?: Date; card?: ChatCard | null }): ChatMessage | null {
     const at = input.at && !Number.isNaN(input.at.getTime()) ? input.at : new Date();
+    // updated_at is the real insert time even for back-dated (seed) messages.
     const result = this.#db.prepare(
-      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, via, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, input.via ?? null, at.toISOString());
+      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, via, created_at, card_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, input.via ?? null, at.toISOString(), input.card ? JSON.stringify(input.card) : null, new Date().toISOString());
     if (!Number(result.changes)) return null;
     return this.get(Number(result.lastInsertRowid));
   }
@@ -209,10 +254,68 @@ export class ChatService {
     return { file, mimeType: type.mimeType };
   }
 
-  /** Records a message from GroupCart itself (replies and notifications). */
-  recordBot(text: string, source: ChatSource = "reply", at?: Date): ChatMessage | null {
-    if (!text.trim()) return null;
-    return this.#insert({ kind: "bot", memberId: null, authorName: "GroupCart", text: text.slice(0, 20_000), attachments: [], source, at });
+  /**
+   * Records a bot message: GroupCart's replies and notifications, or another bot author such as "Claude". Without a
+   * card, a reply built with cardReply() (src/platform.ts) gets its card back here, and the web chat stores the short
+   * text plus the card instead of the iMessage fallback text.
+   */
+  recordBot(text: string, source: ChatSource = "reply", at?: Date, card?: ChatCard | null, options: { author?: string } = {}): ChatMessage | null {
+    let body = text;
+    let attached = card ?? null;
+    if (!attached) {
+      const claimed = claimReplyCard(text);
+      if (claimed) { body = claimed.text; attached = claimed.card; }
+    }
+    if (!body.trim() && !attached) return null;
+    const author = options.author?.trim().slice(0, 40) || BOT_AUTHOR;
+    return this.#insert({ kind: "bot", memberId: null, authorName: author, text: body.slice(0, 20_000), attachments: [], source, at, card: attached });
+  }
+
+  /** Replaces a message's card and bumps updated_at so open chats redraw it. Null when the message has no card. */
+  updateCard(messageId: number, card: ChatCard): ChatMessage | null {
+    const changed = this.#db.prepare("UPDATE chat_messages SET card_json = ?, updated_at = ? WHERE id = ? AND card_json IS NOT NULL")
+      .run(JSON.stringify(card), new Date().toISOString(), messageId).changes;
+    return Number(changed) ? this.get(messageId) : null;
+  }
+
+  /** The newest message carrying the card with this id. */
+  findByCardId(cardId: string): ChatMessage | null {
+    const row = this.#db.prepare("SELECT * FROM chat_messages WHERE card_json IS NOT NULL AND json_extract(card_json, '$.id') = ? ORDER BY id DESC LIMIT 1").get(cardId) as Row | undefined;
+    return row ? this.#view(row) : null;
+  }
+
+  /**
+   * A member tapped a card button or poll option on the website. Runs the handler registered for the card's owner
+   * (a poll without a handler just toggles the member's vote), stores the card it returns, and records its reply
+   * as a bot message (also sent to the iMessage group in live mode).
+   */
+  async actOnCard(member: Member, messageId: number, input: { actionId?: string; optionIds?: string[] }): Promise<{ message: ChatMessage; reply: ChatMessage | null }> {
+    const message = this.get(messageId);
+    const card = message?.card;
+    if (!message || !card) throw new ChatError(404, "That message has no buttons.");
+    if (card.kind === "poll" ? card.closed : card.resolved) throw new ChatError(409, "That’s already settled.");
+    const optionIds = card.kind === "poll" ? (input.optionIds ?? []).filter((id) => typeof id === "string").slice(0, 20) : undefined;
+    const actionId = card.kind === "poll" ? undefined : typeof input.actionId === "string" ? input.actionId : undefined;
+    if (optionIds ? !optionIds.length : !actionId) throw new ChatError(400, optionIds ? "Pick an option." : "Pick a button.");
+    if (actionId && card.kind !== "poll" && !card.actions.some((action) => action.id === actionId && !action.url)) throw new ChatError(400, "That button isn’t on this card.");
+    const handler = cardHandler(cardOwner(card.id));
+    const result: CardActionResult = handler
+      ? await handler({ memberId: member.id, card, actionId, optionIds })
+      : card.kind === "poll" ? { card: togglePollVote(card, member.id, optionIds!) } : null;
+    if (!result) throw new ChatError(409, "That button isn’t available anymore.");
+    if (result.error) throw new ChatError(409, result.error);
+    const updated = (result.card && this.updateCard(message.id, result.card)) || this.get(message.id)!;
+    let reply: ChatMessage | null = null;
+    if (result.reply) {
+      reply = this.recordBot(result.reply, "card");
+      const group = this.#live && this.groupConnected ? this.#group : null;
+      if (group) {
+        try { await group.sendText(result.reply); } catch (error) {
+          console.warn("Could not send a card reply to the iMessage group:", error instanceof Error ? error.message : error);
+        }
+      }
+    }
+    return { message: updated, reply };
   }
 
   /** Live loop: sends a GroupCart reply into the group (with typing) and records it. */
@@ -321,12 +424,14 @@ export class ChatService {
       id: row.id,
       kind: row.kind === "bot" ? "bot" : "member",
       memberId: row.member_id,
-      name: row.kind === "bot" ? "GroupCart" : (row.member_id && this.#displayName(row.member_id)) || row.author_name,
+      name: row.kind === "bot" ? row.author_name || BOT_AUTHOR : (row.member_id && this.#displayName(row.member_id)) || row.author_name,
       text: row.text,
       attachments,
       source: row.source as ChatSource,
       via: row.via ?? null,
       at: row.created_at,
+      card: row.card_json ? JSON.parse(row.card_json) as ChatCard : null,
+      updatedAt: row.updated_at ?? row.created_at,
     };
   }
 
@@ -349,6 +454,12 @@ export class ChatService {
     const first = rows[0];
     const hasEarlier = first ? Boolean(this.#db.prepare("SELECT 1 FROM chat_messages WHERE id < ? LIMIT 1").get(first.id)) : false;
     return { messages: rows.map((row) => this.#view(row)), hasEarlier };
+  }
+
+  /** Messages changed at or after `since` (ISO), e.g. a card someone voted on, so open chats can redraw them. */
+  changedSince(since: string, limit = 100): ChatMessage[] {
+    const rows = this.#db.prepare("SELECT * FROM chat_messages WHERE updated_at >= ? ORDER BY id LIMIT ?").all(since, Math.min(Math.max(Math.floor(limit), 1), 200)) as Row[];
+    return rows.map((row) => this.#view(row));
   }
 
   /** Absolute path of a stored chat image, or null when the name is not one of ours. */

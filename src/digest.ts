@@ -44,28 +44,25 @@ function more(items: string[], max = MAX_PER_LINE): string {
   return items.length > max ? `${items.slice(0, max).join(" · ")} +${items.length - max}` : items.join(" · ");
 }
 
-/** The digest text: a header plus up to seven emoji lines; empty sections are left out. */
+/** The digest text: a header plus up to six short lines (one per section); empty sections are left out. */
 export function buildDigest(data: DigestData, options: { now: Date; preview?: boolean }): string {
   // The week it covers starts on the coming Monday (today when it is Monday).
   const weekStart = addDaysIso(localIso(options.now), (8 - options.now.getDay()) % 7);
   const label = new Date(`${weekStart}T12:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const lines = [options.preview ? `📬 Digest preview · week of ${label}` : `📬 Sunday digest · week of ${label}`];
   // Chores come most urgent first, so late ones are always shown.
-  if (data.chores.length) lines.push(`🧽 Chores: ${more(data.chores.map((chore) => `${chore.emoji} ${chore.name} (${chore.who ? first(chore.who) : "open"}${chore.late ? ", late" : ""})`))}`);
-  if (data.transfers.length) {
-    const total = data.transfers.reduce((sum, transfer) => sum + transfer.cents, 0);
-    lines.push(`💸 Settle up: ${more(data.transfers.map((transfer) => `${first(transfer.from)} → ${first(transfer.to)} ${dollars(transfer.cents)}`))}${data.transfers.length > 1 ? ` (${dollars(total)} total)` : ""}`);
-  } else {
-    lines.push("💸 Everyone’s settled up.");
-  }
+  if (data.chores.length) lines.push(`Chores: ${more(data.chores.map((chore) => `${chore.name} (${chore.who ? first(chore.who) : "open"}${chore.late ? ", late" : ""})`))}`);
+  lines.push(data.transfers.length
+    ? `Settle up: ${more(data.transfers.map((transfer) => `${first(transfer.from)} → ${first(transfer.to)} ${dollars(transfer.cents)}`))}`
+    : "Everyone’s settled up.");
   if (data.events.length || data.polls.length) {
-    const polls = data.polls.length ? [`🗳️ ${data.polls.length === 1 ? `${data.polls[0]} vote open` : `${data.polls.length} votes open`}`] : [];
-    lines.push(`📅 Coming up: ${more([...polls, ...data.events.map((event) => `${event.emoji} ${event.title} ${event.when}`)])}`);
+    const polls = data.polls.length ? [data.polls.length === 1 ? `${data.polls[0]} vote` : `${data.polls.length} votes open`] : [];
+    lines.push(`Coming up: ${more([...polls, ...data.events.map((event) => `${event.title} ${event.when}`)])}`);
   }
-  if (data.lists.length) lines.push(`🛒 Lists due: ${more(data.lists.map((list) => `${list.title} ${list.when}`))}`);
-  if (data.bills.length) lines.push(`🧾 Bills: ${more(data.bills.map((bill) => `${bill.emoji} ${bill.vendor} ${dollars(bill.cents)} ${bill.overdue ? "overdue" : bill.when}`))}`);
+  if (data.lists.length) lines.push(`Lists due: ${more(data.lists.map((list) => `${list.title} ${list.when}`))}`);
+  if (data.bills.length) lines.push(`Bills: ${more(data.bills.map((bill) => `${bill.vendor} ${dollars(bill.cents)} ${bill.overdue ? "overdue" : bill.when}`))}`);
   if (data.stat) lines.push(data.stat);
-  if (lines.length === 2 && !data.transfers.length) lines.push("🎉 A quiet week: nothing due.");
+  if (lines.length === 2 && !data.transfers.length) lines.push("A quiet week: nothing due.");
   return lines.join("\n");
 }
 

@@ -150,7 +150,7 @@ test("secrets are masked everywhere except reveal, the group commands, and inclu
 
 test("polls: numbers vote only while the poll is the sender's newest question; everyone voting closes it", async () => {
   const { house, store, events, clock, say, alex, maya, jordan } = setup("polls");
-  assert.match(await say(maya, "poll: takeout tonight? thai, pizza, sushi") ?? "", /1\) Thai\n2\) Pizza\n3\) Sushi/);
+  assert.match(await say(maya, "poll: takeout tonight? thai, pizza, sushi") ?? "", /1\. Thai\n2\. Pizza\n3\. Sushi/);
   clock.advance(60_000);
   assert.match(await say(maya, "2") ?? "", /Maya → Pizza\. Thai 0 · Pizza 1 · Sushi 0 · waiting on Alex, Jordan/);
   assert.match(await say(maya, "1 3") ?? "", /One pick per person/);

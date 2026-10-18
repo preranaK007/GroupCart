@@ -23,12 +23,12 @@ export class ListText {
     const command = LIST_COMMAND_NAMES[list];
     const items = this.m.lists.listItems(list);
     if (!items.length) {
-      return `${title} groceries are due, but the ${label} list is empty. What should be on it? Add items with “${command}: milk, eggs”.`;
+      return `🛒 ${title} groceries are due, but the ${label} list is empty. Text “${command}: milk, eggs” to add some.`;
     }
     const estimate = this.m.lists.listEstimate(items);
     const names = items.slice(0, 6).map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ""}${this.m.lists.listItemName(item)}`);
-    const more = items.length > 6 ? `, and ${items.length - 6} more` : "";
-    return `${title} groceries are due. The ${label} list has ${items.length} item${items.length === 1 ? "" : "s"} (about ${money(estimate.cents)} estimated): ${names.join(", ")}${more}. Reply “load ${command} list” to add them to the cart, or add items with “${command}: …”.`;
+    const more = items.length > 6 ? ` +${items.length - 6} more` : "";
+    return `🛒 ${title} groceries are due: ${names.join(", ")}${more} (about ${money(estimate.cents)} est.)\nReply “load ${command} list” to add them to the cart.`;
   }
 
   formatListView(list: ListKey): string {
@@ -37,20 +37,20 @@ export class ListText {
     const command = LIST_COMMAND_NAMES[list];
     const items = this.m.lists.listItems(list);
     const schedule = describeSchedule(list, this.m.lists.listSchedule(row));
-    const header = `${LIST_TITLES[list]} list (shared by the household · due ${schedule})`;
+    const header = `${LIST_TITLES[list]} list · due ${schedule}`;
     const lines = items.map((item, index) => {
       const unit = this.m.lists.listItemUnitPrice(item);
       const price = unit === null
         ? "no saved price"
         : item.price_source === "kroger"
           ? `${money(unit * item.quantity)} Kroger quote${item.quoted_at ? ` from ${friendlyDate(new Date(item.quoted_at))}` : ""}`
-          : `${money(unit * item.quantity)} sample estimate`;
-      return `${index + 1}) ${item.quantity} × ${this.m.lists.listItemName(item)}${item.size ? ` · ${item.size}` : ""} — ${price}`;
+          : `${money(unit * item.quantity)} est.`;
+      return `${index + 1}. ${item.quantity > 1 ? `${item.quantity} × ` : ""}${this.m.lists.listItemName(item)}${item.size ? ` · ${item.size}` : ""} ${price}`;
     });
     const estimate = this.m.lists.listEstimate(items);
     const body = items.length
-      ? `${lines.join("\n")}\nEstimated total: ${money(estimate.cents)}${estimate.unpriced ? ` (+${estimate.unpriced} unpriced)` : ""}. Kroger prices are re-quoted when the list is loaded.`
-      : `The list is empty. Add items with “${command}: milk, eggs, bread”.`;
+      ? `${lines.join("\n")}\nAbout ${money(estimate.cents)}${estimate.unpriced ? ` (+${estimate.unpriced} unpriced)` : ""}`
+      : `Empty. Text “${command}: milk, eggs, bread” to add items.`;
     const statusParts: string[] = [];
     if (!row.active_since) statusParts.push(`Not started yet — reminders begin once it has items (or text “start ${command} list”).`);
     else if (row.reminders_enabled !== 1) statusParts.push(`Reminders paused (“resume ${command} reminders”).`);
@@ -59,7 +59,7 @@ export class ListText {
       const by = row.last_loaded_by ? this.ctx.getMembers().find((member) => member.id === row.last_loaded_by)?.name : undefined;
       statusParts.push(`Last loaded ${friendlyDate(new Date(row.last_loaded_at))}${by ? ` by ${by}` : ""}.`);
     }
-    return `${header}\n${body}\n${statusParts.join(" ")}\nLoad into the cart: “load ${command} list”. Remove: “remove eggs from ${command} list”. Change amount: “set eggs on ${command} list to 2”.`;
+    return `${header}\n${body}\n${statusParts.join(" ")}${items.length ? `\n“load ${command} list” adds it to the cart.` : ""}`;
   }
 
   formatListsOverview(): string {

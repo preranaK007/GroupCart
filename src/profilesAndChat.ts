@@ -5,8 +5,9 @@
 //   pages    GET /people, /people/<id>, /chat, /signin
 //   auth     POST /api/auth/start | verify | signout | view-as (host only), GET /api/auth/me
 //   profile  GET /api/people, /api/people/<id>; POST /api/profile; POST|DELETE /api/profile/avatar (raw image body)
-//   chat     GET /api/chat/messages?after=|before=|limit=; POST /api/chat/messages (JSON {text} or raw image body
-//            with x-gc-text / x-gc-filename headers); demo POST /api/demo-message is also mirrored into the chat
+//   chat     GET /api/chat/messages?after=|before=|limit=|updatedSince=; POST /api/chat/messages (JSON {text} or raw
+//            image body with x-gc-text / x-gc-filename headers); POST /api/chat/cards {messageId, actionId?, optionIds?}
+//            (a tap on a card); demo POST /api/demo-message is also mirrored into the chat
 //   files    GET /avatars/<file>, /chat/files/<file>
 import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -19,7 +20,7 @@ import {
 } from "./auth.js";
 import { ChatError, ChatService, spectrumChannel, type InboundAttachment, type MemberMessageProcessor } from "./chat.js";
 import { money } from "./cart.js";
-import { onGroupNotify, registerHelp, registerRoute, registerTools, setRemoteAuthorizer, setRequestMemberResolver, type CommandAttachment } from "./platform.js";
+import { cardText, onGroupNotify, registerHelp, registerRoute, registerTools, setCardSink, setRemoteAuthorizer, setRequestMemberResolver, type CommandAttachment } from "./platform.js";
 import { IMAGE_MIME_BY_EXT, ProfileService, profileSections, pronounSet, registerProfileSection, type Profile, type ProfilePatch } from "./profiles.js";
 import type { CartStore, MemberConfig } from "./store.js";
 import { chatPreviewCard, renderChatPage } from "./ui/chatPage.js";
@@ -130,6 +131,12 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
   setRequestMemberResolver((request) => { const viewer = auth.viewer(request); return viewer ? { memberId: viewer.member.id } : null; });
   // notifyGroup() (chore nudges, reminders, ...) also lands in the web chat.
   onGroupNotify((text) => { chat.recordBot(text, "notify"); });
+  // postCard() / refreshCard(): bot messages with polls and buttons.
+  setCardSink({
+    record: (text, card, author) => chat.recordBot(text, "notify", undefined, card, { author }),
+    recordText: (text, author) => chat.recordBot(text, "notify", undefined, undefined, { author }),
+    refresh: (card) => { const message = chat.findByCardId(card.id); return message ? chat.updateCard(message.id, card) : null; },
+  });
   if (!/^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:|\/|$)/.test(options.publicUrl)) {
     registerHelp(`Web: ${options.publicUrl}/chat shows this chat, profiles, and the calendar. On your own phone or laptop, sign in with your number.`);
   }
@@ -323,8 +330,12 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
         const value = url.searchParams.get(name);
         return value !== null && /^\d+$/.test(value) ? Number(value) : undefined;
       };
+      // Taken before reading, so a card changed during this request shows up again next time rather than never.
+      const serverTime = new Date().toISOString();
       const page = chat.list({ after: number("after"), before: number("before"), limit: number("limit") });
-      sendJson(response, 200, { ...page, ...chatState(viewer.member.id) });
+      const since = url.searchParams.get("updatedSince");
+      const changed = since && !Number.isNaN(Date.parse(since)) ? chat.changedSince(new Date(since).toISOString()) : [];
+      sendJson(response, 200, { ...page, changed, serverTime, ...chatState(viewer.member.id) });
       return true;
     }
     if (path === "/api/chat/messages" && method === "POST") {
@@ -343,6 +354,25 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
       try {
         const result = await chat.send(viewer.member, input, { source: "web", awaitReply: url.searchParams.get("wait") === "1" });
         sendJson(response, 201, result);
+      } catch (error) {
+        if (error instanceof ChatError) { sendJson(response, error.status, { error: error.message }); return true; }
+        throw error;
+      }
+      return true;
+    }
+    if (path === "/api/chat/cards" && method === "POST") {
+      requireMutation(request);
+      const viewer = viewerOr401(request, response);
+      if (!viewer) return true;
+      const body = await readJsonBody(request, 4_096);
+      const messageId = typeof body.messageId === "number" ? body.messageId : Number(body.messageId);
+      if (!Number.isSafeInteger(messageId)) { sendJson(response, 400, { error: "Pick a message." }); return true; }
+      try {
+        const result = await chat.actOnCard(viewer.member, messageId, {
+          actionId: typeof body.actionId === "string" ? body.actionId.slice(0, 120) : undefined,
+          optionIds: Array.isArray(body.optionIds) ? body.optionIds.filter((id): id is string => typeof id === "string").map((id) => id.slice(0, 120)) : undefined,
+        });
+        sendJson(response, 200, result);
       } catch (error) {
         if (error instanceof ChatError) { sendJson(response, error.status, { error: error.message }); return true; }
         throw error;
@@ -424,6 +454,7 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
             from: message.name,
             ...(message.kind === "bot" ? { bot: true } : {}),
             text: message.text,
+            ...(message.card ? { card: cardText(message.card) } : {}),
             ...(message.attachments.length ? { attachments: message.attachments.map((item) => item.name) } : {}),
           })),
         };

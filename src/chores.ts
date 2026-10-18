@@ -618,7 +618,7 @@ export class ChoreService {
     const digestKey = `digest:${ctx.today}`;
     const dueToday = open.filter((chore) => chore.status === "today");
     if (dueToday.length && !sent(digestKey) && (this.demoMode || hour <= DIGEST_LAST_HOUR)) {
-      lines.push(`☀️ Today: ${dueToday.map((chore) => `${chore.emoji} ${chore.name} (${chore.assigneeId ? this.#name(ctx, chore.assigneeId) : "no one free"})`).join(", ")}`);
+      lines.push(`☀️ Today’s chores: ${dueToday.map((chore) => `${chore.name} (${chore.assigneeId ? this.#name(ctx, chore.assigneeId).split(/\s+/)[0] : "no one free"})`).join(" · ")}`);
       keys.push(digestKey);
     }
     for (const chore of open) {
@@ -1117,7 +1117,7 @@ export function setupChores(options: { store: CartStore; demoMode: boolean }): C
   activeChores = service; // money & points
   if (options.demoMode && service.seedDemo()) console.log("Chores: added sample chores and history for the demo.");
   registerCommand("chores", (context) => (context.text ? service.handleCommand(context) : null));
-  registerHelp("Chores: “chores” for this week, “my chores”, “done dishes” when finished, “skip dishes” or “swap dishes with <name>” to trade a turn.");
+  registerHelp("Chores: “chores” for this week, “my chores”, “done dishes” when finished, “skip dishes” or “swap dishes with Sami” to trade a turn.");
   registerHelp(`Add a chore: ${EXAMPLES}.`);
   registerHelp("Away: “away until Oct 30” takes you out of chore rotations; “I’m back” puts you back.");
   registerRoute((request, response, url) => handleChoresRequest(service, request, response, url));

@@ -76,8 +76,8 @@ test("quiet bot: banter gets no reply unless a question is open; grocery items s
   for (const text of ["lol", "👍", "thanks!", "ok", "haha ok 👍", "sounds good", "LMAOOO", "thank you 🙏"]) {
     assert.equal(store.processIncomingText(id(), alex.id, text), null, `no reply to “${text}”`);
   }
-  assert.match(store.processIncomingText(id(), alex.id, "we need eggs") ?? "", /Eggs/);
-  assert.match(store.processIncomingText(id(), maya.id, "bread") ?? "", /Bread/);
+  assert.match(store.processIncomingText(id(), alex.id, "we need eggs") ?? "", /^Added eggs · cart \$[\d.]+ est\. \(1 item\)$/);
+  assert.match(store.processIncomingText(id(), maya.id, "bread") ?? "", /^Added bread · cart/);
   assert.deepEqual(store.snapshot().items.map((item) => item.name), ["Eggs", "Bread"]);
   // With a question open (which milk?), a reply still gets an answer instead of silence.
   assert.match(store.processIncomingText(id(), alex.id, "milk") ?? "", /What kind of milk/);

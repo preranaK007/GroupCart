@@ -93,27 +93,34 @@ export class CartLedger {
     return result;
   }
 
+  /**
+   * Cart text for the group. After an add it is one line (“Added popcorn, candy · cart $23.04 est. (6 items)”);
+   * otherwise (“cart”, undo, clear, remove) a short list with each person's share. Sample prices are labeled
+   * estimates and Kroger prices quotes; the Groceries page has the full detail.
+   */
   formatSummary(memberId: string, addedNames: string[] = [], participantIds: string[] = [memberId]): string {
     const snapshot = this.snapshot();
-    const mine = snapshot.members.find((member) => member.id === memberId);
-    const lines = snapshot.items.slice(-8).map((item) =>
-      `• ${item.quantity} × ${item.name} — ${money(item.totalCents)} (${item.priceSource === "kroger" ? "Kroger" : "sample"}; ${item.participantNames.length > 1 ? `shared: ${item.participantNames.join(", ")}` : `for ${item.ownerName}`})`,
-    );
-    const shares = snapshot.members.map((member) => `${member.name}: ${money(member.shareCents)}`).join(" · ");
-    const prefix = addedNames.length
-      ? `Added ${addedNames.join(", ")} ${participantIds.length > 1 ? this.m.sharing.assignmentPhrase(participantIds) : `for ${mine?.name ?? "you"}`}.\n`
-      : "";
+    const firstName = (name: string) => name.split(/\s+/)[0] ?? name;
+    const itemCount = snapshot.items.reduce((sum, item) => sum + item.quantity, 0);
+    const kroger = snapshot.items.filter((item) => item.priceSource === "kroger").length;
+    const priceLabel = !kroger ? "est." : kroger === snapshot.items.length ? "Kroger quote" : "est. + Kroger quotes";
+    const totals = `${money(snapshot.totalCents)} ${priceLabel} (${itemCount} ${itemCount === 1 ? "item" : "items"})`;
+    const overBudget = snapshot.totalCents > snapshot.budgetCents ? ` · ${money(snapshot.totalCents - snapshot.budgetCents)} over budget` : "";
     const session = this.m.sharing.activeSessionFor(memberId);
     const sessionNote = session
-      ? `\nSharing session on: ${this.ctx.joinNames(this.ctx.memberNames(session.participantIds))}. Text “stop sharing” to end it.`
+      ? `\nSharing with ${this.ctx.joinNames(this.ctx.memberNames(session.participantIds.filter((id) => id !== memberId)).map(firstName))} until you text “stop sharing”.`
       : "";
-    const budgetNote = snapshot.totalCents > snapshot.budgetCents
-      ? `\nOver the ${money(snapshot.budgetCents)} sample budget by ${money(snapshot.totalCents - snapshot.budgetCents)}.`
-      : `\nWithin the ${money(snapshot.budgetCents)} sample budget.`;
-    const priceNote = snapshot.items.some((item) => item.priceSource === "kroger")
-      ? "Kroger prices are store-specific when a location is configured; sample items are marked."
-      : "sample catalog prices";
-    return `${prefix}Cart revision ${snapshot.revision} · ${priceNote}\n${lines.join("\n")}\nTotal: ${money(snapshot.totalCents)}\n${shares}${budgetNote}${sessionNote}\nText “cart”, “approve”, or “checkout”.`;
+    if (addedNames.length) {
+      const shared = participantIds.length > 1 ? ` (${this.m.sharing.assignmentPhrase(participantIds)})` : "";
+      return `Added ${this.ctx.joinNames(addedNames.map((name) => name.toLowerCase()))}${shared} · cart ${totals}${overBudget}${sessionNote}`;
+    }
+    if (!snapshot.items.length) return `🛒 The cart is empty.${sessionNote}`;
+    const lines = snapshot.items.slice(-8).map((item) =>
+      `${item.quantity > 1 ? `${item.quantity} ` : ""}${item.name.toLowerCase()} ${money(item.totalCents)}${item.participantNames.length > 1 ? " (shared)" : ` (${firstName(item.ownerName)})`}`,
+    );
+    if (snapshot.items.length > 8) lines.push(`+${snapshot.items.length - 8} more`);
+    const shares = snapshot.members.filter((member) => member.shareCents > 0).map((member) => `${firstName(member.name)} ${money(member.shareCents)}`).join(" · ");
+    return `🛒 Cart ${totals}${overBudget}\n${lines.join("\n")}\n${shares}${sessionNote}`;
   }
 
   captureCartItems(): string {
@@ -354,12 +361,12 @@ export class CartLedger {
     const updated = this.snapshot();
     const pending = updated.members.filter((member) => !member.approved).map((member) => member.name);
     return pending.length
-      ? `Your approval is saved for cart revision ${updated.revision}. Waiting for: ${pending.join(", ")}. Any cart change will require approvals again.`
+      ? `Approved. Waiting on ${this.ctx.joinNames(pending.map((name) => name.split(/\s+/)[0] ?? name))}. Any cart change resets approvals.`
       : this.ctx.krogerCartEnabled
         ? this.m.checkout.hasOpenReview()
-          ? `Everyone approved cart revision ${updated.revision}. The availability review is still open; text “checkout” to see the choices. Applying them will require fresh approvals.`
-          : `Everyone approved cart revision ${updated.revision}. Text “checkout” to check store availability before choosing a Kroger account.`
-        : `Everyone approved cart revision ${updated.revision}. Text “checkout” to finish a simulated checkout.`;
+          ? "Everyone approved. The availability review is still open: text “checkout” to see it. Applying it needs fresh approvals."
+          : "Everyone approved. Text “checkout” to check store availability and pick a Kroger account."
+        : "Everyone approved. Text “checkout” for a simulated checkout.";
   }
 
   completeMockCheckout(payerMemberId?: string): string {
@@ -432,7 +439,7 @@ export class CartLedger {
       } else {
         const product = resolveMilkChoice(normalized);
         if (!product) {
-          reply = "Which kind? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond milk. You can also say “cancel”. After you choose, I’ll look up matching store products if live search is configured.";
+          reply = "Which milk? 1 whole · 2 2% · 3 oat · 4 almond. Reply a number, or “cancel”.";
         } else {
           this.clearClarification(memberId);
           const companionRequests = extractCartRequests(pending.original_text);
@@ -448,11 +455,11 @@ export class CartLedger {
       this.ctx.db.prepare(
         "INSERT INTO pending_clarifications (member_id, kind, original_text, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET kind = excluded.kind, original_text = excluded.original_text, created_at = excluded.created_at",
       ).run(memberId, "milk", normalized, new Date().toISOString());
-      reply = "What kind of milk? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond. You can also type the kind you want, and I’ll look up matching store products.";
+      reply = "What kind of milk? 1 whole · 2 2% · 3 oat · 4 almond. Reply a number or the kind.";
     } else {
       const requests = extractCartRequests(normalized);
       if (requests.length === 0) {
-        reply = `I couldn’t match that to our sample catalog. Try milk, oat milk, eggs, bananas, pasta, tomato sauce, parmesan, bread, apples, or peanut butter. Text “help” to see examples and commands, or “cart” to review your basket.`;
+        reply = "I couldn’t find that in the sample catalog. Try milk, eggs, bananas, pasta, bread, or apples, or text “help”.";
       } else {
         const participantIds = this.addRequests(memberId, requests);
         reply = `${this.formatSummary(memberId, requests.map(({ product }) => product.name), participantIds)}${this.m.sharing.legacyShareHint(normalized, memberId)}`;

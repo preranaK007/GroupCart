@@ -237,12 +237,12 @@ test("MCP over HTTP: tools/list and tool calls run as the token's member", async
 
     const added = await client.callTool({ name: "add_to_cart", arguments: { request: "2 bananas" } });
     assert.ok(!added.isError, text(added));
-    assert.match(text(added), /Bananas/);
+    assert.match(text(added), /Added bananas/);
 
     const milk = await client.callTool({ name: "add_to_cart", arguments: { request: "milk" } });
     assert.match(text(milk), /choose_product/);
     const oat = await client.callTool({ name: "choose_product", arguments: { choice: "oat" } });
-    assert.match(text(oat), /Oat milk/);
+    assert.match(text(oat), /Added oat milk/);
     const noPending = await client.callTool({ name: "choose_product", arguments: { choice: "1" } });
     assert.equal(noPending.isError, true);
 
@@ -276,7 +276,7 @@ test("MCP over HTTP: tools/list and tool calls run as the token's member", async
 
     const approved = await client.callTool({ name: "approve_cart", arguments: {} });
     assert.ok(!approved.isError, text(approved));
-    assert.match(text(approved), /Waiting for: Maya/);
+    assert.match(text(approved), /Waiting on Maya/);
 
     const posted = await client.callTool({ name: "post_to_group", arguments: { message: "Pizza night Friday?" } });
     assert.ok(!posted.isError, text(posted));

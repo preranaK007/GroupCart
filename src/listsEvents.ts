@@ -234,8 +234,8 @@ class ChatCommands {
       const shape = planShape(intent.match.activity.key, { label: intent.match.label, emoji: intent.match.emoji, minutes: intent.durationMin });
       const created = await events.createPoll({ shape, organizerId: memberId, mode: "vote", dates: intent.dates, durationMin: intent.durationMin });
       if (!created.ok) return created.error;
-      const extra = shape.kind === "movie" ? `\n🍿 Got a movie in mind? “add movie <title>”` : "";
-      return `${events.pollText(created.poll, created.basis)}${extra}`;
+      // A poll card on the web; numbered options in iMessage. Movie ideas come up again once it's booked.
+      return events.pollText(created.poll, created.basis);
     }
     return null;
   }

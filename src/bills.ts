@@ -27,14 +27,15 @@ import {
 import { demoExtractionFor, renderSampleBill, SAMPLE_KINDS, type SampleKind } from "./billSample.js";
 import { config, splitwiseConfig } from "./config.js";
 import {
-  isRemoteAuthorized, notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, scheduleEvery,
-  type CommandAttachment, type CommandContext, type McpContent, type ToolCaller, type ToolSpec,
+  cardReply, isRemoteAuthorized, notifyGroup, otherPendingQuestionAt, registerCardHandler, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, scheduleEvery,
+  type CardActionResult, type CommandAttachment, type CommandContext, type McpContent, type ToolCaller, type ToolSpec,
 } from "./platform.js";
+import type { ChatCard, ChatCardAction } from "./chat.js";
 import { buildCreateExpenseBody, parseSplitwiseMembers, SplitwiseClient, SplitwiseError, splitwiseDashboardView, splitwiseExpenseUrl, type SplitwiseFetch, type SplitwiseUserRef } from "./splitwise.js";
 import type { CartStore } from "./store.js";
 import { setBillsIntegrationStatus } from "./ui/billsHome.js";
 // --- Money & points: points for paying on time, pay-back links in "who owes" (src/points.ts, src/payLinks.ts) ---
-import { payLinkLine } from "./payLinks.js";
+import { payOptionsFor } from "./payLinks.js";
 import { awardPoints, revokePoints } from "./points.js";
 // --- end money & points ---
 import { renderBillsPage } from "./ui/billsPage.js";
@@ -208,6 +209,10 @@ function exampleName(members: readonly Member[], senderId: string | null): strin
   return member ? member.name.split(/\s+/)[0]! : "a roommate";
 }
 
+function firstName(name: string): string {
+  return name.split(/\s+/)[0] ?? name;
+}
+
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
@@ -252,6 +257,8 @@ export class BillsService {
     this.#ensureTables();
     // A draft waiting for “ok” (or a typed amount) is this member's open bills question for a day.
     registerPendingQuestion("bills", (memberId, kind) => kind === "ok" ? this.#openDraftAt(memberId) : null);
+    // Web chat buttons: a draft's Save / Split evenly / Discard, and “Mark paid” under “who owes”.
+    registerCardHandler("bills", (input) => this.#onCard(input.memberId, input.card, input.actionId ?? ""));
   }
 
   /** When the member's pending bill draft was last touched, while it can still be confirmed (ISO), or null. */
@@ -531,18 +538,16 @@ export class BillsService {
     return `${CATEGORY_EMOJI[bill.category]} ${bill.vendor || CATEGORY_LABEL[bill.category]}`;
   }
 
-  #splitPhrase(bill: Bill, members: Member[]): string {
+  /** “Split 4 ways, $20.00 each” or “Alex $30.00 · Maya $50.00”. */
+  #shortSplit(bill: Bill, members: Member[]): string {
     const shares = bill.shares.filter((share) => share.cents > 0);
-    const parts = shares.map((share) => `${this.#name(share.memberId, members)} ${dollars(share.cents, bill.currency)}`).join(" / ");
-    switch (bill.split.mode) {
-      case "equal": return `split ${shares.length} ways: ${parts}`;
-      case "percent": return `split ${bill.split.memberIds.map((id) => String(Math.round((bill.split.weights?.[id] ?? 0) * 100) / 100)).join("/")}: ${parts}`;
-      case "exact": return `custom split: ${parts}`;
-      case "item": return `split by item: ${parts}`;
-    }
+    const even = shares.length > 1 && shares.every((share) => Math.abs(share.cents - shares[0]!.cents) <= 1);
+    const exact = shares.every((share) => share.cents === shares[0]!.cents);
+    if (even) return `Split ${shares.length} ways, ${exact ? "" : "about "}${dollars(shares[0]!.cents, bill.currency)} each`;
+    return shares.map((share) => `${firstName(this.#name(share.memberId, members))} ${dollars(share.cents, bill.currency)}`).join(" · ");
   }
 
-  /** The chat confirm message for a draft. */
+  /** The chat confirm message for a draft: two short lines, plus Save / Split evenly / Edit buttons on the web. */
   draftSummary(bill: Bill, note = ""): string {
     const members = this.members();
     const today = this.#now();
@@ -557,17 +562,29 @@ export class BillsService {
     const exclude = bill.split.memberIds.length > 1 ? [...others].reverse().find((member) => bill.split.memberIds.includes(member.id)) : undefined;
     const payerAlt = others[0];
     const suggestions = [
-      `“split ${bill.split.memberIds.length === 3 ? "50/30/20" : bill.split.memberIds.length === 2 ? "60/40" : "evenly"}”`,
+      bill.split.memberIds.length === 3 ? "“split 50/30/20”" : bill.split.memberIds.length === 2 ? "“split 60/40”" : bill.split.mode !== "equal" ? "“split evenly”" : null,
       exclude ? `“exclude ${exclude.name.split(/\s+/)[0]}”` : null,
       payerAlt ? `“paid by ${payerAlt.name.split(/\s+/)[0]}”` : null,
     ].filter(Boolean).join(", ");
-    return `${this.title(bill)} ${dollars(bill.totalCents, bill.currency)}${due}${careful} · ${this.#splitPhrase(bill, members)} · paid by ${this.#name(bill.payerId, members)}${repeat}.${note}\nReply “ok” to save, or ${suggestions}.`;
+    const text = `${this.title(bill)} ${dollars(bill.totalCents, bill.currency)}${due}${repeat}${careful}\n${this.#shortSplit(bill, members)} · ${firstName(this.#name(bill.payerId, members))} paid${note ? `\n${note.trim()}` : ""}`;
+    const actions: ChatCardAction[] = [
+      { id: "save", label: "Save", style: "primary" },
+      ...(bill.split.mode !== "equal" ? [{ id: "even", label: "Split evenly", style: "secondary" as const }] : []),
+      { id: "edit", label: "Edit", style: "secondary", url: "/bills" },
+      { id: "discard", label: "Discard", style: "secondary" },
+    ];
+    return cardReply(text, { kind: "actions", id: `bills:draft:${bill.id}`, actions }, `Reply “ok” to save, or ${suggestions}.`);
   }
 
   #owesLine(bill: Bill, members: Member[]): string {
     const payer = this.#name(bill.payerId, members);
     const owing = bill.shares.filter((share) => share.memberId !== bill.payerId && share.cents > 0);
-    return owing.length ? owing.map((share) => `${this.#name(share.memberId, members)} owes ${payer} ${dollars(share.cents, bill.currency)}`).join(" · ") : "Nobody else owes anything.";
+    if (!owing.length) return "Nobody else owes anything.";
+    const names = owing.map((share) => firstName(this.#name(share.memberId, members)));
+    if (owing.length > 1 && owing.every((share) => share.cents === owing[0]!.cents)) {
+      return `${names.slice(0, -1).join(", ")}${owing.length > 2 ? "," : ""} and ${names.at(-1)} each owe ${firstName(payer)} ${dollars(owing[0]!.cents, bill.currency)}`;
+    }
+    return owing.map((share, index) => `${names[index]} owes ${firstName(payer)} ${dollars(share.cents, bill.currency)}`).join(" · ");
   }
 
   // -------------------------------------------------------------------------
@@ -687,7 +704,7 @@ export class BillsService {
     if (bill.state === "needs_reading") {
       const reason = result.readError ? `${result.readError} ` : "";
       const kind = this.#file(bill.fileId)?.mime_type === "application/pdf" ? "PDF" : "image";
-      return `${reason}Got the bill ${kind}. Ask your Claude to read it (GroupCart connector), or reply “bill <vendor> $<amount> due <date>”. Not a bill? “cancel bill”.`;
+      return `${reason}Got the bill ${kind}. Reply with the details, like “bill internet $80 due Nov 1”, or ask your Claude to read it. Not a bill? “cancel bill”.`;
     }
     return this.draftSummary(bill);
   }
@@ -1069,17 +1086,72 @@ export class BillsService {
     return { net: list, transfers, counts: { bills: bills.length, checkouts, payments: payments.length } };
   }
 
+  /**
+   * “who owes”: what the asker owes (“William, you owe Ashwin $24.70.”) with Pay and “Mark paid” buttons on the web, then
+   * everyone else's debts on one line. iMessage gets the pay links and the “paid Ashwin $24.70” hint instead.
+   */
   balancesReply(memberId?: string): string {
-    const { net, transfers } = this.balances();
-    if (!transfers.length) return "Everyone’s settled up. Nobody owes anything.";
-    const lines = transfers.map((transfer) => `${transfer.fromName} → ${transfer.toName} ${dollars(transfer.cents)}`);
-    const mine = memberId ? transfers.find((transfer) => transfer.fromId === memberId) : undefined;
-    const example = mine ?? transfers[0]!;
-    const standing = net.filter((entry) => entry.cents !== 0).sort((a, b) => b.cents - a.cents).map((entry) => `${entry.name} ${entry.cents > 0 ? "+" : "−"}${dollars(Math.abs(entry.cents))}`).join(" · ");
-    // --- Money & points: one-tap pay links for what the asker owes (opens Venmo/Cash App/PayPal; nothing is paid automatically) ---
-    const payLines = transfers.filter((transfer) => transfer.fromId === memberId).map((transfer) => payLinkLine(transfer.toId, transfer.toName, transfer.cents)).filter((line): line is string => Boolean(line));
+    const { transfers } = this.balances();
+    if (!transfers.length) return "Everyone’s settled up.";
+    const mine = transfers.filter((transfer) => transfer.fromId === memberId);
+    const others = transfers.filter((transfer) => transfer.fromId !== memberId)
+      .map((transfer) => `${firstName(transfer.fromName)} owes ${transfer.toId === memberId ? "you" : firstName(transfer.toName)} ${dollars(transfer.cents)}`);
+    if (!mine.length) return `${others.join(" · ")}.`;
+    // Named, since everyone in the group sees the reply.
+    const asker = firstName(this.#name(memberId));
+    const lines = [`${asker}, you owe ${mine.map((transfer) => `${firstName(transfer.toName)} ${dollars(transfer.cents)}`).join(" and ")}.`];
+    if (others.length) lines.push(`${others.join(" · ")}.`);
+    // --- Money & points: pay links only open Venmo/Cash App/PayPal; nothing is paid automatically ---
+    const actions: ChatCardAction[] = mine.flatMap((transfer) => {
+      const to = firstName(transfer.toName);
+      const option = payOptionsFor(transfer.toId, transfer.cents)[0];
+      return [
+        ...(option ? [{ id: `pay:${transfer.toId}`, label: `Pay ${to} · ${option.label}`, style: "primary" as const, url: option.url }] : []),
+        { id: `paid:${transfer.toId}:${transfer.cents}`, label: mine.length > 1 ? `Paid ${to}` : "Mark paid", style: option ? "secondary" as const : "primary" as const },
+      ];
+    });
     // --- end money & points ---
-    return `To settle up: ${lines.join(" · ")}.\nBalances: ${standing}.${payLines.length ? `\n${payLines.join("\n")}` : ""}\nAfter paying, reply “paid ${example.toName.split(/\s+/)[0]} ${dollars(example.cents)}”.`;
+    const example = mine[0]!;
+    const card: ChatCard = { kind: "actions", id: `bills:settle:${memberId}:${randomUUID().slice(0, 8)}`, actions };
+    return cardReply(lines.join("\n"), card, `After paying, reply “paid ${firstName(example.toName)} ${dollars(example.cents)}”.`);
+  }
+
+  /** Web chat card taps: draft buttons (“bills:draft:<billId>”) and Mark paid (“bills:settle:<debtorId>:<nonce>”). */
+  async #onCard(memberId: string, card: ChatCard, actionId: string): Promise<CardActionResult> {
+    if (card.kind !== "actions") return null;
+    const [, kind, target] = card.id.split(":");
+    const resolve = (resolved: string): ChatCard => ({ ...card, resolved });
+    if (kind === "draft" && target) {
+      const bill = this.getBill(target);
+      if (!bill || bill.state === "void") return { card: resolve("Discarded") };
+      if (bill.state === "saved" && actionId !== "discard") return { card: resolve("Saved") };
+      if (actionId === "save") {
+        const result = await this.saveBill(bill.id, { actorId: memberId, announce: false });
+        return result.ok ? { card: resolve(`Saved by ${firstName(this.#name(memberId))}`), reply: result.message } : { error: result.message };
+      }
+      if (actionId === "even") {
+        bill.split = { mode: "equal", memberIds: bill.split.memberIds.length ? bill.split.memberIds : this.members().map((member) => member.id) };
+        const error = this.#recompute(bill);
+        if (error) return { error };
+        this.#updateBill(bill);
+        return { card: resolve("Split evenly"), reply: this.draftSummary(bill) };
+      }
+      if (actionId === "discard") {
+        const result = this.deleteBill(bill.id);
+        return result.ok ? { card: resolve("Discarded"), reply: result.message } : { error: result.message };
+      }
+      return null;
+    }
+    const paid = /^paid:([^:]+):(\d+)$/.exec(actionId);
+    if (kind === "settle" && target && paid) {
+      if (memberId !== target) return { error: `Only ${firstName(this.#name(target))} can mark this paid.` };
+      const toId = paid[1]!;
+      const result = this.recordPayment({ fromId: target, toId, cents: Number(paid[2]), createdBy: memberId, messageId: `card:${card.id}:${actionId}` });
+      if (!result.ok) return { error: result.message };
+      const actions = card.actions.filter((action) => action.id !== actionId && action.id !== `pay:${toId}`);
+      return { card: actions.length ? { ...card, actions } : resolve("Paid back"), reply: result.message };
+    }
+    return null;
   }
 
   billsReply(): string {
@@ -1189,9 +1261,7 @@ export class BillsService {
       const fresh = Number(this.#db.prepare("INSERT OR IGNORE INTO bill_reminders (bill_id, kind, sent_at) VALUES (?, ?, ?)").run(bill.id, kind, this.#nowIso()).changes) > 0;
       if (!fresh) continue;
       const when = kind === "due_today" ? "today" : `${relativeDue(bill.dueDate, now)} (in ${plural(days, "day")})`;
-      const owing = bill.shares.filter((share) => share.memberId !== bill.payerId && share.cents > 0);
-      const owes = owing.map((share) => ` · ${this.#name(share.memberId, members)} owes ${dollars(share.cents, bill.currency)}`).join("");
-      await notifyGroup(`⏰ ${this.title(bill)} ${dollars(bill.totalCents, bill.currency)} is due ${when}. ${this.#name(bill.payerId, members)} pays it${owes}. Reply “mark ${(bill.vendor || CATEGORY_LABEL[bill.category]).toLowerCase()} paid” when it’s done.`);
+      await notifyGroup(`⏰ ${this.title(bill)} ${dollars(bill.totalCents, bill.currency)} is due ${when}. ${firstName(this.#name(bill.payerId, members))} pays it.\nText “mark ${(bill.vendor || CATEGORY_LABEL[bill.category]).toLowerCase()} paid” when it’s done.`);
     }
     // Monthly repeats: draft next month's bill a week before it's due, with the same split.
     for (const bill of this.listBills(["saved"])) {
@@ -1748,7 +1818,7 @@ export function setupBills(options: { store: CartStore; liveMode: boolean }): Bi
   registerRoute((request, response, url) => service.handleRequest(request, response, url));
   registerTools(service.tools());
   registerHelp("Bills: send a photo or screenshot of a bill (or “bill internet $80 due Nov 1”) and I’ll split it; reply “ok” to save. “bills” lists what’s due; “mark internet paid” stops reminders.");
-  registerHelp("Balances: “who owes” shows who owes whom; “paid <name> $20” records a payback.");
+  registerHelp("Balances: “who owes” shows who owes whom; “paid Sami $20” records a payback.");
   scheduleEvery("bills", 15 * 60_000, () => service.runSchedules());
   setBillsIntegrationStatus(() => service.integrationStatus());
   console.log(service.readerConfigured

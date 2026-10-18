@@ -8,6 +8,8 @@
 //   notifyGroup(text)          proactive message to the household group chat (also shown in the web chat)
 //   registerHelp(line)         one line appended to the "help" reply
 //   registerPendingQuestion(owner, source)  a feature's open questions, so a bare "ok"/number goes to the newest one
+//   registerCardHandler(owner, handler)     taps on web chat cards (polls, buttons) whose id starts with "<owner>:"
+//   postCard(text, card) / cardReply(text, card)  a bot message with a card (see "Chat cards" below)
 //   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
 // Live mode sends notifyGroup() messages to the household group that the store persists (upstream's
@@ -15,6 +17,7 @@
 // src/householdGroup.ts), so nudges and reminders work before anyone texts again. Every message is also kept in
 // an in-memory feed served at GET /api/feed and mirrored into the web chat; demo mode only does the latter.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { ChatCard, ChatMessage } from "./chat.js";
 
 export type CommandAttachment = {
   /** MIME type, e.g. image/png. */
@@ -233,6 +236,140 @@ export async function notifyGroup(text: string): Promise<void> {
     console.warn("Could not send a group notification:", error instanceof Error ? error.message : error);
   }
 }
+
+// --- Chat cards: polls and buttons under a bot message in the web chat (types in src/chat.ts) ---
+// A card's id is "<owner>:<rest>"; taps on it (POST /api/chat/cards) go to the handler registered for that owner,
+// which returns the updated card and/or a reply for the group (or null when the card is no longer actionable).
+// iMessage has no buttons, so everything sent there uses cardText(card).
+//
+// Two ways to post a card:
+//   postCard(text, card)   a proactive bot message (like notifyGroup), returning the web chat message
+//   cardReply(text, card)  for a command handler's reply string: returns the iMessage text (text + cardText), and the
+//                          web chat, when it records that reply, stores `text` with the card instead. Command
+//                          handlers return plain strings, so the card rides along by matching the reply text.
+export type CardActionInput = { memberId: string; card: ChatCard; actionId?: string; optionIds?: string[] };
+/** `error` is shown only to the member who tapped (e.g. "Only Maya can book this"); nothing is changed. */
+export type CardActionResult = { card?: ChatCard; reply?: string; error?: string } | null;
+export type CardHandler = (input: CardActionInput) => Promise<CardActionResult> | CardActionResult;
+const cardHandlers = new Map<string, CardHandler>();
+
+/** Registering an owner again replaces its handler, so the newest service instance answers (tests build several). */
+export function registerCardHandler(owner: string, handler: CardHandler): void {
+  cardHandlers.set(owner, handler);
+}
+
+export function cardHandler(owner: string): CardHandler | null {
+  return cardHandlers.get(owner) ?? null;
+}
+
+/** "events:12" → "events". */
+export function cardOwner(cardId: string): string {
+  return cardId.split(":")[0] ?? "";
+}
+
+function numbered(index: number, label: string, extra = ""): string {
+  return `${index + 1}. ${label}${extra}`;
+}
+
+/** Compact plain text for a card (iMessage and other text-only places): numbered options and how to answer. */
+export function cardText(card: ChatCard): string {
+  const lines: string[] = [];
+  if (card.kind === "poll") {
+    if (card.closed) return `${card.question}: ${card.result ?? "voting closed"}`;
+    lines.push(card.question, ...card.options.map((option, index) => numbered(index, option.label, option.detail ? ` (${option.detail})` : "")));
+    const numbers = card.options.map((_, index) => index + 1);
+    if (numbers.length === 1) lines.push("Reply 1.");
+    else lines.push(card.multi ? `Reply with every number that works, e.g. “${numbers.slice(0, 2).join(" ")}”.` : `Reply ${numbers.join("/")}.`);
+    return lines.join("\n");
+  }
+  if (card.kind === "choices") {
+    lines.push(card.title, ...card.items.map((item, index) => numbered(index, item.label, `${item.price ? ` · ${item.price}` : ""}${item.detail ? ` (${item.detail})` : ""}`)));
+  } else if (card.title) {
+    lines.push(card.title);
+  }
+  if (card.resolved) lines.push(`✓ ${card.resolved}`);
+  // Buttons that post an action, and app paths like "/bills", only work on the website; web links work anywhere.
+  else lines.push(...card.actions.filter((action) => action.url && /^https?:\/\//i.test(action.url)).map((action) => `${action.label}: ${action.url}`));
+  return lines.join("\n");
+}
+
+/** The web chat's card store, installed by setupProfilesAndChat. */
+export type CardSink = {
+  record(text: string, card: ChatCard, author?: string): ChatMessage | null;
+  /** A plain bot message under another author (the household coordinator posts as "Claude"). */
+  recordText(text: string, author: string): ChatMessage | null;
+  /** Replaces the newest message carrying card.id with this card (null when none is shown). */
+  refresh(card: ChatCard): ChatMessage | null;
+};
+let cardSink: CardSink | null = null;
+
+export function setCardSink(sink: CardSink | null): void {
+  cardSink = sink;
+}
+
+/**
+ * Posts a bot message with a card: recorded in the web chat (as `author`, default "GroupCart") and the feed, and in
+ * live mode sent to the household group as text plus cardText(card). Returns the web chat message (id and card).
+ */
+export async function postCard(text: string, card: ChatCard, options: { author?: string } = {}): Promise<ChatMessage | null> {
+  const fallback = [text.trim(), cardText(card)].filter(Boolean).join("\n");
+  recordGroupMessage(fallback);
+  const message = cardSink?.record(text.trim(), card, options.author) ?? null;
+  if (groupSender) {
+    try {
+      await groupSender(fallback);
+    } catch (error) {
+      console.warn("Could not send a card to the group:", error instanceof Error ? error.message : error);
+    }
+  }
+  return message;
+}
+
+/** Posts a plain bot message as `author` (web chat, feed, and the household group in live mode). */
+export async function postMessage(text: string, options: { author: string }): Promise<ChatMessage | null> {
+  recordGroupMessage(text);
+  const message = cardSink?.recordText(text.trim(), options.author) ?? null;
+  if (groupSender) {
+    try {
+      await groupSender(text);
+    } catch (error) {
+      console.warn("Could not send a message to the group:", error instanceof Error ? error.message : error);
+    }
+  }
+  return message;
+}
+
+/** Redraws a card already in the web chat after its state changed elsewhere (e.g. someone voted by text). */
+export function refreshCard(card: ChatCard): ChatMessage | null {
+  return cardSink?.refresh(card) ?? null;
+}
+
+type PendingReplyCard = { key: string; text: string; card: ChatCard; at: number };
+const pendingReplyCards: PendingReplyCard[] = [];
+const REPLY_CARD_TTL_MS = 10 * 60_000;
+
+/**
+ * A command reply with a card. Returns the text to send (text, cardText(card), then `hint`, e.g. “Reply “ok” to
+ * save.” for buttons iMessage can't show); when the web chat records a message containing it, it stores `text`
+ * and the card instead (claimReplyCard).
+ */
+export function cardReply(text: string, card: ChatCard, hint?: string): string {
+  const full = [text.trim(), cardText(card), hint?.trim()].filter(Boolean).join("\n");
+  const now = Date.now();
+  // Replies that never reach the chat (e.g. a tool result) expire.
+  const fresh = pendingReplyCards.filter((entry) => now - entry.at < REPLY_CARD_TTL_MS).slice(-49);
+  pendingReplyCards.splice(0, pendingReplyCards.length, ...fresh, { key: full, text: text.trim(), card, at: now });
+  return full;
+}
+
+/** For the web chat: the card a recorded bot text was built with (consumed once), and the text to show with it. */
+export function claimReplyCard(recorded: string): { text: string; card: ChatCard } | null {
+  const index = pendingReplyCards.findIndex((entry) => recorded.includes(entry.key));
+  if (index < 0) return null;
+  const [entry] = pendingReplyCards.splice(index, 1);
+  return { text: recorded.replace(entry!.key, entry!.text).trim(), card: entry!.card };
+}
+// --- end chat cards ---
 
 export function recentFeed(limit = 20): FeedEntry[] {
   return feed.slice(-limit).reverse();
