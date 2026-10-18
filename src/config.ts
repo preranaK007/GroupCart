@@ -21,6 +21,10 @@ const members = parseMembers(process.env.GROUP_CART_MEMBERS);
 const port = positiveInteger(process.env.PORT, 3000);
 const dashboardPublicUrl = (process.env.GROUP_CART_PUBLIC_URL?.trim() || `http://127.0.0.1:${port}`).replace(/\/$/, "");
 const configuredCartModality = process.env.KROGER_CART_MODALITY?.trim().toLocaleUpperCase();
+const reminderHourValue = Number(process.env.GROUP_CART_LIST_REMINDER_HOUR);
+const listReminderHour = process.env.GROUP_CART_LIST_REMINDER_HOUR?.trim() && Number.isInteger(reminderHourValue) && reminderHourValue >= 0 && reminderHourValue <= 23
+  ? reminderHourValue
+  : 9;
 
 export const config = {
   spectrumProjectId: process.env.PROJECT_ID?.trim(),
@@ -36,6 +40,10 @@ export const config = {
   krogerLocationId: process.env.KROGER_LOCATION_ID?.trim(),
   krogerRedirectUri: process.env.KROGER_REDIRECT_URI?.trim() || `${dashboardPublicUrl}/api/kroger/oauth/callback`,
   krogerCartModality: configuredCartModality === "DELIVERY" ? "DELIVERY" as const : "PICKUP" as const,
+  /** Proactive recurring-list check-ins to the household group (live mode only). */
+  listRemindersEnabled: !/^(off|false|0|no)$/i.test(process.env.GROUP_CART_LIST_REMINDERS?.trim() ?? ""),
+  listReminderHour,
+  listReminderCheckMinutes: positiveInteger(process.env.GROUP_CART_LIST_REMINDER_CHECK_MINUTES, 15),
 };
 
 export function validateSpectrumConfig(): void {
