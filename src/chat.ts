@@ -453,13 +453,9 @@ export class ChatService {
 
   /** Live loop: sends a GroupCart reply into the group (with typing) and records it. */
   async replyInGroup(channel: GroupChannel, text: string): Promise<void> {
-    let sentId: string | null | void = null;
-    try {
-      sentId = await channel.respond(text);
-    } finally {
-      const recorded = this.recordBot(text, "reply");
-      if (recorded && sentId) this.linkSent(recorded.id, sentId);
-    }
+    const sentId = await channel.respond(text);
+    const recorded = this.recordBot(text, "reply");
+    if (recorded && sentId) this.linkSent(recorded.id, sentId);
   }
 
   /** Remembers iMessage's id for a message GroupCart sent to the group (bot posts, web relays). */

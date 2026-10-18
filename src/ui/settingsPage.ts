@@ -61,6 +61,7 @@ function checkoutLabel(context: SettingsContext): string {
     case "choosing_account": return chip("Choosing account", "warning", "clock");
     case "replacement_review": return chip("Unavailable items to review", "warning", "alert") + button({ label: "Review", variant: "tonal", size: "sm", href: "/groceries" });
     case "adding": return chip("Sending to Kroger", "accent", "sync");
+    case "transfer_uncertain": return chip("Check Kroger cart", "warning", "alert");
     default: return chip(pending.status.replace(/_/g, " "), "neutral");
   }
 }

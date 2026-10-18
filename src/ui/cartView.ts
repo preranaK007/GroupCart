@@ -18,6 +18,7 @@ export type OrderState =
   | { step: "choosing"; mine: boolean; requesterName: string }
   | { step: "signin"; mine: boolean; accountName: string; signInUrl: string; canSignInHere: boolean; needsHost: boolean; canCancel: boolean }
   | { step: "sending"; accountName: string }
+  | { step: "uncertain"; canCancel: boolean }
   | { step: "sent"; mine: boolean; accountName: string; itemCount: number; at: string }
   | { step: "pending"; status: string };
 
@@ -54,6 +55,7 @@ var CartView = (function () {
     }
     var pending = cart.krogerCheckout;
     if (pending) {
+      if (pending.status === "transfer_uncertain") return { step: "uncertain", canCancel: pending.requesterId === viewer };
       if (pending.status === "adding") return { step: "sending", accountName: nameOf(pending.selectedMemberId) };
       if (pending.status === "replacement_review") return { step: "review", items: cart.krogerReview || [] };
       if (pending.status === "choosing_account") return { step: "choosing", mine: pending.requesterId === viewer, requesterName: nameOf(pending.requesterId) };

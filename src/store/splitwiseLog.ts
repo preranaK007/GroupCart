@@ -15,8 +15,8 @@ type SplitwiseExpenseRow = {
 /**
  * Splitwise expense log: persistence for one Splitwise expense per completed
  * checkout, plus the checkout hooks (src/splitwise.ts) that record and send it.
- * Mock checkout (cartLedger) and Kroger checkout (krogerCheckout) call
- * `recordCheckout` inside their transaction; a failure never breaks checkout.
+ * Mock checkout and confirmed receipt totals call `recordCheckout` inside their
+ * transaction. Merely sending a cart to Kroger must never create an expense.
  */
 export class SplitwiseLog {
   #hooks: CheckoutHooks | undefined;
@@ -29,7 +29,10 @@ export class SplitwiseLog {
 
   /** Reply to “splitwise” / “settle” (status only; no network). */
   statusReply(): string {
-    return this.#hooks?.status() ?? "Splitwise logging isn’t set up in this GroupCart.";
+    const pending = this.ctx.db.prepare("SELECT count(*) AS n FROM grocery_purchases WHERE household_id = ? AND status IN ('awaiting_total', 'awaiting_confirmation')")
+      .get(this.ctx.householdId) as { n: number };
+    const status = this.#hooks?.status() ?? "Splitwise logging isn’t set up in this GroupCart.";
+    return pending.n ? `${status}\n${pending.n} grocery purchase draft(s) still need the shopper’s paid total and confirmation; they are not expenses. Text “purchases”.` : status;
   }
 
   /** Reply to “splitwise retry”, or undefined when no hooks are installed (the text falls through to status). */

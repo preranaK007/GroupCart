@@ -28,7 +28,7 @@ export class ListText {
     const estimate = this.m.lists.listEstimate(items);
     const names = items.slice(0, 6).map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ""}${this.m.lists.listItemName(item)}`);
     const more = items.length > 6 ? ` +${items.length - 6} more` : "";
-    return `🛒 ${title} groceries are due: ${names.join(", ")}${more} (about ${money(estimate.cents)} est.)\nReply “load ${command} list” to add them to the cart.`;
+    return `🛒 ${title} groceries are due: ${names.join(", ")}${more} (about ${money(estimate.cents)} est.)\nReply “order our ${command} list” (or “load ${command} list”) to add them to the cart.`;
   }
 
   formatListView(list: ListKey): string {

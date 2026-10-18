@@ -369,6 +369,10 @@ function orderHtml(state) {
     }
     case "sending":
       return lead("sync", "accent", "Adding items to " + esc(state.accountName) + "’s Kroger cart…");
+    case "uncertain":
+      return lead("alert", "warning", "Transfer interrupted · check the Kroger cart")
+        + note("Kroger may already have the items. Inspect that cart before trying again. No order or payment was placed by GroupCart.")
+        + (state.canCancel ? row(cancelButton) : note("The member who started checkout can cancel it after inspecting Kroger."));
     case "sent":
       return lead("checkCircle", "success", "Sent " + state.itemCount + (state.itemCount === 1 ? " item" : " items") + " to " + (state.mine ? "your" : esc(state.accountName) + "’s") + " Kroger cart")
         + row('<a class="gc-btn ' + (state.mine ? "" : "gc-btn-outline ") + 'cart-order-btn" href="' + KROGER_CART_URL + '" target="_blank" rel="noopener noreferrer">' + icon("external") + '<span>Open Kroger cart</span></a>')

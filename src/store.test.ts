@@ -103,7 +103,7 @@ test("help keeps upstream's text and adds the calendar, splits/Splitwise, and re
   const { store, alex } = newStore("help");
   registerHelp("Test feature: “ping” answers “pong”.");
   const help = store.processIncomingText(id(), alex.id, "help") ?? "";
-  for (const expected of [/start sharing with Maya and Jordan/, /Recurring lists:/, /Calendar: “calendar”/, /Splits: after checkout .* Splitwise/, /Test feature: “ping”/]) {
+  for (const expected of [/start sharing with Maya and Jordan/, /Recurring lists:/, /Calendar: “calendar”/, /Purchases: sending products to Kroger creates a draft/, /Test feature: “ping”/]) {
     assert.match(help, expected);
   }
   store.close();

@@ -25,6 +25,7 @@ import type { HouseholdCoordinator } from "./agent/coordinator.js";
 import { setupCoordinator } from "./agent/setup.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 import { setupMoneyPoints } from "./moneyPoints.js";
+import { BotRecovery } from "./botRecovery.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -49,7 +50,7 @@ const store = new CartStore(
 );
 store.registerMembers(members);
 
-// --- Splitwise: log each completed checkout as one expense (simulated in demo mode) ---
+// --- Splitwise: confirmed paid receipt totals (or explicitly simulated demo checkouts) ---
 const splitwise = new SplitwiseService(store, splitwiseConfig);
 store.setCheckoutHooks(splitwise);
 for (const warning of splitwise.warnings) console.warn(warning);
@@ -109,10 +110,17 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
 
 /** GroupCart's built-in command handling: feature commands, then the cart (also the coordinator's run_groupcart_command). */
 async function runGroupCartCommand(message: CommandContext): Promise<string | null> {
+  const recorded = store.recordedReply(message.messageId);
+  if (recorded !== undefined) return recorded;
+  const purchaseReply = store.processPurchaseCommand(message.messageId, message.memberId, message.text);
+  if (purchaseReply !== undefined) return purchaseReply;
   // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
   // recurring-list phrases the store owns (upstream), which go straight to the store.
   const commandReply = store.ownsMessage(message.text, message.memberId) ? null : await runCommands(message);
-  if (commandReply) return commandReply;
+  if (commandReply) {
+    store.recordCommandReply(message.messageId, commandReply);
+    return commandReply;
+  }
   const text = message.text;
   if (!text.trim()) return null;
   if (krogerClient) {
@@ -206,6 +214,16 @@ if (!liveMode) {
   });
   // --- end profiles & chat ---
   const auditedSpaces = new Set<string>();
+  const recovery = new BotRecovery(store.database, store.household, async (ref, text) => {
+    const space = await imessage(app).space.get(ref.id, ref.phone ? { phone: ref.phone } : undefined);
+    if (imessage(space).type !== "group") throw new Error("Reply target is not a group.");
+    await social.replyInGroup(space, text);
+  });
+  const replyRetryTimer = setInterval(() => {
+    void recovery.drain().catch(() => console.warn("Reply recovery is temporarily unavailable; pending replies remain saved."));
+  }, 5_000);
+  replyRetryTimer.unref();
+  void recovery.drain().catch(() => console.warn("Saved replies will be retried shortly."));
 
   // Recurring-list check-ins. Spectrum's cloud iMessage provider can send to an
   // existing conversation outside the reply loop via `space.get(chatGuid, { phone })`.
@@ -242,86 +260,84 @@ if (!liveMode) {
 
   try {
     for await (const [space, message] of app.messages) {
-      if (message.platform !== "imessage") continue;
-      const groupSpace = imessage(space);
-      if (groupSpace.type !== "group") continue;
-      if (!auditedSpaces.has(space.id)) {
-        auditedSpaces.add(space.id);
-        void auditGroupRoster(space, members, groupSpace.phone);
-      }
-      if (message.direction === "outbound") continue;
-      // Membership events (dedicated line only) carry no `direction` and are not text, so handle them first.
-      if (isMembershipEvent(message.content)) {
-        try {
-          await handleMembershipEvent(space, message, members, store, groupSpace.phone);
-        } catch (error) {
-          console.error(`Could not handle a group membership event: ${error instanceof Error ? error.message : "unknown error"}`);
-        }
-        continue;
-      }
-      if (message.direction !== "inbound") continue;
-      if (message.content.type !== "text" && message.content.type !== "attachment" && message.content.type !== "poll_option" && message.content.type !== "reply") continue;
-
-      const senderHandle = message.sender?.id;
-      if (!senderHandle) continue;
-      const configuredMember = findMember(members, senderHandle);
-      if (!configuredMember) {
-        console.warn(`Ignored a group message from ${maskHandle(senderHandle)}, which is not listed in GROUP_CART_MEMBERS.`);
-        continue;
-      }
-
-      const member = store.memberForHandle(configuredMember.handle);
-      if (!member) continue;
-      // Upstream: persist the household group an allowlisted member wrote from. Proactive messages (list
-      // check-ins, notifyGroup(), web chat relays) only ever go there (src/householdGroup.ts).
-      group.remember(space, groupSpace.phone);
-      // A threaded reply carries the message it answers; its own content is text or a photo like any other.
-      const reply = message.content.type === "reply" ? message.content : null;
-      const content = reply ? reply.content : message.content;
-      if (content.type !== "text" && content.type !== "attachment" && content.type !== "poll_option") continue;
-      const replyToId = reply
-        ? social.chat.findReplyTarget({ messageId: reply.target.id, text: reply.target.content.type === "text" ? reply.target.content.text : null })
-        : null;
-      const replyTo = replyToId ? social.chat.quote(replyToId) ?? undefined : undefined;
-      // A vote on one of GroupCart's native iMessage polls updates that poll (web chat card included); not a message.
-      if (content.type === "poll_option") {
-        console.log(`iMessage poll vote: ${member.name} ${content.selected ? "picked" : "unpicked"} “${content.option.title}”.`);
-        const applied = await social.chat.voteFromGroup(member, { nativePollId: content.pollMessageGuid ?? content.poll.pollMessageGuid, optionLabel: content.option.title, selected: content.selected })
-          .catch((error) => { console.warn("Could not apply an iMessage poll vote:", error instanceof Error ? error.message : error); return true; });
-        if (!applied) console.log("Ignored a vote on an iMessage poll GroupCart didn't post.");
-        continue;
-      }
-      const text = content.type === "text" ? content.text : "";
-      // --- Profiles & chat: mirror into the web chat, process like any member message, reply (and record) ---
-      const attachments = social.recordInbound({
-        messageId: message.id,
-        memberId: member.id,
-        memberName: member.name,
-        text,
-        attachments: content.type === "attachment"
-          ? [{ mimeType: content.mimeType, name: content.name, size: content.size, read: () => content.read() }]
-          : [],
-        at: message.timestamp,
-        replyToId,
-      });
-      const answer = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments, ...(replyTo ? { replyTo } : {}) });
-      if (!answer) continue;
-
-      // Fallback delivery (upstream): a due list check-in not yet sent rides along with
-      // this group reply (still at most once per cycle).
-      const reminder = config.listRemindersEnabled ? store.claimDueListReminders() : null;
-      const outgoing = reminder ? `${answer}\n\n${reminder.text}` : answer;
       try {
-        await social.replyInGroup(space, outgoing);
-      } catch (error) {
-        if (reminder) store.releaseListReminders(reminder);
-        throw error;
+        if (message.platform !== "imessage") continue;
+        const groupSpace = imessage(space);
+        if (groupSpace.type !== "group") continue;
+        if (!auditedSpaces.has(space.id)) {
+          auditedSpaces.add(space.id);
+          void auditGroupRoster(space, members, groupSpace.phone);
+        }
+        if (message.direction === "outbound") continue;
+        // Membership events (dedicated line only) carry no `direction` and are not text, so handle them first.
+        if (isMembershipEvent(message.content)) {
+          try {
+            await handleMembershipEvent(space, message, members, store, groupSpace.phone);
+          } catch (error) {
+            console.error(`Could not handle a group membership event: ${error instanceof Error ? error.message : "unknown error"}`);
+          }
+          continue;
+        }
+        if (message.direction !== "inbound") continue;
+        if (message.content.type !== "text" && message.content.type !== "attachment" && message.content.type !== "poll_option" && message.content.type !== "reply") continue;
+
+        const senderHandle = message.sender?.id;
+        if (!senderHandle) continue;
+        const configuredMember = findMember(members, senderHandle);
+        if (!configuredMember) {
+          console.warn(`Ignored a group message from ${maskHandle(senderHandle)}, which is not listed in GROUP_CART_MEMBERS.`);
+          continue;
+        }
+
+        const member = store.memberForHandle(configuredMember.handle);
+        if (!member) continue;
+        // Upstream: persist the household group an allowlisted member wrote from. Proactive messages (list
+        // check-ins, notifyGroup(), web chat relays) only ever go there (src/householdGroup.ts).
+        group.remember(space, groupSpace.phone);
+        // A threaded reply carries the message it answers; pass that context to the coordinator and features.
+        const reply = message.content.type === "reply" ? message.content : null;
+        const content = reply ? reply.content : message.content;
+        if (content.type !== "text" && content.type !== "attachment" && content.type !== "poll_option") continue;
+        const replyToId = reply
+          ? social.chat.findReplyTarget({ messageId: reply.target.id, text: reply.target.content.type === "text" ? reply.target.content.text : null })
+          : null;
+        const replyTo = replyToId ? social.chat.quote(replyToId) ?? undefined : undefined;
+        // A vote on one of GroupCart's native iMessage polls updates that poll (web chat card included); not a message.
+        if (content.type === "poll_option") {
+          console.log(`iMessage poll vote: ${member.name} ${content.selected ? "picked" : "unpicked"} “${content.option.title}”.`);
+          const applied = await social.chat.voteFromGroup(member, { nativePollId: content.pollMessageGuid ?? content.poll.pollMessageGuid, optionLabel: content.option.title, selected: content.selected })
+            .catch((error) => { console.warn("Could not apply an iMessage poll vote:", error instanceof Error ? error.message : error); return true; });
+          if (!applied) console.log("Ignored a vote on an iMessage poll GroupCart didn't post.");
+          continue;
+        }
+        await recovery.handle(message.id, { id: space.id, phone: groupSpace.phone }, async () => {
+          const text = content.type === "text" ? content.text : "";
+          // --- Profiles & chat: mirror into the web chat, process like any member message, reply (and record) ---
+          const attachments = social.recordInbound({
+            messageId: message.id,
+            memberId: member.id,
+            memberName: member.name,
+            text,
+            attachments: content.type === "attachment"
+              ? [{ mimeType: content.mimeType, name: content.name, size: content.size, read: () => content.read() }]
+              : [],
+            at: message.timestamp,
+            replyToId,
+          });
+          const answer = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments, ...(replyTo ? { replyTo } : {}) });
+          if (!answer) return null;
+          // Once attached, the persisted reply queue owns delivery of this claimed reminder.
+          const reminder = config.listRemindersEnabled ? store.claimDueListReminders() : null;
+          if (reminder) recordGroupMessage(reminder.text);
+          return reminder ? `${answer}\n\n${reminder.text}` : answer;
+        });
+      } catch {
+        console.warn("Could not handle a household message; the bot is continuing.");
       }
-      if (reminder) recordGroupMessage(reminder.text); // the web chat already has it as part of the reply
-      // --- end profiles & chat ---
-      console.log(`Replied in the household group for ${configuredMember.name}.`);
     }
   } finally {
+    clearInterval(replyRetryTimer);
+    await recovery.waitForIdle();
     if (reminderTimer) clearInterval(reminderTimer);
     stopSchedules();
     dashboard.close();

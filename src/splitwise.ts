@@ -305,7 +305,7 @@ export class SplitwiseService implements CheckoutHooks {
     const owedSum = shares.reduce((sum, share) => sum + share.owedCents, 0);
     if (owedSum !== checkout.totalCents) problems.push(`Member shares (${money(owedSum)}) don’t add up to the total (${money(checkout.totalCents)}).`);
 
-    const description = `Groceries · GroupCart ${checkout.source === "kroger" ? "Kroger" : "demo"} checkout`;
+    const description = `Groceries · GroupCart ${checkout.source === "kroger" ? "confirmed purchase" : "demo checkout"}`;
     const itemLines = checkout.items.slice(0, 25).map((item) => `${item.quantity} × ${item.name} — ${money(item.totalCents)}`);
     if (checkout.items.length > 25) itemLines.push(`…and ${checkout.items.length - 25} more`);
     const details = `${itemLines.join("\n")}\n\n${this.#marker(checkout.checkoutKey)}`;

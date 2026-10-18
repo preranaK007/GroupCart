@@ -25,6 +25,18 @@ after(() => {
 const sami: Member = { id: "m-sami", handle: "demo:sami", name: "Sami" };
 const maya: Member = { id: "m-maya", handle: "demo:maya", name: "Maya" };
 const newChat = () => new ChatService({ db, filesDir: directory, liveMode: false, members: () => [sami, maya], process: async () => null });
+
+test("failed group replies are not recorded as sent; successful retries retain the native reply target", async () => {
+  const chat = newChat();
+  const before = chat.list({ limit: 200 }).messages.length;
+  const channel = { sendText: async () => {}, sendImage: async () => {}, respond: async (): Promise<string> => { throw new Error("offline"); } };
+  await assert.rejects(chat.replyInGroup(channel, "Recovered grocery reply"), /offline/);
+  assert.equal(chat.list({ limit: 200 }).messages.length, before);
+  await chat.replyInGroup({ ...channel, respond: async () => "recovered-native-message" }, "Recovered grocery reply");
+  const target = chat.findReplyTarget({ messageId: "recovered-native-message", text: null });
+  assert.ok(target);
+  assert.equal(chat.get(target)?.text, "Recovered grocery reply");
+});
 const poll = (id: string, multi: boolean): PollCard => ({
   kind: "poll", id, question: "Movie night?", multi, votes: {},
   options: [{ id: "fri", label: "Fri 8 PM" }, { id: "sat", label: "Sat 7 PM", detail: "Maya busy" }],

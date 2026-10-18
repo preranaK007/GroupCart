@@ -5,6 +5,7 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 ## Project structure
 
 - `src/index.ts`: Spectrum startup, group-message filtering, household mapping, the recurring-list check-in timer, and replies. `processMemberMessage` is the single path for a member's message (feature commands via `runCommands`, then the cart). The iMessage loop and the web chat both call it; keep it that way.
+- `src/supervisor.ts`: `npm run start` restarts unexpected bot exits with backoff; `src/botRecovery.ts`: persisted reply delivery, per-message failure isolation, and restart recovery. Retry saved replies, never uncertain member operations or Kroger transfers.
 - `src/store.ts`: `CartStore` facade — the public API used by `index.ts`/`dashboard.ts` and the feature modules (including `database`/`household`, `memberForHandle`/`registerMembers` with handle normalization and aliases, `markMessageProcessed`, `recordedReply`/`recordCommandReply`, Splitwise and Google Calendar persistence), message-ID idempotency, and the order in which commands and pending states are routed to the modules below.
 - `src/store/`: the feature modules behind `CartStore`. Each class takes the shared `StoreContext` (database, household settings, reply/member helpers) and the `StoreModules` registry to call the others.
   - `schema.ts` (tables and migrations), `context.ts`, `types.ts`.
@@ -15,6 +16,7 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
   - `krogerCheckout.ts`: availability precheck, replacements, account choice, and adding to a Kroger cart.
   - `recurringLists.ts`, `listCommands.ts`, `listText.ts`: recurring lists (state and cadence, conversation flows, reply text), plus the persisted household group (`rememberGroupSpace`/`groupSpace`).
   - `splitwiseLog.ts`: the `splitwise_expenses` log, checkout hooks called by mock and Kroger checkout, and the `splitwise`/`settle`/`splitwise retry` commands; `googleCalendarAccounts.ts`: per-member Google Calendar tokens.
+  - `purchases.ts`: Kroger transfers create purchase drafts only. The selected shopper supplies the actual paid total, reviews the proportional split, then explicitly confirms before an expense is logged. Purchase drafts survive restart; discarded drafts do not refund or cancel retailer orders.
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
 - `src/lists.ts`: recurring weekly/biweekly/monthly list command parsing and cadence math (persistence lives in `src/store/recurringLists.ts`).
 - `src/reminders.ts`: delivery of due recurring-list check-ins to the remembered household group space.
