@@ -1338,7 +1338,7 @@ export class BillsService {
   dashboardState(): Record<string, unknown> {
     const today = this.#todayIso();
     const bills = this.listBills();
-    const payments = (this.#db.prepare("SELECT * FROM bill_payments WHERE household_id = ? ORDER BY created_at DESC LIMIT 10").all(this.#household) as PaymentRow[])
+    const payments = (this.#db.prepare("SELECT * FROM bill_payments WHERE household_id = ? ORDER BY created_at DESC LIMIT 100").all(this.#household) as PaymentRow[])
       .map((payment) => ({ id: payment.id, fromId: payment.from_member_id, toId: payment.to_member_id, cents: payment.cents, note: payment.note, createdAt: payment.created_at }));
     return {
       demoMode: this.demoMode,

@@ -57,7 +57,6 @@ const styles = `
 .bl-bal-name { flex:1; min-width:0; font-weight:500; }
 .bl-amt { font-variant-numeric:tabular-nums; font-weight:500; white-space:nowrap; }
 .bl-pos { color:var(--gc-success); } .bl-neg { color:var(--gc-danger); } .bl-zero { color:var(--gc-muted); font-weight:400; font-size:var(--gc-fs-sm); }
-.bl-settle { margin-top:var(--gc-space-3); padding-top:var(--gc-space-3); border-top:1px solid var(--gc-border); display:grid; gap:var(--gc-space-2); }
 .bl-transfer { display:flex; align-items:center; gap:8px; }
 .bl-transfer .bl-amt { margin-left:auto; }
 .bl-even { display:flex; align-items:center; gap:var(--gc-space-2); color:var(--gc-success); font-weight:500; padding:var(--gc-space-2) 0; }
@@ -116,6 +115,18 @@ const styles = `
 .bl-err:empty { display:none; }
 .bl-pay-grid { display:grid; grid-template-columns:1fr auto 1fr; gap:var(--gc-space-2); align-items:end; }
 .bl-pay-grid .bl-arrow { padding-bottom:10px; }
+.bl-tabs { display:inline-flex; padding:3px; gap:2px; border-radius:999px; background:var(--gc-surface-2); border:1px solid var(--gc-border); }
+.bl-tabs button { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 14px; border:0; border-radius:999px; background:transparent; color:var(--gc-muted); font:500 var(--gc-fs-sm) var(--gc-font); cursor:pointer; }
+.bl-tabs button[aria-selected="true"] { background:var(--gc-surface); color:var(--gc-text); box-shadow:0 1px 2px rgba(0,0,0,.18); }
+.bl-tabs button:focus-visible { outline:2px solid var(--gc-focus); outline-offset:1px; }
+.bl-tab-count { min-width:18px; height:18px; padding:0 5px; border-radius:999px; background:var(--gc-accent); color:var(--gc-on-accent); font-size:11px; line-height:18px; text-align:center; }
+.bl-tab-count:empty { display:none; }
+.bl-section { display:flex; align-items:baseline; gap:8px; margin:var(--gc-space-4) 0 var(--gc-space-2); font-size:var(--gc-fs-sm); font-weight:600; color:var(--gc-text-2); }
+.bl-section:first-child { margin-top:0; }
+.bl-owes .bl-transfer { padding:10px 0; border-top:1px solid var(--gc-border); }
+.bl-owes .bl-transfer:first-child { border-top:0; }
+.bl-owes .bl-transfer .gc-meta { color:var(--gc-text); font-size:var(--gc-fs-md); }
+.bl-hist-day { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
 .bl-toast { position:fixed; left:50%; bottom:calc(var(--gc-space-5) + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px); opacity:0; z-index:40; max-width:min(560px, calc(100vw - 32px)); padding:12px 16px; border-radius:var(--gc-radius-md); background:var(--gc-tooltip-bg); color:var(--gc-tooltip-text); font-size:var(--gc-fs-sm); box-shadow:0 4px 12px rgba(0,0,0,.2); transition:opacity .2s ease, transform .2s ease; pointer-events:none; }
 .bl-toast.is-on { opacity:1; transform:translateX(-50%) translateY(0); }
 @media (max-width: 760px) {
@@ -154,18 +165,30 @@ const body = `
         <div class="gc-card-head"><h2 class="gc-card-title">To review</h2><span class="gc-meta" id="blReviewMeta"></span></div>
         <ul class="gc-list" id="blReviewList"></ul>
       </section>
-      <section class="gc-card" id="blUpcoming">
-        <div class="gc-card-head"><span class="gc-card-icon">${icon("calendar", { size: 20 })}</span><h2 class="gc-card-title">Upcoming</h2><span class="gc-meta" id="blUpcomingMeta"></span></div>
-        <ul class="gc-list" id="blUpcomingList"></ul>
-      </section>
-      <section class="gc-card" id="blPaid" hidden>
-        <div class="gc-card-head"><span class="gc-card-icon">${icon("checkCircle", { size: 20 })}</span><h2 class="gc-card-title">Paid</h2></div>
-        <ul class="gc-list" id="blPaidList"></ul>
+      <section class="gc-card" id="blMoney">
+        <div class="gc-card-head">
+          <div class="bl-tabs" role="tablist" aria-label="Money">
+            <button type="button" role="tab" id="blTabOut" data-tab="out" aria-controls="blOut" aria-selected="true">Outstanding<span class="bl-tab-count" id="blOutCount"></span></button>
+            <button type="button" role="tab" id="blTabHist" data-tab="hist" aria-controls="blHist" aria-selected="false" tabindex="-1">History</button>
+          </div>
+          <span class="gc-spacer"></span>${button({ label: "Record payment", variant: "tonal", size: "sm", id: "blPayOpen" })}
+        </div>
+        <div id="blOut" role="tabpanel" aria-labelledby="blTabOut">
+          <h3 class="bl-section">Who owes whom</h3>
+          <div id="blOwes"></div>
+          <div id="blDue" hidden>
+            <h3 class="bl-section">Bills to pay<span class="gc-meta" id="blUpcomingMeta"></span></h3>
+            <ul class="gc-list" id="blUpcomingList"></ul>
+          </div>
+        </div>
+        <div id="blHist" role="tabpanel" aria-labelledby="blTabHist" hidden>
+          <ul class="gc-list" id="blHistList"></ul>
+        </div>
       </section>
     </div>
     <div class="gc-stack">
       <section class="gc-card" id="blBalances">
-        <div class="gc-card-head"><span class="gc-card-icon">${icon("wallet", { size: 20 })}</span><h2 class="gc-card-title">Balances</h2><span class="gc-spacer"></span>${button({ label: "Record payment", variant: "tonal", size: "sm", id: "blPayOpen" })}</div>
+        <div class="gc-card-head"><span class="gc-card-icon">${icon("wallet", { size: 20 })}</span><h2 class="gc-card-title">Balances</h2></div>
         <div id="blBalancesBody"></div>
       </section>
       <section class="gc-card" id="blConnections">
@@ -243,11 +266,11 @@ ${POINTS_CLIENT_JS}
     var payer = bill.payerId ? GC.avatar(member(bill.payerId), all, 20) : "";
     return payer + (owing.length ? '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span><span class="gc-avatars">' + owing.map(function (m) { return GC.avatar(m, all, 20); }).join("") + '</span>' : "");
   }
-  function billRow(bill, withDate) {
+  function billRow(bill, withDate, chip) {
     var title = '<span class="bl-title">' + (withDate && bill.dueDate ? '<span class="bl-mini" aria-hidden="true">' + GC.esc(bill.emoji) + '</span>' : "") + '<span>' + GC.esc(bill.vendor || "Bill") + '</span></span>';
     var sub = '<div class="bl-sub">' + people(bill) + (bill.recurring ? '<span title="Repeats monthly">' + GC.icon("sync") + '</span>' : "") + '</div>';
     return '<li class="gc-list-item bl-row" tabindex="0" role="button" data-bill="' + GC.esc(bill.id) + '">' + (withDate ? dateBadge(bill) : '<span class="bl-emoji bl-cat-' + bill.category + '" aria-hidden="true">' + GC.esc(bill.emoji) + '</span>')
-      + '<div class="gc-list-main">' + title + sub + '</div><div class="bl-trail"><span class="gc-amount">' + (bill.totalCents ? money(bill.totalCents, bill.currency) : "–") + '</span>' + statusChip(bill) + '</div></li>';
+      + '<div class="gc-list-main">' + title + sub + '</div><div class="bl-trail"><span class="gc-amount">' + (bill.totalCents ? money(bill.totalCents, bill.currency) : "–") + '</span>' + (chip === undefined ? statusChip(bill) : chip) + '</div></li>';
   }
   function reviewRow(bill) {
     var thumb = bill.file && bill.file.preview ? '<img class="bl-thumb" alt="" src="/api/bills/files/' + GC.esc(bill.file.id) + (bill.file.mimeType === "application/pdf" ? "?preview=1" : "") + '" loading="lazy" />' : '<span class="bl-emoji bl-cat-' + bill.category + '" aria-hidden="true">' + GC.esc(bill.emoji) + '</span>';
@@ -262,14 +285,33 @@ ${POINTS_CLIENT_JS}
     $("blReview").hidden = !review.length;
     $("blReviewMeta").textContent = review.length ? String(review.length) : "";
     $("blReviewList").innerHTML = review.map(reviewRow).join("");
+    // Outstanding: bills still to be paid to the company. What roommates owe each other is in renderBalances.
     var upcoming = bills.filter(function (b) { return b.state === "saved" && !b.paidAt; }).sort(function (a, b) { return (a.dueDate || "9999").localeCompare(b.dueDate || "9999"); });
     var total = upcoming.reduce(function (t, b) { return t + (b.currency === "USD" ? b.totalCents || 0 : 0); }, 0);
+    $("blDue").hidden = !upcoming.length;
     $("blUpcomingMeta").textContent = upcoming.length ? GC.dollars(total) : "";
-    $("blUpcomingList").innerHTML = upcoming.length ? upcoming.map(function (b) { return billRow(b, true); }).join("")
-      : '<li class="gc-empty">' + GC.icon("checkCircle") + '<p class="gc-empty-title">All paid up</p><p class="gc-empty-text">New bills show up here.</p></li>';
-    var paid = bills.filter(function (b) { return b.state === "saved" && b.paidAt; }).sort(function (a, b) { return String(b.paidAt).localeCompare(String(a.paidAt)); }).slice(0, 8);
-    $("blPaid").hidden = !paid.length;
-    $("blPaidList").innerHTML = paid.map(function (b) { return billRow(b, false); }).join("");
+    $("blUpcomingList").innerHTML = upcoming.map(function (b) { return billRow(b, true); }).join("");
+    var open = upcoming.length + state.data.balances.transfers.length;
+    $("blOutCount").textContent = open ? String(open) : "";
+    // History: every saved bill or shared expense and every payment back, newest first.
+    var events = bills.filter(function (b) { return b.state === "saved"; }).map(function (b) { return { at: b.paidAt || b.savedAt || b.createdAt, html: historyBillRow(b) }; })
+      .concat((state.data.payments || []).map(function (p) { return { at: p.createdAt, html: paymentRow(p) }; }))
+      .sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
+    $("blHistList").innerHTML = events.length ? events.map(function (e) { return e.html; }).join("")
+      : '<li class="gc-empty">' + GC.icon("receipt") + '<p class="gc-empty-title">Nothing yet</p><p class="gc-empty-text">Bills, shared expenses, and payments back show up here.</p></li>';
+  }
+  function shortDay(iso) { return iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : ""; }
+  function historyBillRow(bill) {
+    if (!bill.paidAt) return billRow(bill, false);
+    var row = billRow(bill, false, ""); // the "… paid · date" line says it
+    var note = '<span class="bl-hist-day">' + GC.esc((bill.payerId ? first(member(bill.payerId).name) + " paid · " : "Paid · ") + shortDay(bill.paidAt)) + '</span>';
+    return row.replace('</div></div><div class="bl-trail">', note + '</div></div><div class="bl-trail">');
+  }
+  function paymentRow(p) {
+    var all = ids(), from = member(p.fromId), to = member(p.toId);
+    return '<li class="gc-list-item bl-row"><span class="bl-emoji" aria-hidden="true">💸</span><div class="gc-list-main"><span class="bl-title"><span>' + GC.esc(first(from.name) + " paid " + first(to.name) + " back") + '</span></span>'
+      + '<div class="bl-sub">' + GC.avatar(from, all, 20) + '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span>' + GC.avatar(to, all, 20) + '<span class="bl-hist-day">' + GC.esc(shortDay(p.createdAt)) + '</span></div></div>'
+      + '<div class="bl-trail"><span class="gc-amount">' + GC.dollars(p.cents) + '</span></div></li>';
   }
   function renderPayer() {
     var members = state.data.members;
@@ -293,13 +335,14 @@ ${POINTS_CLIENT_JS}
       return '<li>' + GC.avatar(m, all, 32) + '<span class="bl-bal-name">' + GC.esc(m.name) + '</span>' + amt + '</li>';
     }).join("");
     var settle = b.transfers.length
-      ? '<div class="bl-settle"><span class="bl-label">Settle up</span>' + b.transfers.map(function (t, i) {
+      ? '<div class="bl-owes">' + b.transfers.map(function (t, i) {
         var pay = window.GCPay ? window.GCPay.actions(t) : ""; // money & points: your own debts get Pay + Mark paid
         return '<div class="bl-transfer">' + GC.avatar({ id: t.fromId, name: t.fromName }, all, 24) + '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span>' + GC.avatar({ id: t.toId, name: t.toName }, all, 24)
           + '<span class="gc-meta">' + GC.esc(first(t.fromName)) + ' pays ' + GC.esc(first(t.toName)) + '</span><span class="bl-amt">' + GC.dollars(t.cents) + '</span>' + (pay ? "" : '<button type="button" class="gc-btn gc-btn-text gc-btn-sm" data-settle="' + i + '">Record</button>') + '</div>' + pay;
       }).join("") + '</div>'
       : '<div class="bl-even">' + GC.icon("checkCircle") + 'Everyone’s even</div>';
-    $("blBalancesBody").innerHTML = '<ul class="bl-bal">' + rows + '</ul>' + settle;
+    $("blBalancesBody").innerHTML = '<ul class="bl-bal">' + rows + '</ul>';
+    $("blOwes").innerHTML = settle;
   }
   function renderConnections() {
     var i = state.data.integrations, sw = i.splitwise, an = i.anthropic;
@@ -587,7 +630,14 @@ ${POINTS_CLIENT_JS}
     var bill = state.data.bills.find(function (b) { return b.id === row.getAttribute("data-bill"); });
     if (bill) openEditor(bill);
   }
-  ["blReviewList", "blUpcomingList", "blPaidList"].forEach(function (id) { $(id).addEventListener("click", openRow); $(id).addEventListener("keydown", openRow); });
+  ["blReviewList", "blUpcomingList", "blHistList"].forEach(function (id) { $(id).addEventListener("click", openRow); $(id).addEventListener("keydown", openRow); });
+  function showTab(tab) {
+    [["out", "blTabOut", "blOut"], ["hist", "blTabHist", "blHist"]].forEach(function (t) {
+      var on = t[0] === tab;
+      $(t[1]).setAttribute("aria-selected", String(on)); $(t[1]).tabIndex = on ? 0 : -1; $(t[2]).hidden = !on;
+    });
+  }
+  document.querySelectorAll(".bl-tabs [data-tab]").forEach(function (button) { button.addEventListener("click", function () { showTab(button.getAttribute("data-tab")); }); });
   $("blBill").addEventListener("close", function () { refresh().catch(showSyncError); });
 
   // ---------- payments ----------
@@ -603,7 +653,7 @@ ${POINTS_CLIENT_JS}
     setTimeout(function () { $("blPayAmount").focus(); }, 50);
   }
   $("blPayOpen").addEventListener("click", function () { openPay(); });
-  $("blBalancesBody").addEventListener("click", function (ev) {
+  $("blOwes").addEventListener("click", function (ev) {
     var b = ev.target.closest("[data-settle]"); if (!b) return;
     var t = state.data.balances.transfers[Number(b.getAttribute("data-settle"))];
     if (t) openPay(t.fromId, t.toId, t.cents);
