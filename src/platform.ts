@@ -46,8 +46,11 @@ export type ToolSpec = {
   inputSchema: { type: "object"; properties: Record<string, unknown>; required?: string[] };
   /** True when the tool changes household data. */
   mutates?: boolean;
-  handler: (args: Record<string, unknown>) => Promise<unknown> | unknown;
+  /** Runs as the household member whose Claude connector token made the call. */
+  handler: (args: Record<string, unknown>, caller: ToolCaller) => Promise<unknown> | unknown;
 };
+
+export type ToolCaller = { memberId: string; memberName: string };
 
 export type FeedEntry = { id: number; at: string; text: string };
 
