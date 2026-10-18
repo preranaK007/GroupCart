@@ -255,6 +255,28 @@ function buildServer(caller: ToolCaller, household: string): McpServer {
 
 type Authenticated = { memberId: string; via: string } | { expired: true } | null;
 
+// --- Turn tokens: GroupCart's own household coordinator (src/agent/) gets a short-lived token per turn that acts
+// --- as the roommate it is answering, so its tool calls read "Tanmay via Claude". Only hashes are kept.
+const TURN_TOKEN_PREFIX = "gcu_";
+const turnTokens = new Map<string, { memberId: string; expiresAt: number }>();
+
+/** Mints a token for one coordinator turn; revoke it when the turn ends. */
+export function issueTurnToken(memberId: string, ttlMs: number): { token: string; revoke: () => void } {
+  const token = randomSecret(TURN_TOKEN_PREFIX);
+  const hash = sha256Hex(token);
+  turnTokens.set(hash, { memberId, expiresAt: Date.now() + ttlMs });
+  return { token, revoke: () => { turnTokens.delete(hash); } };
+}
+
+function verifyTurnToken(token: string): string | null {
+  const hash = sha256Hex(token);
+  const entry = turnTokens.get(hash);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) { turnTokens.delete(hash); return null; }
+  return entry.memberId;
+}
+// --- end turn tokens ---
+
 /** Connector token (header or secret path; acts "via Claude") or OAuth access token (header only). */
 function authenticate(request: IncomingMessage, pathToken: string | undefined, current: ConnectorState): Authenticated {
   if (pathToken) {
@@ -263,6 +285,10 @@ function authenticate(request: IncomingMessage, pathToken: string | undefined, c
   }
   const token = bearerToken(request);
   if (!token) return null;
+  if (token.startsWith(TURN_TOKEN_PREFIX)) {
+    const memberId = verifyTurnToken(token);
+    return memberId ? { memberId, via: "Claude" } : null;
+  }
   if (token.startsWith("gca_")) {
     const check = current.oauth.verifyAccessToken(token);
     if (check.status === "expired") return { expired: true };

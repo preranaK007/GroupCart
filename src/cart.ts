@@ -82,6 +82,12 @@ export const CATALOG: Product[] = [
   { id: "curry-paste", name: "Curry paste", priceCents: 399, aliases: ["curry paste"] },
   { id: "chili-powder", name: "Chili powder", priceCents: 299, aliases: ["chili powder"] },
   // --- end Kitchen ---
+  // --- Household coordinator: baking basics people ask for by name ---
+  { id: "flour", name: "All-purpose flour", priceCents: 399, aliases: ["all-purpose flour", "all purpose flour", "flour"] },
+  { id: "sugar", name: "Sugar", priceCents: 349, aliases: ["granulated sugar", "sugar"] },
+  { id: "baking-soda", name: "Baking soda", priceCents: 129, aliases: ["baking soda"] },
+  { id: "ice-cream", name: "Ice cream", priceCents: 549, aliases: ["ice cream"] },
+  // --- end household coordinator ---
 ];
 
 const aliasEntries = CATALOG.flatMap((product) =>

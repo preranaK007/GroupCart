@@ -1,4 +1,5 @@
 import { appearanceCard, avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
+import { coordinatorCard } from "../agent/setup.js"; // household coordinator (one Claude for the apartment)
 import { claudeConnectorCard } from "./connectorCard.js"; // AI assistants (Claude, ChatGPT, Grok) connector card
 import { billsAnthropicCard, billsSplitwiseCard } from "./billsHome.js";
 
@@ -143,7 +144,7 @@ export function renderSettingsPage(context: SettingsContext): string {
   const body = `<div class="set-wrap">
   ${appearanceCard()}
   ${sectionHeader("Connections", { flavor: "settings.connections" })}
-  ${[imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), billsAnthropicCard(), claudeCard()].map(renderIntegrationCard).join("\n")}
+  ${[coordinatorCard(), imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), billsAnthropicCard(), claudeCard()].filter((card): card is IntegrationCard => card !== null).map(renderIntegrationCard).join("\n")}
 </div>`;
   return renderPage({
     title: "Settings",

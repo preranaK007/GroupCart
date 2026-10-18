@@ -20,6 +20,7 @@ import { setupListsAndEvents } from "./listsEvents.js";
 import { setupKitchen } from "./kitchen.js"; // Kitchen: pantry and meal plans
 import { setupHouse } from "./house.js";
 import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
+import { setupCoordinator } from "./agent/setup.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 import { setupMoneyPoints } from "./moneyPoints.js";
 
@@ -94,6 +95,11 @@ setupHouse({ store, calendar, demoMode: !liveMode, publicUrl: config.dashboardPu
 // --- Shared member-message processing: the iMessage group loop and the web chat both use this, so a message
 // --- sent from the website is handled exactly like the same text from that member in the group.
 async function processMemberMessage(message: CommandContext): Promise<string | null> {
+  // While a roommate has the Claude coordinator connected, it handles every message and posts its own replies.
+  if (coordinator.status().active) {
+    await coordinator.handleMessage(message);
+    return null;
+  }
   // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
   // recurring-list phrases the store owns (upstream), which go straight to the store.
   const commandReply = store.ownsMessage(message.text, message.memberId) ? null : await runCommands(message);
@@ -142,6 +148,9 @@ const social = setupProfilesAndChat({
   processMessage: liveMode ? processMemberMessage : processDemoMessage,
 });
 // --- end profiles, web sign-in, and web chat ---
+// --- Household coordinator: one Claude for the apartment, on the connecting roommate's account (src/agent/) ---
+const coordinator = setupCoordinator({ store, chat: social.chat, kroger: krogerClient ?? null, port: config.port });
+// --- end household coordinator ---
 // --- Money & points: pay-back links, points/streaks/leaderboard, Sunday digest (src/moneyPoints.ts) ---
 setupMoneyPoints({ store, demoMode: !liveMode, checkoutHooks: splitwise, paymentHandle: (memberId) => social.profiles.get(memberId)?.paymentHandle ?? "" });
 // --- end money & points ---
