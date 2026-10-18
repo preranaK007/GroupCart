@@ -1,7 +1,8 @@
 import { button, dialog, icon, infoTip, type PageOptions } from "./shell.js";
+import { KITCHEN_TABS } from "./mealsPanel.js"; // Kitchen: Pantry and Meals tabs
 
 /**
- * Groceries tabs (Cart | Lists) for /groceries. `withListsTabs(page)` wraps the
+ * Groceries tabs (Cart | Lists, then Pantry | Meals from src/ui/mealsPanel.ts) for /groceries. `withListsTabs(page)` wraps the
  * existing cart page body as the "Cart" view and adds the Lists view: the store's
  * recurring weekly/biweekly/monthly lists (upstream; read-only, managed in the
  * group chat) and the one-off named lists (party run, event snack lists), its
@@ -14,6 +15,7 @@ const tabs = `
 <div class="gl-tabs" role="tablist" aria-label="Groceries views">
   <button class="gl-tab" type="button" role="tab" id="glTab-cart" data-gl-tab="cart" aria-selected="true" aria-controls="glView-cart">${icon("check", { size: 18, className: "gl-tab-check" })}${icon("cart", { size: 18, className: "gl-tab-icon" })}<span>Cart</span></button>
   <button class="gl-tab" type="button" role="tab" id="glTab-lists" data-gl-tab="lists" aria-selected="false" aria-controls="glView-lists">${icon("check", { size: 18, className: "gl-tab-check" })}${icon("chores", { size: 18, className: "gl-tab-icon" })}<span data-flavor="nav.lists">Lists</span><span class="gl-count" id="glListsCount"></span></button>
+  ${KITCHEN_TABS /* Kitchen: Pantry | Meals (src/ui/mealsPanel.ts) */}
 </div>`;
 
 const listsView = `
@@ -119,14 +121,15 @@ const script = `
   let lastJson = "";
   let allIds = [];
   const openDone = new Set();
-  const views = ["cart", "lists"];
+  const views = Array.from(document.querySelectorAll("[data-gl-tab]"), (tab) => tab.dataset.glTab); // kitchen: tabs come from the bar
 
   function show(view, push) {
     if (!views.includes(view)) view = "cart";
     document.querySelectorAll("[data-gl-tab]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.glTab === view)));
     document.querySelectorAll("[data-gl-view]").forEach((panel) => { panel.hidden = panel.dataset.glView !== view; });
     if (push) history.replaceState(null, "", view === "cart" ? location.pathname + location.search : "#" + view);
-    if (view !== "cart") refresh(true);
+    if (view === "lists") refresh(true);
+    document.dispatchEvent(new CustomEvent("gl:view", { detail: view })); // kitchen: Pantry/Meals load on show
   }
   document.querySelector(".gl-tabs").addEventListener("click", (event) => {
     const tab = event.target.closest("[data-gl-tab]");
