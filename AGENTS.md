@@ -1,47 +1,34 @@
-# hackathon4 — agent instructions
+# GroupCart agent instructions
 
-This is a [Spectrum](https://photon.codes/docs/spectrum-ts) app, pinned to `spectrum-ts@^12.11.0`. The entry point is `src/index.ts`, which configures the imessage provider(s) and runs the echo loop.
+This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and the cloud iMessage provider. Group messaging requires the project's dedicated Business line.
 
-## Working in this project
+## Project structure
 
-- Run the app with `npm run start`.
-- Add providers by importing them in `src/index.ts` and listing them in the `Spectrum({ providers: [...] })` config.
-- Outgoing message content uses the builders documented in the skill (text, attachment, voice, contact, richlink, poll, group, custom).
+- `src/index.ts`: Spectrum startup, group-message filtering, household mapping, and replies.
+- `src/store.ts`: SQLite persistence, cart revisions, deterministic splits, approvals, and Kroger cart checkout.
+- `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
+- `src/dashboard.ts`: loopback-only browser dashboard and local demo endpoints.
+- `src/config.ts`: environment configuration.
 
-## Environment
+## Environment and credentials
 
-This project reads secrets from `.env` (gitignored). **Do not read, write, or echo `.env`** — it contains credentials.
+`.env` is gitignored and contains credentials. **Do not read, write, print, or otherwise expose `.env`.** Use `.env.example` only for the variable names and placeholder formats. Never include credentials in source, logs, screenshots, or user-facing output.
 
-If startup fails with an authentication error, tell the user to verify their `PROJECT_ID` / `PROJECT_SECRET` at the [Photon dashboard](https://app.photon.codes).
+Spectrum Cloud uses `PROJECT_ID` and `PROJECT_SECRET`. `GROUP_CART_MEMBERS` is an explicit `senderHandle=name` allowlist. In live mode, only inbound text from these members in iMessage group spaces is handled. Do not remove the allowlist or start processing direct messages unless the product requirements change.
 
-## Spectrum SDK reference
+## Safety and product boundaries
 
-This project includes the `spectrum` skill from [`photon-hq/skills`](https://github.com/photon-hq/skills). Your agent should auto-discover it. If it doesn't, or if you switch agents, install for your agent with:
+- Keep the dashboard bound to `127.0.0.1` unless the user explicitly asks for a network-accessible deployment.
+- Browser approval and checkout controls are local-demo-only. In live mode, approvals and checkout must come through an allowlisted group member's Spectrum conversation.
+- Local demo checkout is simulated. Live checkout may add approved items to the selected member's Kroger cart after OAuth consent; it must never place an order or collect payment.
+- Label sample prices as estimates and Kroger prices as store-specific quotes. Availability checks are point-in-time and do not guarantee pickup stock.
+- Ignore outbound messages to prevent echo loops; keep processing idempotent by Spectrum message ID.
+- Keep `.env` out of git.
 
-```sh
-npx skills add photon-hq/skills --skill spectrum --agent <your-agent>
-```
+## Commands
 
-(Use `--agent '*'` to install for all supported agents.)
+- `npm run start` — run with `.env` loaded, or local demo mode if credentials are absent.
+- `npm run dev` — watch-mode startup with `.env` loaded.
+- `npm run typecheck` — TypeScript validation.
 
-## Managing the Spectrum Cloud project (CLI)
-
-If this app uses a platform provider, the `PROJECT_ID` / `PROJECT_SECRET` in `.env` belong to a **Spectrum Cloud** project. To manage that project from the terminal — authenticate, rotate the secret, list the line(s) you send from, manage platforms/users, or create more projects — use the `photon-cli` skill (the `photon` CLI) from [`photon-hq/skills`](https://github.com/photon-hq/skills):
-
-```sh
-npx skills add photon-hq/skills --skill photon-cli --agent <your-agent>
-```
-
-(Use `--agent '*'` to install for all supported agents.)
-
-Common tasks once it's installed:
-
-- `photon whoami` — confirm you're authenticated (run `photon login` if not).
-- `photon projects regenerate-secret` — rotate the Spectrum API secret (then update `PROJECT_SECRET` in `.env`).
-- `photon spectrum lines list` — see the line(s) your app sends from.
-- `photon projects show` — inspect the active project (set `PHOTON_PROJECT_ID`, or pass `--project <id>`).
-
-## See also
-
-- [Spectrum docs](https://photon.codes/docs/spectrum-ts)
-- [`spectrum-ts` on GitHub](https://github.com/photon-hq/spectrum-ts)
+Follow the repository's `.agents/skills/spectrum` instructions for SDK and provider behavior. In particular, cloud iMessage group features require the dedicated line; do not use the local provider for this group workflow.
