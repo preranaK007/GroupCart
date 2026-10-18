@@ -5,9 +5,17 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 ## Project structure
 
 - `src/index.ts`: Spectrum startup, group-message filtering, household mapping, and replies.
-- `src/store.ts`: SQLite persistence, cart revisions, deterministic splits, approvals, and Kroger cart checkout.
+- `src/store.ts`: `CartStore` facade — the public API used by `index.ts`/`dashboard.ts`, message-ID idempotency, and the order in which commands and pending states are routed to the modules below.
+- `src/store/`: the feature modules behind `CartStore`. Each class takes the shared `StoreContext` (database, household settings, reply/member helpers) and the `StoreModules` registry to call the others.
+  - `schema.ts` (tables and migrations), `context.ts`, `types.ts`.
+  - `parsing.ts` (pure message parsing: commands, price caps, quantities, retailer queries, removal intents, multi-item lists), `pricing.ts` (Kroger promo/price rules), `messages.ts` (help and dashboard text).
+  - `cartLedger.ts`: cart items, deterministic splits, summaries, undo, clearing, removal, approvals, mock checkout, demo catalog adds.
+  - `sharing.ts`: “start/stop sharing with …” sessions.
+  - `productSearch.ts`: live Kroger single and multi-item search with numbered choices.
+  - `krogerCheckout.ts`: availability precheck, replacements, account choice, and adding to a Kroger cart.
+  - `recurringLists.ts`, `listCommands.ts`, `listText.ts`: recurring lists (state and cadence, conversation flows, reply text).
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
-- `src/lists.ts`: recurring weekly/biweekly/monthly list command parsing and cadence math (persistence lives in `store.ts`).
+- `src/lists.ts`: recurring weekly/biweekly/monthly list command parsing and cadence math (persistence lives in `src/store/recurringLists.ts`).
 - `src/reminders.ts`: delivery of due recurring-list check-ins to the remembered household group space.
 - `src/dashboard.ts`: loopback-only browser dashboard and local demo endpoints.
 - `src/config.ts`: environment configuration.
