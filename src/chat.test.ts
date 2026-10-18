@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { ChatError, ChatService, type ChatCard, type PollCard } from "./chat.js";
 import { EventsService } from "./events.js";
 import { NamedListsService } from "./namedLists.js";
-import { cardHandler, cardReply, cardText, postCard, postMessage, registerCardHandler, setGroupSender } from "./platform.js";
+import { cardHandler, cardReply, cardText, postCard, postMessage, registerCardHandler, setGroupPollSender, setGroupSender } from "./platform.js";
 import { CartStore, type Member } from "./store.js";
 
 const directory = mkdtempSync(join(tmpdir(), "groupcart-chat-"));
@@ -147,4 +147,29 @@ test("in iMessage, the coordinator's messages are signed with its name; GroupCar
   assert.equal(sent[0], "Claude: Booked for Thu 8pm.");
   assert.match(sent[1]!, /^Claude: Movie night\?\n/);
   assert.match(sent[2]!, /^Movie night\?\n/);
+});
+
+test("iMessage polls: an open poll card goes out as a native poll, and votes from iMessage update the card", async () => {
+  const chat = newChat();
+  const sent: string[] = [];
+  const polls: Array<{ title: string; options: string[] }> = [];
+  setGroupSender(async (text) => { sent.push(text); });
+  setGroupPollSender(async (title, options) => { polls.push({ title, options }); });
+  try {
+    await postCard("Movie night this week?", poll("imsg:1", true), { author: "Claude" });
+  } finally {
+    setGroupSender(null);
+    setGroupPollSender(null);
+  }
+  assert.deepEqual(sent, ["Claude: Movie night this week?"], "the line above the poll, without the numbered text version");
+  assert.deepEqual(polls, [{ title: "Movie night?", options: ["Fri 8 PM", "Sat 7 PM"] }]);
+
+  const message = chat.recordBot("Movie night this week?", "notify", undefined, poll("imsg:2", true))!;
+  assert.equal(await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", true), true);
+  assert.equal(await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", true), true, "a repeated selection changes nothing");
+  const votes = () => (chat.get(message.id)!.card as PollCard).votes;
+  assert.deepEqual(votes(), { fri: [], sat: ["m-sami"] });
+  await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", false);
+  assert.deepEqual(votes(), { fri: [], sat: [] });
+  assert.equal(await chat.voteFromGroup(sami, "Some other poll", "Sat 7 PM", true), false);
 });

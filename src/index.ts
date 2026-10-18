@@ -19,7 +19,7 @@ import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
 import { setupKitchen } from "./kitchen.js"; // Kitchen: pantry and meal plans
 import { setupHouse } from "./house.js";
-import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
+import { recordGroupMessage, registerCommand, runCommands, setGroupPollSender, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import type { HouseholdCoordinator } from "./agent/coordinator.js";
 import { setupCoordinator } from "./agent/setup.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
@@ -187,6 +187,7 @@ if (!liveMode) {
   // --- list check-ins, and web chat relays all work before anyone texts again.
   const group = new HouseholdGroup(store, (ref) => imessage(app).space.get(ref.id, ref.phone ? { phone: ref.phone } : undefined));
   setGroupSender((text) => group.send(text));
+  setGroupPollSender((title, options) => group.sendPoll(title, options));
   // --- Profiles & chat: sign-in codes go out as 1:1 iMessage DMs (inbound DMs are still ignored) ---
   social.useSpectrum({
     sendDirect: async (handle, text) => {
@@ -252,7 +253,7 @@ if (!liveMode) {
         continue;
       }
       if (message.direction !== "inbound") continue;
-      if (message.content.type !== "text" && message.content.type !== "attachment") continue;
+      if (message.content.type !== "text" && message.content.type !== "attachment" && message.content.type !== "poll_option") continue;
 
       const senderHandle = message.sender?.id;
       if (!senderHandle) continue;
@@ -268,6 +269,13 @@ if (!liveMode) {
       // check-ins, notifyGroup(), web chat relays) only ever go there (src/householdGroup.ts).
       group.remember(space, groupSpace.phone);
       const content = message.content;
+      // A vote on one of GroupCart's native iMessage polls updates that poll (web chat card included); not a message.
+      if (content.type === "poll_option") {
+        const applied = await social.chat.voteFromGroup(member, content.poll.title ?? content.title, content.option.title, content.selected)
+          .catch((error) => { console.warn("Could not apply an iMessage poll vote:", error instanceof Error ? error.message : error); return true; });
+        if (!applied) console.log("Ignored a vote on an iMessage poll GroupCart didn't post.");
+        continue;
+      }
       const text = content.type === "text" ? content.text : "";
       // --- Profiles & chat: mirror into the web chat, process like any member message, reply (and record) ---
       const attachments = social.recordInbound({

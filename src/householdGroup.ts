@@ -5,7 +5,7 @@
 // row) whenever an allowlisted member writes from a group, so it survives restarts. How to reach it: the live Space
 // from the message loop when we have one, otherwise Spectrum's `imessage(app).space.get(chatGuid, { phone })`.
 // Nothing is ever sent before the bot has seen the household group.
-import { attachment, type Space } from "spectrum-ts";
+import { attachment, poll, type Space } from "spectrum-ts";
 import type { GroupChannel } from "./chat.js";
 import type { GroupTarget } from "./reminders.js";
 import type { CartStore } from "./store.js";
@@ -62,6 +62,11 @@ export class HouseholdGroup {
       return;
     }
     await space.send(text);
+  }
+
+  /** Posts a native iMessage poll into the household group (votes come back as poll_option messages). */
+  async sendPoll(title: string, options: string[]): Promise<void> {
+    await (await this.#require()).send(poll(title, options));
   }
 
   /**

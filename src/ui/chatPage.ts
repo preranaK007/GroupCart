@@ -523,13 +523,23 @@ function clearFile() {
   if (state.fileUrl) URL.revokeObjectURL(state.fileUrl);
   state.file = null; state.fileUrl = null; $("chFile").value = ""; $("chPreview").hidden = true; updateSend();
 }
-$("chFile").addEventListener("change", (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
+function useFile(file) {
   clearFile();
   state.file = file; state.fileUrl = URL.createObjectURL(file);
   $("chPreviewImg").src = state.fileUrl; $("chPreview").hidden = false;
   updateSend(); input.focus();
+}
+$("chFile").addEventListener("change", (event) => {
+  const file = event.target.files[0];
+  if (file) useFile(file);
+});
+// Pasting a screenshot or copied image attaches it, like the photo button (text pastes as usual).
+document.addEventListener("paste", (event) => {
+  const item = Array.from((event.clipboardData && event.clipboardData.items) || []).find((entry) => entry.kind === "file" && entry.type.startsWith("image/"));
+  const file = item && item.getAsFile();
+  if (!file || $("chAttach").style.pointerEvents === "none") return;
+  event.preventDefault();
+  useFile(file);
 });
 $("chAttach").addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("chFile").click(); } });
 $("chPreviewRemove").addEventListener("click", clearFile);

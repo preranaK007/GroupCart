@@ -316,6 +316,16 @@ export async function postCard(text: string, card: ChatCard, options: { author?:
   const fallback = [text.trim(), cardText(card)].filter(Boolean).join("\n");
   recordGroupMessage(fallback);
   const message = cardSink?.record(text.trim(), card, options.author) ?? null;
+  // An open poll goes to iMessage as a native poll (its votes come back through votePollFromGroup).
+  if (groupSender && groupPollSender && card.kind === "poll" && !card.closed) {
+    try {
+      if (text.trim()) await groupSender(signed(text.trim(), options.author));
+      await groupPollSender(card.question, card.options.map((option) => option.label));
+      return message;
+    } catch (error) {
+      console.warn("Could not send a native poll to the group; sending it as text:", error instanceof Error ? error.message : error);
+    }
+  }
   if (groupSender) {
     try {
       await groupSender(signed(fallback, options.author));
@@ -346,6 +356,13 @@ export async function postMessage(text: string, options: { author: string }): Pr
     }
   }
   return message;
+}
+
+let groupPollSender: ((title: string, options: string[]) => Promise<void>) | null = null;
+
+/** Live mode: index.ts installs this so poll cards become native iMessage polls. */
+export function setGroupPollSender(sender: ((title: string, options: string[]) => Promise<void>) | null): void {
+  groupPollSender = sender;
 }
 
 /** Redraws a card already in the web chat after its state changed elsewhere (e.g. someone voted by text). */

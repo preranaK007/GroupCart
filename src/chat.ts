@@ -318,6 +318,20 @@ export class ChatService {
     return { message: updated, reply };
   }
 
+  /**
+   * Live loop: a vote on one of GroupCart's native iMessage polls (selected or unselected). It applies to the newest
+   * open poll card with that question and option, the same way a tap in the web chat does. False when none matches.
+   */
+  async voteFromGroup(member: Member, question: string, optionLabel: string, selected: boolean): Promise<boolean> {
+    const message = this.list({ limit: 100 }).messages.reverse().find((entry) => entry.card?.kind === "poll" && !entry.card.closed && entry.card.question === question && entry.card.options.some((option) => option.label === optionLabel));
+    const card = message?.card;
+    if (!message || card?.kind !== "poll") return false;
+    const option = card.options.find((candidate) => candidate.label === optionLabel)!;
+    if ((card.votes[option.id] ?? []).includes(member.id) === selected) return true;
+    await this.actOnCard(member, message.id, { optionIds: [option.id] });
+    return true;
+  }
+
   /** Live loop: sends a GroupCart reply into the group (with typing) and records it. */
   async replyInGroup(channel: GroupChannel, text: string): Promise<void> {
     try {
