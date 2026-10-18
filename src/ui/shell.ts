@@ -25,6 +25,8 @@
  *   button({label, variant, size, icon, href, id, disabled, attrs})
  *                                       variant: primary|tonal|outline|text; size: md|sm
  *   avatarHtml(member, {allMemberIds,size}) / avatarStack(members, {allMemberIds,size})
+ *                                       shows the member's profile photo or emoji when set
+ *                                       (src/profiles.ts installs the directory), else the initial
  *   memberColor(memberId, allMemberIds?) → {solid, soft, on}: same color for a
  *                                       member everywhere (cart, chores, calendar, bills)
  *   card({title, meta, tip, actions, body, id, className})   surface with a header
@@ -38,7 +40,8 @@
  *   escapeHtml(value)
  *
  * ── Browser helpers (window.GC, for client-rendered pages) ──────────────────
- *   GC.esc, GC.dollars(cents), GC.memberColor(id, allIds), GC.avatar(member, allIds, size),
+ *   GC.esc, GC.dollars(cents), GC.memberColor(id, allIds), GC.avatar(member, allIds, size)
+ *   (member may carry avatarUrl / avatarEmoji; otherwise window.GC_AVATARS is used),
  *   GC.icon(name), GC.chip(label, tone, icon), GC.listRow({leading,title,sub,trailing}),
  *   GC.time(date), GC.openDialog(id), GC.closeDialog(id)
  *
@@ -52,16 +55,23 @@
  *   --gc-fs-xs|sm|md|lg|xl|2xl.
  */
 
+// --- Profiles & chat: account menu in the app bar (Viewing as / signed in, profile, sign out) ---
+import { ACCOUNT_MENU_CSS, ACCOUNT_MENU_SCRIPT } from "./accountMenu.js";
+// --- end profiles & chat ---
+
 // ---------------------------------------------------------------------------
 // Navigation
 // ---------------------------------------------------------------------------
 
-export type NavKey = "home" | "groceries" | "chores" | "bills" | "calendar" | "settings";
+// --- Profiles & chat: "chat" nav item; "people" pages highlight no nav item ---
+export type NavKey = "home" | "chat" | "groceries" | "chores" | "bills" | "calendar" | "settings" | "people";
+// --- end profiles & chat ---
 
 export type NavItem = { key: NavKey; href: string; label: string; icon: IconName };
 
 export const NAV_ITEMS: readonly NavItem[] = [
   { key: "home", href: "/", label: "Home", icon: "home" },
+  { key: "chat", href: "/chat", label: "Chat", icon: "message" }, // profiles & chat
   { key: "groceries", href: "/groceries", label: "Groceries", icon: "cart" },
   { key: "chores", href: "/chores", label: "Chores", icon: "chores" },
   { key: "bills", href: "/bills", label: "Bills", icon: "receipt" },
@@ -101,6 +111,17 @@ const ICON_PATHS = {
   sync: '<path d="M19.5 12a7.5 7.5 0 0 1-13.3 4.7M4.5 12a7.5 7.5 0 0 1 13.3-4.7"/><path d="M18 3.5v4h-4M6 20.5v-4h4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4.5"/><path d="M12 17.3h.01"/>',
+  // --- Profiles & chat icons ---
+  person: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c.9-3.7 3.8-5.8 7.5-5.8s6.6 2.1 7.5 5.8"/>',
+  photo: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.8-4.8L7 19"/>',
+  arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+  leaf: '<path d="M5 19c0-8 5-13 14-14 0 9-5 14-13 14z"/><path d="M5 19l7-7"/>',
+  cookie: '<circle cx="12" cy="12" r="8.5"/><path d="M9 9h.01M14.5 8.5h.01M15 14h.01M9.5 15h.01M12 12h.01"/>',
+  film: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M8 5v14M16 5v14M3.5 9.5H8M3.5 14.5H8M16 9.5h4.5M16 14.5h4.5"/>',
+  cake: '<path d="M4.5 20.5h15v-7a1.5 1.5 0 0 0-1.5-1.5H6a1.5 1.5 0 0 0-1.5 1.5z"/><path d="M4.5 16c1.5 1 3 1 4.5 0s3-1 4.5 0 3 1 4.5 0 1.5-.5 1.5-.5"/><path d="M12 12V8.5M12 6.5c-.9-.8-.9-1.9 0-3 .9 1.1.9 2.2 0 3z"/>',
+  edit: '<path d="M4.5 19.5l1-4L15.8 5.2a2 2 0 0 1 2.9 0l.1.1a2 2 0 0 1 0 2.9L8.5 18.5z"/><path d="M13.5 7.5l3 3"/>',
+  logout: '<path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14"/><path d="M10 12h10M16.5 8.5L20 12l-3.5 3.5"/>',
+  // --- end profiles & chat icons ---
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;
@@ -167,10 +188,31 @@ export function memberColor(memberId: string, allMemberIds?: readonly string[]):
   return { solid, soft: `color-mix(in srgb, ${solid} 18%, transparent)`, on: "#ffffff" };
 }
 
-/** Circle avatar with the member's initial in their color. */
-export function avatarHtml(member: { id: string; name: string }, options: { allMemberIds?: readonly string[]; size?: number } = {}): string {
+// --- Profiles: avatar directory, so uploaded photos and emoji avatars show everywhere ---
+export type AvatarLook = { name?: string; avatarUrl?: string; avatarEmoji?: string };
+let avatarDirectory: (() => Record<string, AvatarLook>) | null = null;
+
+/** Installed by src/profiles.ts: member id → photo URL / emoji. Pages and GC.avatar use it automatically. */
+export function setAvatarDirectory(provider: (() => Record<string, AvatarLook>) | null): void {
+  avatarDirectory = provider;
+}
+
+function avatarLooks(): Record<string, AvatarLook> {
+  try { return avatarDirectory?.() ?? {}; } catch { return {}; }
+}
+// --- end profiles avatar directory ---
+
+/** Circle avatar: the member's photo or emoji (profiles), else their initial in their color. */
+export function avatarHtml(member: { id: string; name: string; avatarUrl?: string; avatarEmoji?: string }, options: { allMemberIds?: readonly string[]; size?: number } = {}): string {
   const color = memberColor(member.id, options.allMemberIds);
   const size = options.size ?? 32;
+  // --- Profiles: photo / emoji avatars ---
+  const look = avatarDirectory ? avatarLooks()[member.id] : undefined;
+  const photo = member.avatarUrl ?? look?.avatarUrl;
+  const emoji = member.avatarEmoji ?? look?.avatarEmoji;
+  if (photo) return `<img class="gc-avatar gc-avatar-photo" src="${escapeHtml(photo)}" alt="" style="--gc-avatar-size:${size}px" title="${escapeHtml(member.name)}" aria-hidden="true" />`;
+  if (emoji) return `<span class="gc-avatar gc-avatar-emoji" style="--gc-avatar-bg:${color.solid};--gc-avatar-size:${size}px" title="${escapeHtml(member.name)}" aria-hidden="true">${escapeHtml(emoji)}</span>`;
+  // --- end profiles ---
   const initial = (member.name.trim().charAt(0) || "?").toUpperCase();
   return `<span class="gc-avatar" style="--gc-avatar-bg:${color.solid};--gc-avatar-size:${size}px" title="${escapeHtml(member.name)}" aria-hidden="true">${escapeHtml(initial)}</span>`;
 }
@@ -572,6 +614,11 @@ export const CLIENT_HELPERS = `
     memberColor: function (id, all) { var solid = PALETTE[colorIndex(id, all)]; return { solid: solid, soft: "color-mix(in srgb, " + solid + " 18%, transparent)", on: "#ffffff" }; },
     avatar: function (member, all, size) {
       var color = GC.memberColor(member.id, all);
+      // profiles: photo / emoji avatars (from the member object or the page's avatar directory)
+      var look = (window.GC_AVATARS || {})[member.id] || {};
+      var photo = member.avatarUrl || look.avatarUrl, emoji = member.avatarEmoji || look.avatarEmoji;
+      if (photo) return '<img class="gc-avatar gc-avatar-photo" src="' + GC.esc(photo) + '" alt="" style="--gc-avatar-size:' + (size || 32) + 'px" title="' + GC.esc(member.name) + '" aria-hidden="true" />';
+      if (emoji) return '<span class="gc-avatar gc-avatar-emoji" style="--gc-avatar-bg:' + color.solid + ';--gc-avatar-size:' + (size || 32) + 'px" title="' + GC.esc(member.name) + '" aria-hidden="true">' + GC.esc(emoji) + '</span>';
       var initial = (String(member.name || "").trim().charAt(0) || "?").toUpperCase();
       return '<span class="gc-avatar" style="--gc-avatar-bg:' + color.solid + ';--gc-avatar-size:' + (size || 32) + 'px" title="' + GC.esc(member.name) + '" aria-hidden="true">' + GC.esc(initial) + '</span>';
     },
@@ -639,19 +686,21 @@ export function renderPage(options: PageOptions): string {
 <meta name="color-scheme" content="light dark" />
 <title>${title} · GroupCart</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0b57d0"/><g transform="translate(4 4)" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICON_PATHS.cart}</g></svg>`)}" />
-<style>${TOKENS_CSS}${BASE_CSS}${options.styles ?? ""}</style>
+<style>${TOKENS_CSS}${BASE_CSS}${ACCOUNT_MENU_CSS}${options.styles ?? ""}</style>
 </head>
 <body>
 <header class="gc-appbar">
   <a class="gc-brand" href="/" aria-label="GroupCart home"><span class="gc-logo">${icon("cart", { size: 22 })}</span><span class="gc-brand-name">GroupCart</span></a>
   <h1 class="gc-appbar-title">${title}</h1>
-  <div class="gc-appbar-actions">${options.actions ?? ""}</div>
+  <div class="gc-appbar-actions">${options.actions ?? ""}<div class="gc-me" id="gcMe"></div></div>
 </header>
 <div class="gc-frame">
   <nav class="gc-rail" aria-label="Main">${renderNav(options.active)}</nav>
   <main class="gc-main" id="main"><div class="gc-content">${options.body}</div></main>
 </div>
+<script>window.GC_AVATARS=${JSON.stringify(avatarLooks()).replace(/</g, "\\u003c")};</script>
 <script>${CLIENT_HELPERS}</script>
+<script>${ACCOUNT_MENU_SCRIPT}</script>
 ${options.script ? `<script>${options.script}</script>` : ""}
 </body>
 </html>`;

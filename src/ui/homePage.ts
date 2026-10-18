@@ -1,5 +1,6 @@
 import { balancesCard, choresDueCard, upcomingCard } from "./placeholders.js";
 import { button, card, chip, renderPage } from "./shell.js";
+import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -24,6 +25,7 @@ const peopleCard = card({
   title: "People",
   icon: "users",
   meta: "Grocery shares",
+  actions: button({ label: "Profiles", variant: "text", size: "sm", href: "/people" }), // profiles & chat
   body: `<ul class="gc-list" id="homePeopleList"></ul>`,
 });
 
@@ -34,6 +36,7 @@ const body = `
 </div>
 <div class="gc-cards">
   ${groceriesCard}
+  ${chatPreviewCard()}
   ${peopleCard}
   ${choresDueCard()}
   ${upcomingCard()}

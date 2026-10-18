@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Groceries (`/groceries`) shows the shared cart, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) shows the shared cart, People (`/people`) shows everyone's profile, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
 
 ## Connect your Spectrum dedicated line
 
@@ -63,6 +63,14 @@ Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also link
 
 Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
+## Profiles, sign-in, and web chat
+
+Each member has a profile at `/people/<id>`: a name, a photo or emoji avatar, optional pronouns (GroupCart never guesses; it uses names or they/them), a short bio, dietary notes and allergies, favorite snacks, movie and game picks, a birthday, and a payment handle such as Venmo. Open your own profile from the avatar menu in the top right to edit it.
+
+`/chat` shows the group conversation the way iMessage does. In live mode it mirrors the iMessage group: every message from allowlisted members, GroupCart's replies, and group notifications. A message you send from the website is posted to the group as “Maya: …” and handled exactly like the same text in the group, so “2 bananas”, “cart”, and photos of bills all work. In the demo, nothing is sent anywhere.
+
+On the computer running GroupCart you are already signed in; the avatar menu's **Viewing as** list picks which member you act as. To use GroupCart from your own phone or laptop, set `GROUP_CART_HOST=0.0.0.0` (or put it behind a tunnel), open `/signin`, and enter the phone number or Apple ID you use in the group. GroupCart texts you a 6-digit code by iMessage (valid 10 minutes, single use). Sessions last 30 days. If iMessage isn't connected, sign-in from other devices is unavailable and the page says so. In the demo the code is shown on screen.
+
 ## Configuration
 
 | Variable | Purpose | Default |
@@ -74,6 +82,7 @@ Without Google credentials the page runs in demo mode with generated sample sche
 | `GROUP_CART_DB` | SQLite file path | `./data/groupcart.sqlite` |
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |
 | `PORT` | Local dashboard port | `3000` |
+| `GROUP_CART_HOST` | Address the dashboard listens on. `0.0.0.0` serves your network; other devices must sign in | `127.0.0.1` (this computer only) |
 | `KROGER_CLIENT_ID` | Kroger Production app client ID for product search and user-authorized cart access | unset (live Kroger features disabled) |
 | `KROGER_CLIENT_SECRET` | Kroger Production app client secret | unset (live Kroger features disabled) |
 | `KROGER_LOCATION_ID` | Kroger-family store ID for local availability/prices | unset |

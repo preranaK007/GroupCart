@@ -1,5 +1,8 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
+import { networkInterfaces } from "node:os";
+import { remoteAccessGuard } from "./auth.js";
+import { avatarFor } from "./profiles.js";
 import { CartStore, type CartSnapshot } from "./store.js";
 import { KrogerClient } from "./kroger.js";
 import { splitwiseDashboardView } from "./splitwise.js";
@@ -17,7 +20,8 @@ function safeSnapshot(snapshot: CartSnapshot): Omit<CartSnapshot, "members"> & {
   members: Array<Omit<CartSnapshot["members"][number], "handle">>;
 } {
   const { members, ...rest } = snapshot;
-  return { ...rest, members: members.map(({ handle: _handle, ...member }) => member) };
+  // Profiles: members carry avatarUrl / avatarEmoji when set, so GC.avatar shows photos.
+  return { ...rest, members: members.map(({ handle: _handle, ...member }) => ({ ...member, ...avatarFor(member.id) })) };
 }
 
 function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
@@ -53,6 +57,9 @@ function krogerCheckoutStatus(store: CartStore): { status: string; revision: num
 export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    // --- Remote access guard (profiles & sign-in): LAN/tunnel requests reach only sign-in, /mcp, or a signed-in session's routes ---
+    if (remoteAccessGuard(request, response, url)) return;
+    // --- end remote access guard ---
     // Google Calendar: /calendar page, /api/calendar, and /api/google/* OAuth routes.
     if (calendar && await handleCalendarRequest(calendar, request, response, url)) return;
     // Feature routes registered through src/platform.ts (chores, lists, events, bills, connector).
@@ -200,8 +207,15 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Request failed." });
     }
   });
-  server.listen(port, "127.0.0.1", () => {
+  // GROUP_CART_HOST: 127.0.0.1 by default (this computer only). 0.0.0.0 serves the LAN; every remote request
+  // then needs a signed-in session (see src/auth.ts) or a connector token.
+  const host = process.env.GROUP_CART_HOST?.trim() || "127.0.0.1";
+  server.listen(port, host, () => {
     console.log(`GroupCart dashboard available at http://127.0.0.1:${port}`);
+    if (host !== "127.0.0.1" && host !== "localhost") {
+      const lan = Object.values(networkInterfaces()).flat().filter((entry) => entry && entry.family === "IPv4" && !entry.internal).map((entry) => `http://${entry!.address}:${port}`);
+      console.log(`Also listening on ${host}${lan.length ? ` (${lan.join(", ")})` : ""}. Other devices must sign in at /signin.`);
+    }
   });
   return server;
 }

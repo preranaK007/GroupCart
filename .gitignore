@@ -7,3 +7,5 @@ data/*.sqlite-wal
 dist
 *.log
 .DS_Store
+data/avatars/
+data/chat-files/
