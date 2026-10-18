@@ -86,7 +86,7 @@ test("all-day events become local midnight to midnight (end date exclusive) and 
 
 test("private events stay busy without details; untitled and malformed events", () => {
   const items = normalizeGoogleEvents([
-    { summary: "Therapy", location: "Clinic", visibility: "private", start: { dateTime: "2026-03-02T15:00:00Z" }, end: { dateTime: "2026-03-02T16:00:00Z" } },
+    { summary: "Private appointment", location: "Downtown", visibility: "private", start: { dateTime: "2026-03-02T15:00:00Z" }, end: { dateTime: "2026-03-02T16:00:00Z" } },
     { start: { dateTime: "2026-03-02T17:00:00Z" }, end: { dateTime: "2026-03-02T18:00:00Z" } },
     { summary: "Backwards", start: { dateTime: "2026-03-02T19:00:00Z" }, end: { dateTime: "2026-03-02T18:00:00Z" } },
     { summary: "No times" },
