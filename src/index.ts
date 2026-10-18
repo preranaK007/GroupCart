@@ -331,7 +331,9 @@ if (!liveMode) {
             attachments: content.type === "attachment"
               ? [{ mimeType: content.mimeType, name: content.name, size: content.size, read: () => content.read() }]
               : [],
-            at: message.timestamp,
+            // iMessage's clock can run ahead of this computer's: never stamp a message later than now, so the
+            // replies GroupCart and Claude record right after it don't show an earlier time.
+            at: new Date(Math.min(message.timestamp.getTime(), Date.now())),
             replyToId,
           });
           const answer = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments, ...(replyTo ? { replyTo } : {}) });
