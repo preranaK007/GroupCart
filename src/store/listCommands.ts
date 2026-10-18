@@ -60,7 +60,9 @@ export class ListCommands {
   hasOtherPendingIntent(memberId: string): boolean {
     const tables = ["pending_product_choices", "pending_product_batches", "pending_clarifications", "pending_item_cancellations", "pending_list_selections"];
     if (tables.some((table) => this.ctx.db.prepare(`SELECT 1 FROM ${table} WHERE member_id = ?`).get(memberId))) return true;
-    return this.m.checkout.getPendingKrogerCheckout()?.requesterId === memberId;
+    const checkout = this.m.checkout.getPendingKrogerCheckout();
+    return checkout?.requesterId === memberId
+      && (checkout.status === "choosing_account" || checkout.status === "awaiting_oauth");
   }
 
   /** Parse a list command, including bare “yes”/“cancel” replies to a pending list clear. */

@@ -6,6 +6,55 @@ import type { BatchRequest, Member } from "./types.js";
 
 /** Exact cart commands; anything matching is never treated as a product search. */
 export const CART_COMMAND_PATTERN = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i;
+/** A bare reply to the sender's own question, or to the group review when they have none. */
+export const CANCEL_REPLY_PATTERN = /^(?:cancel|never mind|nevermind)[.!?]*$/i;
+export function normalizeCancelReply(text: string): string {
+  const trimmed = text.trim();
+  return CANCEL_REPLY_PATTERN.test(trimmed) ? "cancel" : trimmed;
+}
+/** A choice for the checkout availability review. Items are only ever named by number. */
+export type ReviewCommand =
+  | { kind: "replace"; item: number; option: number }
+  | { kind: "remove"; which: number[] | "all" | "single" };
+
+/** Lowercase, NFKC, without trailing punctuation or polite wrappers (“ok”, “please”, “can you …?”). */
+function stripReviewFiller(text: string): string {
+  let t = text.normalize("NFKC").toLocaleLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, " ").trim();
+  let previous: string;
+  do {
+    previous = t;
+    t = t.replace(/[.!?]+$/, "").trim()
+      .replace(/^(?:ok(?:ay)?|yes|yeah|yep|sure|alright|so|and|please|pls|plz|go ahead and|let'?s|lets)\b[\s,]*/, "")
+      .replace(/^(?:can|could|would|will) (?:you|we|u) (?:please |pls )?/, "")
+      .replace(/[\s,]*\b(?:please|pls|plz|thanks|thank you|thx|ty)$/, "")
+      .replace(/\s+(?:from|off) (?:the |our |my )?(?:cart|basket|list|order|checkout|review)$/, "")
+      .trim();
+  } while (t !== previous);
+  return t;
+}
+
+/**
+ * Checkout-review commands: “replace 1 with 2” / “swap item #1 for 2”, “remove 1”, “ok remove 1, 2, and 3
+ * please”, “remove items 1 and 2”, “remove all unavailable”, and “remove the unavailable item” (one item; the
+ * caller asks which number when more than one is open). Anything else is not a review command; names are never
+ * matched, so chat about an item can't change the cart.
+ */
+export function parseReviewCommand(text: string): ReviewCommand | undefined {
+  const t = stripReviewFiller(text);
+  const replace = t.match(/^(?:replace|swap)\s+(?:item\s+|number\s+)?#?(\d{1,2})\s+(?:with|for)\s+(?:option\s+|suggestion\s+|number\s+)?#?(\d{1,2})$/);
+  if (replace) return { kind: "replace", item: Number(replace[1]), option: Number(replace[2]) };
+  const verb = t.match(/^(?:remove|drop|delete|skip)\s+(.+)$/);
+  if (!verb) return undefined;
+  const target = verb[1]!.trim();
+  if (/^all (?:of )?(?:the )?unavailable(?: (?:items|ones|things|stuff))?$/.test(target)) {
+    return { kind: "remove", which: "all" };
+  }
+  if (/^(?:the )?unavailable(?: (?:item|one|thing))?$/.test(target)) return { kind: "remove", which: "single" };
+  const numberRef = String.raw`(?:(?:items?|numbers?|no\.?)\s*)?#?\d{1,2}`;
+  if (!new RegExp(`^${numberRef}(?:\\s*(?:,|&|\\+|\\band\\b|\\s)\\s*(?:and\\s+)?${numberRef})*$`).test(target)) return undefined;
+  return { kind: "remove", which: (target.match(/\d+/g) ?? []).map(Number) };
+}
+
 export const PRICE_LIMIT_PATTERN = /\b(?:under|below|less than|at most|no more than|up to)\s+\$?\s*\d+(?:\.\d{1,2})?\s*(?:dollars?)?\b/gi;
 
 export function retailerQuery(members: Member[], text: string): string {

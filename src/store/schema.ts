@@ -86,6 +86,9 @@ export function initializeSchema(db: DatabaseSync, householdId: string, budgetCe
     "INSERT OR IGNORE INTO households (id, revision, budget_cents) VALUES (?, 0, ?)",
   ).run(householdId, budgetCents);
   ensureCartColumns(db);
+  // The checkout review remembers which store it checked, so every follow-up prompt can name it.
+  const reviewColumns = new Set((db.prepare("PRAGMA table_info(pending_kroger_replacements)").all() as Array<{ name: string }>).map((column) => column.name));
+  if (!reviewColumns.has("location_id")) db.exec("ALTER TABLE pending_kroger_replacements ADD COLUMN location_id TEXT");
   db.exec(`
     CREATE TABLE IF NOT EXISTS pending_product_choices (
       member_id TEXT PRIMARY KEY REFERENCES members(id),
@@ -118,6 +121,8 @@ export function initializeSchema(db: DatabaseSync, householdId: string, budgetCe
   // resolves like any other milk clarification (sharing comes from sessions).
   db.prepare("UPDATE pending_clarifications SET kind = 'milk' WHERE kind = 'milk-shared'").run();
   ensureRecurringListTables(db, householdId);
+  ensureSplitwiseTable(db);
+  ensureGoogleCalendarTables(db);
 }
 
 function ensureCartColumns(db: DatabaseSync): void {
@@ -183,4 +188,51 @@ function ensureRecurringListTables(db: DatabaseSync, householdId: string): void 
   `);
   const insert = db.prepare("INSERT OR IGNORE INTO recurring_lists (household_id, list_key) VALUES (?, ?)");
   for (const key of LIST_KEYS) insert.run(householdId, key);
+}
+
+/** Splitwise expense log: one row per completed checkout (see src/store/splitwiseLog.ts). */
+function ensureSplitwiseTable(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS splitwise_expenses (
+      checkout_key TEXT PRIMARY KEY,
+      household_id TEXT NOT NULL REFERENCES households(id),
+      revision INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      payer_member_id TEXT,
+      payer_name TEXT,
+      total_cents INTEGER NOT NULL,
+      currency TEXT NOT NULL,
+      description TEXT NOT NULL,
+      shares_json TEXT NOT NULL,
+      request_json TEXT,
+      status TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      note TEXT,
+      expense_id TEXT,
+      expense_url TEXT,
+      error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS splitwise_expenses_household_revision ON splitwise_expenses (household_id, revision);
+  `);
+}
+
+/**
+ * Google Calendar free/busy connections (see src/store/googleCalendarAccounts.ts). Refresh tokens stay in
+ * this local SQLite file and are never returned by any dashboard API.
+ */
+function ensureGoogleCalendarTables(db: DatabaseSync): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS google_calendar_accounts (
+      member_id TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+      refresh_token TEXT NOT NULL,
+      scope TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'connected',
+      last_error TEXT,
+      connected_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
 }

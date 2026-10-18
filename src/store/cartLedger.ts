@@ -123,6 +123,23 @@ export class CartLedger {
     return JSON.stringify(items);
   }
 
+  /**
+   * Apply `mutate` as one cart change: snapshot for undo, change the lines, bump the revision (which voids
+   * approvals), and record one undo step. Returns the new revision. Caller holds the transaction.
+   */
+  commitChange(memberId: string, action: string, mutate: () => void): number {
+    const undoSnapshot = this.captureCartItems();
+    mutate();
+    this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?").run(this.ctx.householdId);
+    this.recordUndo(memberId, action, undoSnapshot);
+    return (this.ctx.db.prepare("SELECT revision FROM households WHERE id = ?").get(this.ctx.householdId) as { revision: number }).revision;
+  }
+
+  /** True when the household cart has no lines. */
+  isEmpty(): boolean {
+    return !this.ctx.db.prepare("SELECT 1 FROM cart_items WHERE household_id = ? LIMIT 1").get(this.ctx.householdId);
+  }
+
   recordUndo(memberId: string, action: string, itemsJson: string): void {
     const row = this.ctx.db.prepare("SELECT revision FROM households WHERE id = ?")
       .get(this.ctx.householdId) as { revision: number };
@@ -339,11 +356,13 @@ export class CartLedger {
     return pending.length
       ? `Your approval is saved for cart revision ${updated.revision}. Waiting for: ${pending.join(", ")}. Any cart change will require approvals again.`
       : this.ctx.krogerCartEnabled
-        ? `Everyone approved cart revision ${updated.revision}. Text “checkout” to choose a Kroger account and add these items to its cart.`
+        ? this.m.checkout.hasOpenReview()
+          ? `Everyone approved cart revision ${updated.revision}. The availability review is still open; text “checkout” to see the choices. Applying them will require fresh approvals.`
+          : `Everyone approved cart revision ${updated.revision}. Text “checkout” to check store availability before choosing a Kroger account.`
         : `Everyone approved cart revision ${updated.revision}. Text “checkout” to finish a simulated checkout.`;
   }
 
-  completeMockCheckout(): string {
+  completeMockCheckout(payerMemberId?: string): string {
     const snapshot = this.snapshot();
     if (!snapshot.items.length) return "There isn’t a cart to check out yet.";
     const pending = snapshot.members.filter((member) => !member.approved).map((member) => member.name);
@@ -356,7 +375,10 @@ export class CartLedger {
     this.ctx.db.prepare(
       "UPDATE households SET revision = revision + 1, checked_out_revision = ? WHERE id = ?",
     ).run(snapshot.revision, this.ctx.householdId);
-    return `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    const reply = `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    // Splitwise: demo checkouts are always simulated (no network), so the summary is ready now.
+    const splitwiseNote = this.m.splitwise.summary(this.m.splitwise.recordCheckout(snapshot, payerMemberId, "mock"));
+    return splitwiseNote ? `${reply}\n\n${splitwiseNote}` : reply;
   }
 
   /** Reply to a pending “which one should I remove?” question. */

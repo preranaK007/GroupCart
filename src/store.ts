@@ -2,21 +2,27 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { maskHandle, normalizeHandle } from "./config.js";
 import type { KrogerCartAvailabilityIssue } from "./kroger.js";
+import { parseListCommand } from "./lists.js";
 import { CartLedger } from "./store/cartLedger.js";
 import { StoreContext, type StoreModules } from "./store/context.js";
+import { GoogleCalendarAccounts } from "./store/googleCalendarAccounts.js";
 import { KrogerCheckout } from "./store/krogerCheckout.js";
 import { ListCommands } from "./store/listCommands.js";
 import { ListText } from "./store/listText.js";
 import { dashboardMessage, helpMessage } from "./store/messages.js";
-import { CART_COMMAND_PATTERN, cancellationQuery, isHelpRequest, parseSharingCommand } from "./store/parsing.js";
+import { CANCEL_REPLY_PATTERN, CART_COMMAND_PATTERN, cancellationQuery, isHelpRequest, normalizeCancelReply, parseReviewCommand, parseSharingCommand } from "./store/parsing.js";
 import { ProductSearch } from "./store/productSearch.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
 import { SharingSessions } from "./store/sharing.js";
+import { SPLITWISE_COMMAND_PATTERN, SPLITWISE_RETRY_PATTERN, SplitwiseLog } from "./store/splitwiseLog.js";
 import type {
   CartSnapshot,
   CartStoreOptions,
+  CheckoutHooks,
+  GoogleCalendarAccount,
   ListReminderClaim,
   Member,
   MemberConfig,
@@ -24,19 +30,36 @@ import type {
   ProductQuoter,
   ProductSearchFn,
   RecurringListSnapshot,
+  SplitwiseExpenseRecord,
+  SplitwiseExpenseStatus,
 } from "./store/types.js";
 
 export type {
   CartSnapshot,
   CartStoreOptions,
+  CheckoutHooks,
+  CompletedCheckout,
+  GoogleCalendarAccount,
   ListReminderClaim,
   Member,
   MemberConfig,
   ProductQuoter,
   RecurringListSnapshot,
+  SplitwiseExpenseRecord,
+  SplitwiseExpenseStatus,
 } from "./store/types.js";
 
-const CANCEL_PATTERN = /^(cancel|never mind|nevermind)$/i;
+/**
+ * Phrases the store owns outright: cart commands, sharing sessions, and recurring-list commands. index.ts sends
+ * these straight to the store so no feature command handler (src/platform.ts runCommands) can intercept them.
+ */
+export function isStoreCommand(text: string): boolean {
+  const normalized = text.trim();
+  return CART_COMMAND_PATTERN.test(normalized) || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
+}
+
+const CANCEL_CHECKOUT_PATTERN = /^(?:please\s+)?cancel\s+(?:the\s+)?(?:kroger\s+)?checkout(?:\s+please)?[.!]*$/i;
+const APPROVE_PATTERN = /^(approve|approve cart|confirm cart)$/i;
 /** Commands that stay available while a Kroger checkout is mid-flight. */
 const READ_ONLY_COMMAND_PATTERN = /^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i;
 
@@ -73,27 +96,115 @@ export class CartStore {
     m.lists = new RecurringLists(this.#ctx, m);
     m.listCommands = new ListCommands(this.#ctx, m);
     m.listText = new ListText(this.#ctx, m);
+    m.splitwise = new SplitwiseLog(this.#ctx);
+    m.calendarAccounts = new GoogleCalendarAccounts(this.#ctx);
     this.#m = m;
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
-    const insert = this.#ctx.db.prepare(
+    const { db, householdId } = this.#ctx;
+    const insert = db.prepare(
       "INSERT INTO members (id, household_id, handle, name) VALUES (?, ?, ?, ?) ON CONFLICT(handle) DO UPDATE SET name = excluded.name",
     );
+    const update = db.prepare("UPDATE members SET handle = ?, name = ? WHERE id = ?");
+    // Rows were keyed by the raw configured handle. Reuse any existing row whose handle normalizes to one of the
+    // member's handles so member ids (and their cart items, shares, and approvals) survive normalization or reordering.
+    const existing = this.getMembers();
+    const claimed = new Set<string>();
     for (const member of configuredMembers) {
-      insert.run(this.#memberId(member.handle), this.#ctx.householdId, member.handle, member.name);
+      const handle = normalizeHandle(member.handle);
+      const handles = new Set([handle, ...(member.aliases ?? []).map(normalizeHandle)]);
+      const matches = existing.filter((row) => !claimed.has(row.id) && handles.has(normalizeHandle(row.handle)));
+      const row = matches.find((candidate) => candidate.handle === handle) ?? matches[0];
+      if (!row) {
+        insert.run(this.#memberId(handle), householdId, handle, member.name);
+        continue;
+      }
+      claimed.add(row.id);
+      if (row.handle !== handle || row.name !== member.name) update.run(handle, member.name, row.id);
+      for (const duplicate of matches.filter((candidate) => candidate !== row)) {
+        console.warn(`GroupCart database has a separate member row for ${maskHandle(duplicate.handle)}, now listed under ${member.name}; it is kept so existing cart history stays valid.`);
+      }
     }
     return this.getMembers();
+  }
+
+  /** Shared SQLite handle for feature modules outside src/store/ (they create their own tables). */
+  get database(): DatabaseSync {
+    return this.#ctx.db;
+  }
+
+  get household(): string {
+    return this.#ctx.householdId;
   }
 
   getMembers(): Member[] {
     return this.#ctx.getMembers();
   }
 
+  /**
+   * Whether this message belongs to the store before any feature command sees it: the store's own phrases
+   * (`isStoreCommand`), “cancel checkout”, and checkout-review choices (“remove 2”, “replace 1 with 2”) while a
+   * review is open or just finished, so chores' “skip …” or a bill draft's “remove …” can't take them.
+   */
+  ownsMessage(text: string, memberId?: string): boolean {
+    const normalized = text.trim();
+    if (isStoreCommand(normalized) || CANCEL_CHECKOUT_PATTERN.test(normalized)) return true;
+    // A feature draft must not take a cancel meant for this member's grocery question.
+    if (memberId && CANCEL_REPLY_PATTERN.test(normalized) && this.hasPendingChoice(memberId)) return true;
+    return parseReviewCommand(normalized) !== undefined
+      && (this.#m.checkout.hasOpenReview() || this.#m.checkout.reviewRecentlyEnded());
+  }
+
   memberForHandle(handle: string): Member | undefined {
     return this.#ctx.db.prepare(
       "SELECT id, handle, name FROM members WHERE household_id = ? AND handle = ?",
-    ).get(this.#ctx.householdId, handle) as Member | undefined;
+    ).get(this.#ctx.householdId, normalizeHandle(handle)) as Member | undefined;
+  }
+
+  /** Records a handled message id (e.g. a group membership event); returns false if it was already processed. */
+  markMessageProcessed(messageId: string, reply: string | null): boolean {
+    return Number(this.#ctx.db.prepare(
+      "INSERT OR IGNORE INTO processed_messages (message_id, reply_text, processed_at) VALUES (?, ?, ?)",
+    ).run(messageId, reply, new Date().toISOString()).changes) > 0;
+  }
+
+  /**
+   * When GroupCart last asked this member something they still have to answer (a numbered product or list pick,
+   * milk kind, which item to remove, a clear confirmation, or whose Kroger account to use), as an ISO time; null
+   * when nothing is pending. Feature modules use it to leave bare numbers and “cancel” to the store.
+   */
+  pendingQuestionAt(memberId: string): string | null {
+    const queries = [
+      "SELECT created_at AS at FROM pending_product_choices WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_product_batches WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_clarifications WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_item_cancellations WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_cart_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_selections WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_list_clears WHERE member_id = ?",
+      "SELECT created_at AS at FROM pending_kroger_checkouts WHERE requester_id = ? AND status = 'choosing_account'",
+    ];
+    let latest: string | null = null;
+    for (const sql of queries) {
+      const row = this.#ctx.db.prepare(sql).get(memberId) as { at: string } | undefined;
+      if (row?.at && (!latest || row.at > latest)) latest = row.at;
+    }
+    return latest;
+  }
+
+  hasPendingChoice(memberId: string): boolean {
+    return this.pendingQuestionAt(memberId) !== null;
+  }
+
+  /** Previously recorded reply for an idempotent command (undefined when the message is new). */
+  recordedReply(messageId: string): string | null | undefined {
+    return this.#ctx.existingReply(messageId);
+  }
+
+  /** Records a reply produced outside the cart flow (e.g. the "calendar" command) for idempotency. */
+  recordCommandReply(messageId: string, reply: string): void {
+    this.#ctx.saveMessageReply(messageId, reply);
   }
 
   /** Demo / sample-catalog conversation (also the fallback for live-mode commands). */
@@ -105,10 +216,12 @@ export class CartStore {
     const { cart, sharing, listCommands } = this.#m;
     db.exec("BEGIN IMMEDIATE");
     try {
-      const normalized = text.trim();
+      const normalized = normalizeCancelReply(text);
       let reply: string | null;
       const sharingCommand = parseSharingCommand(normalized);
-      const listReply = sharingCommand ? undefined : listCommands.catalogListTurn(memberId, normalized);
+      // Splitwise status is a plain command: it never feeds a pending list selection.
+      const splitwiseCommand = SPLITWISE_COMMAND_PATTERN.test(normalized);
+      const listReply = sharingCommand || splitwiseCommand ? undefined : listCommands.catalogListTurn(memberId, normalized);
 
       if (sharingCommand) {
         reply = sharingCommand.action === "start"
@@ -136,7 +249,10 @@ export class CartStore {
       } else if (/^(approve|approve cart|confirm cart)$/i.test(normalized)) {
         reply = cart.approveCurrentRevision(memberId);
       } else if (/^(checkout|finish checkout)$/i.test(normalized)) {
-        reply = cart.completeMockCheckout();
+        reply = cart.completeMockCheckout(memberId);
+      } else if (splitwiseCommand) {
+        // Splitwise status (retry needs the network, so only the async live path runs it).
+        reply = this.#m.splitwise.statusReply();
       } else {
         reply = cart.catalogItemText(memberId, normalized);
       }
@@ -154,7 +270,7 @@ export class CartStore {
 
   /**
    * Live Kroger conversation. Pending states are checked in priority order:
-   * sharing commands, Kroger checkout, recurring lists, item removal, multi-item
+   * sharing commands, recurring-list commands, Kroger checkout, item removal, multi-item
    * search, single product choice, then a new search. Plain commands and
    * anything that isn't a live search fall back to `processIncomingText`.
    */
@@ -173,30 +289,46 @@ export class CartStore {
 
     const { db } = this.#ctx;
     const { cart, checkout, search, listCommands } = this.#m;
-    const normalized = text.trim();
+    const normalized = normalizeCancelReply(text);
     // Sharing-session commands never touch the cart or Kroger, so they are
     // handled before any pending checkout, choice, list, or clarification state.
     if (parseSharingCommand(normalized)) return this.processIncomingText(messageId, memberId, normalized);
     const listCommand = listCommands.listCommandFor(memberId, normalized);
     const isCommand = CART_COMMAND_PATTERN.test(normalized)
       || isHelpRequest(normalized)
+      || SPLITWISE_COMMAND_PATTERN.test(normalized)
       || (/^yes$/i.test(normalized) && cart.hasPendingClearAll(memberId))
       || listCommand !== undefined;
+
+    // Splitwise retry needs the network, so it only runs here (status is answered by processIncomingText).
+    if (SPLITWISE_RETRY_PATTERN.test(normalized)) {
+      const retryReply = await this.#m.splitwise.retryReply();
+      if (retryReply !== undefined) return this.#ctx.saveAndReturnReply(messageId, retryReply);
+    }
 
     // Kroger checkout.
     if (/^(checkout|finish checkout)$/i.test(normalized)) {
       if (!allowKrogerCartCheckout) return this.processIncomingText(messageId, memberId, normalized);
       return checkout.startKrogerCheckout(messageId, memberId, locationId, checkCartAvailability);
     }
-    if (/^cancel checkout$/i.test(normalized)) {
+    if (CANCEL_CHECKOUT_PATTERN.test(normalized)) {
       return checkout.cancelKrogerCheckout(messageId, memberId);
     }
-    const pendingKrogerCheckout = checkout.getPendingKrogerCheckout();
-    // Recurring-list commands that do not touch the cart stay available while a
-    // Kroger checkout is in progress; loading a list into the cart does not.
+    // List maintenance never changes the cart and must win over review parsing, even if its item text says
+    // “drop” or “remove”. Loading a list is a cart change and still goes through the checkout lock below.
     const listOnlyCommand = listCommand !== undefined && listCommand.kind !== "load";
+    if (listOnlyCommand) {
+      return listCommands.handleLiveListCommand(messageId, memberId, listCommand, searchProducts, locationId, quoteProduct);
+    }
+    const pendingKrogerCheckout = checkout.getPendingKrogerCheckout();
+    // “remove 2” / “replace 1 with 2” right after the review ended (someone else finished it) must not turn into a
+    // Kroger product search for “remove 2”.
+    const reviewCommand = pendingKrogerCheckout?.status === "replacement_review" ? undefined : parseReviewCommand(normalized);
+    if (reviewCommand && this.pendingQuestionAt(memberId) === null) {
+      return checkout.handleReviewCommand(messageId, memberId, reviewCommand);
+    }
     if (pendingKrogerCheckout) {
-      const reply = this.#pendingCheckoutTurn(messageId, memberId, normalized, pendingKrogerCheckout, isCommand, listOnlyCommand);
+      const reply = this.#pendingCheckoutTurn(messageId, memberId, normalized, pendingKrogerCheckout, isCommand);
       if (reply !== undefined) return reply;
     }
 
@@ -247,7 +379,7 @@ export class CartStore {
     if (pendingChoiceRow && !isCommand) {
       return search.choosePending(messageId, memberId, normalized, pendingChoiceRow);
     }
-    if (isCommand || CANCEL_PATTERN.test(normalized)) {
+    if (isCommand || CANCEL_REPLY_PATTERN.test(normalized)) {
       return this.processIncomingText(messageId, memberId, normalized);
     }
     return await search.searchSingle(messageId, memberId, normalized, searchProducts, locationId)
@@ -267,10 +399,10 @@ export class CartStore {
     }
   }
 
-  completeMockCheckout(): { ok: boolean; message: string } {
+  completeMockCheckout(payerMemberId?: string): { ok: boolean; message: string } {
     this.#ctx.db.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.#m.cart.completeMockCheckout();
+      const result = this.#m.cart.completeMockCheckout(payerMemberId);
       const ok = result.startsWith("Mock checkout complete");
       this.#ctx.db.exec("COMMIT");
       return { ok, message: result };
@@ -326,6 +458,53 @@ export class CartStore {
     ).run(String(cursor));
   }
 
+  // --- Splitwise expense log (src/store/splitwiseLog.ts; hooks implemented by src/splitwise.ts) ---
+  setCheckoutHooks(hooks: CheckoutHooks | undefined): void {
+    this.#m.splitwise.setHooks(hooks);
+  }
+
+  /** Inserts the log row for a checkout; returns false if one already exists (idempotent). */
+  insertSplitwiseExpense(record: SplitwiseExpenseRecord): boolean {
+    return this.#m.splitwise.insert(record);
+  }
+
+  getSplitwiseExpense(checkoutKey: string): SplitwiseExpenseRecord | undefined {
+    return this.#m.splitwise.get(checkoutKey);
+  }
+
+  latestSplitwiseExpense(): SplitwiseExpenseRecord | undefined {
+    return this.#m.splitwise.latest();
+  }
+
+  /** Atomically moves a row from one of `from` to 'sending'; only one caller can win. */
+  claimSplitwiseExpense(checkoutKey: string, from: SplitwiseExpenseStatus[]): boolean {
+    return this.#m.splitwise.claim(checkoutKey, from);
+  }
+
+  updateSplitwiseExpense(
+    checkoutKey: string,
+    patch: { status: SplitwiseExpenseStatus; expenseId?: string | null; expenseUrl?: string | null; error?: string | null },
+  ): void {
+    this.#m.splitwise.update(checkoutKey, patch);
+  }
+
+  // --- Google Calendar (src/store/googleCalendarAccounts.ts; used by src/googleCalendar.ts) ---
+  googleCalendarAccount(memberId: string): GoogleCalendarAccount | undefined {
+    return this.#m.calendarAccounts.account(memberId);
+  }
+
+  saveGoogleCalendarAccount(memberId: string, refreshToken: string, scope: string): void {
+    this.#m.calendarAccounts.save(memberId, refreshToken, scope);
+  }
+
+  markGoogleCalendarNeedsReconnect(memberId: string, reason: string): void {
+    this.#m.calendarAccounts.markNeedsReconnect(memberId, reason);
+  }
+
+  deleteGoogleCalendarAccount(memberId: string): void {
+    this.#m.calendarAccounts.delete(memberId);
+  }
+
   close(): void {
     this.#ctx.db.close();
   }
@@ -337,11 +516,10 @@ export class CartStore {
     normalized: string,
     pending: PendingKrogerCheckout,
     isCommand: boolean,
-    listOnlyCommand: boolean,
   ): string | undefined {
     const { checkout } = this.#m;
     if (pending.status === "adding") {
-      if (!READ_ONLY_COMMAND_PATTERN.test(normalized) && !listOnlyCommand) {
+      if (!READ_ONLY_COMMAND_PATTERN.test(normalized)) {
         return this.#ctx.saveAndReturnReply(messageId, "GroupCart is sending the approved list to Kroger right now. Please wait for the result before changing the cart.");
       }
     }
@@ -351,13 +529,24 @@ export class CartStore {
       return checkout.handleKrogerAccountChoice(messageId, memberId, normalized, pending);
     }
     if (pending.status === "replacement_review") {
-      const selection = normalized.match(/^replace\s+(\d{1,2})\s+with\s+(\d{1,2})$/i);
-      if (selection) return checkout.handleKrogerReplacementChoice(messageId, memberId, Number(selection[1]), Number(selection[2]));
-      if (!READ_ONLY_COMMAND_PATTERN.test(normalized) && !listOnlyCommand) {
-        return this.#ctx.saveAndReturnReply(messageId, "Kroger’s precheck found unavailable items. Choose a suggested option with “replace 1 with 2”, or text “cancel checkout” to leave GroupCart unchanged and manage the item yourself. No replacement is made unless you choose one.");
+      // The group's review of unavailable items. Items are only ever chosen by number.
+      const command = parseReviewCommand(normalized);
+      if (command) return checkout.handleReviewCommand(messageId, memberId, command) ?? "";
+      // List maintenance was already handled; read-only commands and approvals also keep working.
+      if (READ_ONLY_COMMAND_PATTERN.test(normalized) || APPROVE_PATTERN.test(normalized)) return undefined;
+      // A member answering their own question (“cancel” to a product pick, a number for a list pick) isn't
+      // talking to the review; let their own flow take it. Cart-changing answers wait until the review ends.
+      const removalQuery = cancellationQuery(this.#ctx.getMembers(), normalized);
+      const answersListPick = !isCommand && !removalQuery && this.#m.listCommands.pendingListSelection(memberId) !== undefined;
+      if (answersListPick || (CANCEL_REPLY_PATTERN.test(normalized) && this.pendingQuestionAt(memberId) !== null)) return undefined;
+      if (CANCEL_REPLY_PATTERN.test(normalized)) return checkout.cancelKrogerCheckout(messageId, memberId);
+      if (removalQuery) {
+        const hint = checkout.reviewNameHint(messageId, removalQuery);
+        if (hint !== undefined) return hint;
       }
+      return checkout.reviewNudge(messageId);
     }
-    if (pending.requesterId !== memberId && /^(\d+|cancel)$/i.test(normalized)) {
+    if (pending.requesterId !== memberId && /^(\d+|cancel)$/i.test(normalized) && this.pendingQuestionAt(memberId) === null) {
       const requester = this.#ctx.getMembers().find((member) => member.id === pending.requesterId)?.name ?? "the member who requested checkout";
       return this.#ctx.saveAndReturnReply(messageId, `Please have ${requester} finish the Kroger account selection, or ask them to text “cancel checkout”.`);
     }
