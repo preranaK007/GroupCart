@@ -79,6 +79,7 @@ export function setupCoordinator(options: {
       const image = await fetchPublicImage(url);
       await chat.postBotImage({ text: caption, image: image.data, author: COORDINATOR_NAME });
     },
+    react: async (messageId, emoji) => { await chat.react(messageId, emoji, COORDINATOR_NAME); },
     runCommand: (memberId, text) => {
       const member = store.getMembers().find((candidate) => candidate.id === memberId);
       return member ? options.runCommand({ messageId: `coordinator:${randomUUID()}`, memberId, memberName: member.name, text, attachments: [] }) : Promise.resolve(null);

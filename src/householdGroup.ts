@@ -6,7 +6,7 @@
 // from the message loop when we have one, otherwise Spectrum's `imessage(app).space.get(chatGuid, { phone })`.
 // Nothing is ever sent before the bot has seen the household group.
 import { attachment, poll, type Space } from "spectrum-ts";
-import type { GroupChannel } from "./chat.js";
+import { reactInSpace, type GroupChannel } from "./chat.js";
 import type { GroupTarget } from "./reminders.js";
 import type { CartStore } from "./store.js";
 
@@ -97,6 +97,7 @@ export class HouseholdGroup {
         const space = await this.#require();
         await space.responding(async () => { await space.send(text); });
       },
+      react: async (messageId, emoji) => { await reactInSpace(await this.#require(), messageId, emoji); },
     };
   }
 }

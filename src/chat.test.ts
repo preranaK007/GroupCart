@@ -197,3 +197,22 @@ test("a bot author can post an image; non-images are refused", async () => {
   assert.equal(message.attachments[0]?.image, true);
   await assert.rejects(chat.postBotImage({ text: "", image: Buffer.from("not an image at all"), author: "Claude" }), /supported image/);
 });
+
+test("Claude's reactions show on the message and become iMessage tapbacks on what roommates sent there", async () => {
+  const tapbacks: Array<{ messageId: string; emoji: string }> = [];
+  const sent: string[] = [];
+  const chat = new ChatService({ db, filesDir: directory, liveMode: true, members: () => [sami, maya], process: async () => null });
+  chat.useGroup({ sendText: async (text) => { sent.push(text); }, sendImage: async () => {}, respond: async () => {}, react: async (messageId, emoji) => { tapbacks.push({ messageId, emoji }); } });
+  chat.recordInbound({ messageId: "IM-1", memberId: sami.id, memberName: "Sami", text: "the fridge is a crime scene", attachments: [] });
+  const fromIMessage = chat.list({ limit: 1 }).messages[0]!;
+  const reacted = await chat.react(fromIMessage.id, "😂", "Claude");
+  assert.deepEqual(reacted.reactions, [{ emoji: "😂", by: "Claude" }]);
+  assert.deepEqual(tapbacks, [{ messageId: "IM-1", emoji: "😂" }]);
+  await chat.react(fromIMessage.id, "😂", "Claude");
+  assert.equal(chat.get(fromIMessage.id)!.reactions.length, 1, "the same reaction twice is one reaction");
+  const bot = chat.recordBot("Bananas are in the cart.")!;
+  await chat.react(bot.id, "👍", "Claude");
+  assert.equal(tapbacks.length, 1, "only roommates' iMessages take a tapback");
+  await assert.rejects(chat.react(bot.id, "lol", "Claude"), ChatError, "only a single emoji");
+  assert.deepEqual(sent, [], "a reaction is not a message");
+});

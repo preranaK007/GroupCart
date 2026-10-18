@@ -56,6 +56,9 @@ const styles = `
 .ch-img-link { display:block; border-radius:18px; overflow:hidden; border:1px solid var(--gc-border); background:var(--gc-surface-2); line-height:0; }
 .ch-img { display:block; max-width:min(260px, 60vw); max-height:320px; width:auto; height:auto; object-fit:cover; }
 .ch-file { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border-radius:18px; border:1px solid var(--gc-border); color:var(--gc-text-2); font-size:var(--gc-fs-sm); }
+.ch-reacts { display:flex; flex-wrap:wrap; gap:4px; margin-top:-2px; }
+.ch-react { display:inline-flex; align-items:center; gap:4px; padding:1px 8px 1px 6px; border-radius:999px !important; border:1px solid var(--gc-border); background:var(--gc-surface); font-size:14px; line-height:20px; }
+.ch-react span { color:var(--gc-muted); font-size:11px; }
 .ch-status { color:var(--gc-muted); font-size:11px; padding:2px 4px 0; }
 .ch-status.is-failed { color:var(--gc-danger); }
 .ch-status button { border:0; background:none; color:inherit; font:inherit; text-decoration:underline; cursor:pointer; padding:0; }
@@ -308,6 +311,7 @@ function render() {
     for (const item of message.attachments || []) col += attachmentHtml(item);
     if (message.text) col += emojiOnly(message.text) ? '<div class="ch-emoji" title="' + GC.esc(fullTime(at)) + '">' + GC.esc(message.text) + '</div>' : '<div class="ch-bubble" title="' + GC.esc(fullTime(at)) + '">' + linkify(message.text) + '</div>';
     if (message.card) col += cardHtml(message);
+    if (message.reactions && message.reactions.length) col += '<div class="ch-reacts">' + message.reactions.map((reaction) => '<span class="ch-react" title="' + GC.esc(reaction.by + " reacted") + '">' + GC.esc(reaction.emoji) + '<span>' + GC.esc(reaction.by) + '</span></span>').join("") + '</div>';
     if (message === lastMine) {
       col += message.failed
         ? '<div class="ch-status is-failed">' + GC.esc(message.error || "Not sent") + ' · <button type="button" data-retry="' + GC.esc(message.tempId) + '">Retry</button></div>'

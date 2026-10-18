@@ -18,6 +18,8 @@ export type CoordinatorToolDeps = {
   postImage: (url: string, caption: string) => Promise<void>;
   /** Runs GroupCart's built-in command handling for a member's text and returns its reply (nothing is posted). */
   runCommand: (memberId: string, text: string) => Promise<string | null>;
+  /** Reacts to a chat message with one emoji (a tapback in iMessage). */
+  react: (messageId: number, emoji: string) => Promise<void>;
   now?: () => Date;
 };
 
@@ -152,6 +154,16 @@ export function coordinatorTools(deps: CoordinatorToolDeps): ToolSpec[] {
       handler: async (args) => {
         await deps.postImage(text(args.url, 2000), text(args.caption, 300));
         return { posted: true };
+      },
+    },
+    {
+      name: "react_to_message",
+      description: "React to a group chat message with one emoji (an iMessage tapback, also shown in the app): 😂 for a good joke, ❤️ or 👍 for thanks or a done deal, 🎉 for good news. Message numbers appear in the transcript as #id. A reaction is often better than a reply for small moments.",
+      inputSchema: { type: "object", properties: { message_id: { type: "number" }, emoji: { type: "string", description: "One emoji." } }, required: ["message_id", "emoji"] },
+      mutates: true,
+      handler: async (args) => {
+        await deps.react(Number(args.message_id), text(args.emoji, 16));
+        return { reacted: true };
       },
     },
     {

@@ -278,6 +278,7 @@ if (!liveMode) {
       const content = message.content;
       // A vote on one of GroupCart's native iMessage polls updates that poll (web chat card included); not a message.
       if (content.type === "poll_option") {
+        console.log(`iMessage poll vote: ${member.name} ${content.selected ? "picked" : "unpicked"} “${content.option.title}”.`);
         const applied = await social.chat.voteFromGroup(member, { nativePollId: content.pollMessageGuid ?? content.poll.pollMessageGuid, optionLabel: content.option.title, selected: content.selected })
           .catch((error) => { console.warn("Could not apply an iMessage poll vote:", error instanceof Error ? error.message : error); return true; });
         if (!applied) console.log("Ignored a vote on an iMessage poll GroupCart didn't post.");

@@ -47,9 +47,14 @@ export type CoordinatorOptions = {
   now?: () => Date;
   /** How long a poll must sit untouched after everyone has voted before the coordinator acts (people tap several times). */
   pollSettleMs?: number;
+  /** Chance source for joining banter now and then (tests pin it). */
+  random?: () => number;
 };
 
 const POLL_SETTLE_MS = 12_000;
+/** Laughs and quips usually skip the coordinator; now and then one gets a turn so it can join in. */
+const CHIME_IN_GAP_MS = 20 * 60_000;
+const CHIME_IN_CHANCE = 0.35;
 
 export type CoordinatorStatus = { active: boolean; connectedBy: Member | null };
 
@@ -60,6 +65,8 @@ export class HouseholdCoordinator {
   #queue: Promise<unknown> = Promise.resolve();
   /** Polls everyone has voted on, waiting to settle before the coordinator acts on them. */
   readonly #settling = new Map<string, ReturnType<typeof setTimeout>>();
+  /** When the coordinator last got a turn for banter (in-memory; a restart just allows the next one sooner). */
+  #lastChimeIn = 0;
 
   constructor(options: CoordinatorOptions) {
     this.#options = options;
@@ -100,12 +107,25 @@ export class HouseholdCoordinator {
     // Laughs, reactions and "ok"s aren't for the coordinator, so they don't cost a turn, unless Claude just spoke
     // (then "yes" or "ok" may be the answer to its question).
     const claudeJustSpoke = this.#options.channel.recent(3).some((entry) => entry.kind === "bot" && entry.name === COORDINATOR_NAME);
-    if (!message.attachments.length && isBanter(message.text) && !claudeJustSpoke) return Promise.resolve();
+    if (!message.attachments.length && isBanter(message.text) && !claudeJustSpoke) {
+      if (!this.#mayChimeIn()) return Promise.resolve();
+      return this.#enqueue(async () => {
+        await this.#turn(message.memberId, `The newest message, from ${message.memberName}: “${message.text.trim()}”, isn't for you. Only if it's a genuinely funny moment you can add to, react with one fitting emoji (react_to_message) or slip in one short witty line; otherwise "(no reply)". Usually stay quiet.`);
+      });
+    }
     return this.#enqueue(async () => {
       const photos = message.attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length;
       const said = message.text.trim() ? `“${message.text.trim()}”` : "(no text)";
       await this.#turn(message.memberId, `Respond to the newest message, from ${message.memberName}: ${said}${photos ? ` with ${photos} photo(s); look at them with view_photo` : ""}.`);
     });
+  }
+
+  /** At most one unprompted chime-in per CHIME_IN_GAP_MS, and even then only some of the time. */
+  #mayChimeIn(): boolean {
+    const now = this.#now().getTime();
+    if (now - this.#lastChimeIn < CHIME_IN_GAP_MS || (this.#options.random ?? Math.random)() >= CHIME_IN_CHANCE) return false;
+    this.#lastChimeIn = now;
+    return true;
   }
 
   /** A proactive turn: something happened that the coordinator may want to act on or announce. */
@@ -192,8 +212,8 @@ export class HouseholdCoordinator {
     const when = new Intl.DateTimeFormat("en-US", { timeZone: this.#options.timeZone, weekday: "long", month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(this.#now());
     const lines = this.#options.channel.recent(TRANSCRIPT_MESSAGES).map((entry) => {
       const photos = entry.attachments.filter((attachment) => attachment.image).length;
-      const extras = [photos ? `[${photos} photo(s), message ${entry.id}]` : "", entry.card ? cardSummary(entry.card, members) : ""].filter(Boolean).join(" ");
-      return `[${this.#clock(entry.at)}] ${entry.name}${entry.via ? ` via ${entry.via}` : ""}: ${entry.text.replace(/\s+/g, " ").slice(0, 400)}${extras ? ` ${extras}` : ""}`;
+      const extras = [photos ? `[${photos} photo(s)]` : "", entry.card ? cardSummary(entry.card, members) : "", entry.reactions?.length ? `[reactions: ${entry.reactions.map((reaction) => `${reaction.emoji} ${reaction.by}`).join(", ")}]` : ""].filter(Boolean).join(" ");
+      return `#${entry.id} [${this.#clock(entry.at)}] ${entry.name}${entry.via ? ` via ${entry.via}` : ""}: ${entry.text.replace(/\s+/g, " ").slice(0, 400)}${extras ? ` ${extras}` : ""}`;
     });
     return [
       `Roommates: ${members.map((member) => member.name).join(", ")}. Connected by: ${connectedBy?.name ?? "nobody"}.`,
@@ -227,7 +247,9 @@ const SYSTEM_PROMPT = `You are Claude, the coordinator for a shared apartment. Y
 
 How you work:
 - Each turn you see the recent chat and one new message or event. Your final message is posted to the group word for word, so it is either one short chat message or exactly "(no reply)", with nothing before or after it. Never explain why you are staying quiet, and never summarize what you did for whoever is running you.
-- Speak only when the message is for you: someone names you ("Claude"), asks for something your tools do (add to the cart, log or split money, plan or schedule, chores, house info), sends a bill or receipt photo, or answers a question you or GroupCart asked them. Everything else is "(no reply)": roommates talking to each other, banter, reactions, opinions, and short replies like "cancel", "ok", or "lol" that aren't answering you. When unsure, stay quiet.
+- Speak when the message is for you: someone names you ("Claude"), asks for something your tools do (add to the cart, log or split money, plan or schedule, chores, house info), sends a bill or receipt photo, or answers a question you or GroupCart asked them. Otherwise it's "(no reply)": roommates talking to each other, opinions, and short replies like "cancel", "ok", or "lol" that aren't answering you. When unsure, stay quiet.
+- The one exception: now and then (a few times a day at most), when there's a genuinely funny moment or a joke you can slot into, join in like a roommate would. Usually that's a reaction: react_to_message with one fitting emoji, then "(no reply)". Sometimes it's one short witty line. Never twice in a row, never pile on, and never at someone's expense in a way that would sting. If you joined in recently (see the transcript), stay quiet.
+- Reactions also work for small acknowledgements, like a ❤️ when someone thanks you, instead of a reply.
 - Many tools post their own message to the group (saving a bill, adding an event, chores, cards). When one already said it, your reply is "(no reply)". The same after you post a card: the card carries its own line.
 - Do the work instead of asking. If a request is clear enough, act and confirm in one line. Ask one short question only when a wrong guess would cost money or annoy people.
 - Write like a thoughtful roommate texting: one or two short lines and under 40 words, recaps included, plain text, no markdown, no lists. Emoji are welcome where they fit. Never paste links, ids, or tool output; use a card. Call roommates by name and never guess anyone's pronouns.

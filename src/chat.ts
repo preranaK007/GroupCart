@@ -63,6 +63,9 @@ export function togglePollVote(card: PollCard, memberId: string, optionIds: read
   return { ...card, votes };
 }
 // --- end cards ---
+/** How long after a voter's last tap in the app their vote is told to the iMessage group. */
+const VOTE_ECHO_SETTLE_MS = 8_000;
+
 export type ChatKind = "member" | "bot";
 
 type StoredAttachment = { name: string; mimeType: string; size: number | null; file: string | null };
@@ -81,6 +84,8 @@ export type ChatMessage = {
   at: string;
   /** Rich card under a bot message, or null. */
   card: ChatCard | null;
+  /** Emoji reactions on the message (the household coordinator's, today), oldest first. */
+  reactions: Array<{ emoji: string; by: string }>;
   /** Last change (a card update bumps it), so pollers can ask for messages updated since their last poll. */
   updatedAt: string;
 };
@@ -94,6 +99,8 @@ export type GroupChannel = {
   sendImage(path: string, mimeType: string, name: string): Promise<void>;
   /** Sends a GroupCart reply with the typing indicator. */
   respond(text: string): Promise<void>;
+  /** Reacts to a message in the group (an iMessage tapback) by its Spectrum message id. */
+  react?(messageId: string, emoji: string): Promise<void>;
 };
 
 export function spectrumChannel(space: Space): GroupChannel {
@@ -101,7 +108,19 @@ export function spectrumChannel(space: Space): GroupChannel {
     sendText: async (text) => { await space.send(text); },
     sendImage: async (path, mimeType, name) => { await space.send(attachment(path, { name, mimeType })); },
     respond: async (text) => { await space.responding(async () => { await space.send(text); }); },
+    react: async (messageId, emoji) => { await reactInSpace(space, messageId, emoji); },
   };
+}
+
+/** Tapback on one of the group's messages; only messages roommates sent can take one. */
+export async function reactInSpace(space: Space, messageId: string, emoji: string): Promise<void> {
+  const message = await space.getMessage(messageId);
+  if (message?.direction === "inbound") await message.react(emoji);
+}
+
+/** One emoji (with its modifiers), nothing else. */
+export function isSingleEmoji(value: string): boolean {
+  return value.length <= 16 && /^\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic}|\p{Emoji_Modifier})*$/u.test(value);
 }
 
 export type InboundAttachment = { mimeType: string; name?: string; size?: number; read: () => Promise<Buffer> };
@@ -110,7 +129,7 @@ export class ChatError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-type Row = { id: number; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string; card_json: string | null; updated_at: string | null };
+type Row = { id: number; external_id: string | null; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string; card_json: string | null; updated_at: string | null; reactions_json: string | null };
 
 /** Author of a bot message that names none. */
 export const BOT_AUTHOR = "GroupCart";
@@ -141,6 +160,7 @@ export class ChatService {
   #groupKnown: () => boolean = () => true;
   #queue: Promise<unknown> = Promise.resolve();
   #busy = 0;
+  #voteEchoes = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(options: ChatOptions) {
     this.#db = options.db;
@@ -166,6 +186,7 @@ export class ChatService {
     if (!columns.some((column) => column.name === "via")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN via TEXT");
     if (!columns.some((column) => column.name === "card_json")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN card_json TEXT");
     if (!columns.some((column) => column.name === "updated_at")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN updated_at TEXT");
+    if (!columns.some((column) => column.name === "reactions_json")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN reactions_json TEXT");
     this.#db.exec("CREATE INDEX IF NOT EXISTS chat_messages_updated ON chat_messages (updated_at)");
   }
 
@@ -300,6 +321,28 @@ export class ChatService {
     return this.#insert({ kind: "bot", memberId: null, authorName: author, text: body.slice(0, 20_000), attachments: [], source, at, card: attached });
   }
 
+  /**
+   * `by` (a bot author such as "Claude") reacts to a message with one emoji: shown on the message in the web chat,
+   * and in live mode as a tapback on the iMessage it came from. Reacting again with the same emoji does nothing.
+   */
+  async react(messageId: number, emoji: string, by: string): Promise<ChatMessage> {
+    const glyph = emoji.trim();
+    if (!isSingleEmoji(glyph)) throw new ChatError(400, "React with a single emoji.");
+    const row = this.#db.prepare("SELECT * FROM chat_messages WHERE id = ?").get(messageId) as Row | undefined;
+    if (!row) throw new ChatError(404, "That message isn’t in the chat.");
+    const reactions = this.#view(row).reactions;
+    if (reactions.some((reaction) => reaction.emoji === glyph && reaction.by === by)) return this.#view(row);
+    this.#db.prepare("UPDATE chat_messages SET reactions_json = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify([...reactions, { emoji: glyph, by }].slice(-12)), new Date().toISOString(), messageId);
+    const group = this.#live && this.groupConnected ? this.#group : null;
+    if (group?.react && row.external_id?.startsWith("imessage:")) {
+      try { await group.react(row.external_id.slice("imessage:".length), glyph); } catch (error) {
+        console.warn("Could not react in the iMessage group:", error instanceof Error ? error.message : error);
+      }
+    }
+    return this.get(messageId)!;
+  }
+
   /** Replaces a message's card and bumps updated_at so open chats redraw it. Null when the message has no card. */
   updateCard(messageId: number, card: ChatCard): ChatMessage | null {
     const changed = this.#db.prepare("UPDATE chat_messages SET card_json = ?, updated_at = ? WHERE id = ? AND card_json IS NOT NULL")
@@ -318,7 +361,7 @@ export class ChatService {
    * (a poll without a handler just toggles the member's vote), stores the card it returns, and records its reply
    * as a bot message (also sent to the iMessage group in live mode).
    */
-  async actOnCard(member: Member, messageId: number, input: { actionId?: string; optionIds?: string[] }): Promise<{ message: ChatMessage; reply: ChatMessage | null }> {
+  async actOnCard(member: Member, messageId: number, input: { actionId?: string; optionIds?: string[] }, options: { fromWeb?: boolean } = {}): Promise<{ message: ChatMessage; reply: ChatMessage | null }> {
     const message = this.get(messageId);
     const card = message?.card;
     if (!message || !card) throw new ChatError(404, "That message has no buttons.");
@@ -334,6 +377,7 @@ export class ChatService {
     if (!result) throw new ChatError(409, "That button isn’t available anymore.");
     if (result.error) throw new ChatError(409, result.error);
     const updated = (result.card && this.updateCard(message.id, result.card)) || this.get(message.id)!;
+    if (options.fromWeb && updated.card?.kind === "poll" && updated.card.nativePollId) this.#echoWebVote(member, message.id);
     let reply: ChatMessage | null = null;
     if (result.reply) {
       reply = this.recordBot(result.reply, "card");
@@ -345,6 +389,27 @@ export class ChatService {
       }
     }
     return { message: updated, reply };
+  }
+
+  /**
+   * iMessage can't take a vote for someone else, so a vote cast in the app on a poll that is also a native iMessage
+   * poll is told to the group once the voter settles (taps within a few seconds count as one change).
+   */
+  #echoWebVote(member: Member, messageId: number): void {
+    const key = `${messageId}:${member.id}`;
+    clearTimeout(this.#voteEchoes.get(key));
+    const timer = setTimeout(() => {
+      this.#voteEchoes.delete(key);
+      const card = this.get(messageId)?.card;
+      const group = this.#live && this.groupConnected ? this.#group : null;
+      if (card?.kind !== "poll" || !group) return;
+      const picks = card.options.filter((option) => (card.votes[option.id] ?? []).includes(member.id)).map((option) => `“${option.label}”`);
+      const name = (this.#displayName(member.id) ?? member.name).split(/\s+/)[0];
+      const text = picks.length ? `🗳️ ${name} voted ${picks.join(" and ")} in the app.` : `🗳️ ${name} took back their vote in the app.`;
+      group.sendText(text).catch((error) => console.warn("Could not tell the iMessage group about an app vote:", error instanceof Error ? error.message : error));
+    }, VOTE_ECHO_SETTLE_MS);
+    timer.unref?.();
+    this.#voteEchoes.set(key, timer);
   }
 
   /**
@@ -481,6 +546,7 @@ export class ChatService {
       via: row.via ?? null,
       at: row.created_at,
       card: row.card_json ? JSON.parse(row.card_json) as ChatCard : null,
+      reactions: row.reactions_json ? JSON.parse(row.reactions_json) as Array<{ emoji: string; by: string }> : [],
       updatedAt: row.updated_at ?? row.created_at,
     };
   }

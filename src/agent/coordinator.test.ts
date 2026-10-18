@@ -14,13 +14,13 @@ const members: Member[] = [
   { id: "m-ben", handle: "demo:ben", name: "Ben" },
 ];
 
-function setup(replies: Array<string | null>) {
+function setup(replies: Array<string | null>, chance = 1) {
   const posted: Array<{ text: string; card?: ChatCard }> = [];
   const messages: ChatMessage[] = [];
   const channel: CoordinatorChannel = {
     post: async (text, card) => {
       posted.push({ text, card });
-      const message = { id: messages.length + 1, kind: "bot", memberId: null, name: "Claude", text, attachments: [], source: "reply", via: null, card: card ?? null, at: new Date().toISOString(), updatedAt: new Date().toISOString() } as ChatMessage;
+      const message = { id: messages.length + 1, kind: "bot", memberId: null, name: "Claude", text, attachments: [], source: "reply", via: null, card: card ?? null, reactions: [], at: new Date().toISOString(), updatedAt: new Date().toISOString() } as ChatMessage;
       messages.push(message);
       return message;
     },
@@ -37,12 +37,14 @@ function setup(replies: Array<string | null>) {
     groceriesFrom: "sample",
     timeZone: "America/Los_Angeles",
     pollSettleMs: 0,
+    random: () => chance,
   });
   const commands: Array<{ memberId: string; text: string }> = [];
   const images: Array<{ url: string; caption: string }> = [];
-  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], postImage: async (url, caption) => { images.push({ url, caption }); }, runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
+  const reactions: Array<{ messageId: number; emoji: string }> = [];
+  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], postImage: async (url, caption) => { images.push({ url, caption }); }, react: async (messageId, emoji) => { reactions.push({ messageId, emoji }); }, runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
   const tool = (name: string) => tools.find((spec) => spec.name === name)!;
-  return { coordinator, posted, turns, tool, channel, commands, images };
+  return { coordinator, posted, turns, tool, channel, commands, images, reactions };
 }
 
 const message = (memberId: string, text: string) => ({ messageId: `x:${text}`, memberId, memberName: members.find((m) => m.id === memberId)!.name, text, attachments: [] });
@@ -147,4 +149,17 @@ test("post_image hands the link and caption to the poster", async () => {
   const { tool, images } = setup([]);
   assert.deepEqual(await tool("post_image").handler({ url: "https://media.giphy.com/media/x/giphy.gif", caption: "movie night energy" }, { memberId: "m-ana", memberName: "Ana" }), { posted: true });
   assert.deepEqual(images, [{ url: "https://media.giphy.com/media/x/giphy.gif", caption: "movie night energy" }]);
+});
+
+test("now and then banter gets a turn, so Claude can react or chime in; at most once per 20 minutes", async () => {
+  const { coordinator, posted, turns, tool, reactions } = setup(["(no reply)", "(no reply)"], 0);
+  coordinator.connect("m-ana");
+  await coordinator.handleMessage(message("m-ben", "lmao"));
+  assert.equal(turns.length, 1, "the lucky laugh gets a turn");
+  assert.match(turns[0]!.prompt, /isn't for you\. Only if it's a genuinely funny moment/);
+  await tool("react_to_message").handler({ message_id: 7, emoji: "😂" }, { memberId: "m-ben", memberName: "Ben", via: "Claude" });
+  assert.deepEqual(reactions, [{ messageId: 7, emoji: "😂" }]);
+  await coordinator.handleMessage(message("m-ana", "lol"));
+  assert.equal(turns.length, 1, "the next laugh soon after doesn't");
+  assert.equal(posted.length, 0, "a reaction posts no message");
 });

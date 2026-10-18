@@ -395,7 +395,7 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
         const result = await chat.actOnCard(viewer.member, messageId, {
           actionId: typeof body.actionId === "string" ? body.actionId.slice(0, 120) : undefined,
           optionIds: Array.isArray(body.optionIds) ? body.optionIds.filter((id): id is string => typeof id === "string").map((id) => id.slice(0, 120)) : undefined,
-        });
+        }, { fromWeb: true });
         sendJson(response, 200, result);
       } catch (error) {
         if (error instanceof ChatError) { sendJson(response, error.status, { error: error.message }); return true; }
