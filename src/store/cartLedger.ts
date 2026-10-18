@@ -123,6 +123,23 @@ export class CartLedger {
     return JSON.stringify(items);
   }
 
+  /**
+   * Apply `mutate` as one cart change: snapshot for undo, change the lines, bump the revision (which voids
+   * approvals), and record one undo step. Returns the new revision. Caller holds the transaction.
+   */
+  commitChange(memberId: string, action: string, mutate: () => void): number {
+    const undoSnapshot = this.captureCartItems();
+    mutate();
+    this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?").run(this.ctx.householdId);
+    this.recordUndo(memberId, action, undoSnapshot);
+    return (this.ctx.db.prepare("SELECT revision FROM households WHERE id = ?").get(this.ctx.householdId) as { revision: number }).revision;
+  }
+
+  /** True when the household cart has no lines. */
+  isEmpty(): boolean {
+    return !this.ctx.db.prepare("SELECT 1 FROM cart_items WHERE household_id = ? LIMIT 1").get(this.ctx.householdId);
+  }
+
   recordUndo(memberId: string, action: string, itemsJson: string): void {
     const row = this.ctx.db.prepare("SELECT revision FROM households WHERE id = ?")
       .get(this.ctx.householdId) as { revision: number };

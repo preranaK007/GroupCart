@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { remoteAccessGuard } from "./auth.js";
 import { avatarFor } from "./profiles.js";
-import { CartStore, isStoreCommand, type CartSnapshot } from "./store.js";
+import { CartStore, type CartSnapshot } from "./store.js";
 import { KrogerClient } from "./kroger.js";
 import { splitwiseDashboardView } from "./splitwise.js";
 import { handleCalendarRequest } from "./calendarPage.js";
@@ -186,7 +186,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
         // shared member-message processor; this is the fallback when that module isn't set up.
         // Feature commands (calendar, chores, bills, ...) run before cart processing, as in the group chat.
         const messageId = `demo:${randomUUID()}`;
-        const commandReply = isStoreCommand(body.text) ? null : await runCommands({ messageId, memberId: member.id, memberName: member.name, text: body.text, attachments: [] });
+        const commandReply = store.ownsMessage(body.text) ? null : await runCommands({ messageId, memberId: member.id, memberName: member.name, text: body.text, attachments: [] });
         const reply = commandReply ?? (krogerClient
           ? await store.processLiveIncomingText(
             messageId,

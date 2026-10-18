@@ -86,6 +86,9 @@ export function initializeSchema(db: DatabaseSync, householdId: string, budgetCe
     "INSERT OR IGNORE INTO households (id, revision, budget_cents) VALUES (?, 0, ?)",
   ).run(householdId, budgetCents);
   ensureCartColumns(db);
+  // The checkout review remembers which store it checked, so every follow-up prompt can name it.
+  const reviewColumns = new Set((db.prepare("PRAGMA table_info(pending_kroger_replacements)").all() as Array<{ name: string }>).map((column) => column.name));
+  if (!reviewColumns.has("location_id")) db.exec("ALTER TABLE pending_kroger_replacements ADD COLUMN location_id TEXT");
   db.exec(`
     CREATE TABLE IF NOT EXISTS pending_product_choices (
       member_id TEXT PRIMARY KEY REFERENCES members(id),
