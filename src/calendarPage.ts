@@ -87,7 +87,12 @@ const styles = String.raw`
 .cal-foot { color:var(--gc-muted); font-size:12px; margin-top:10px !important; }
 
 .cal-people { display:grid; gap:12px; }
-.cal-person { display:grid; grid-template-columns:32px minmax(0,1fr); gap:4px 10px; align-items:center; }
+.cal-person { display:grid; grid-template-columns:20px 32px minmax(0,1fr); gap:4px 10px; align-items:center; }
+.cal-check { width:20px; height:20px; padding:0; display:grid; place-items:center; border:2px solid var(--m-solid); border-radius:5px; background:transparent; color:var(--gc-surface); cursor:pointer; }
+.cal-check svg { opacity:0; }
+.cal-check[aria-pressed="true"] { background:var(--m-solid); }
+.cal-check[aria-pressed="true"] svg { opacity:1; }
+.cal-check:focus-visible { outline:2px solid var(--gc-accent); outline-offset:2px; }
 .cal-avatar { width:32px; height:32px; border-radius:50%; display:grid; place-items:center; background:var(--m-solid); color:var(--gc-surface); font-weight:600; font-size:13px; }
 .cal-person-name { font-weight:500; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .cal-status { display:flex; align-items:center; gap:6px; color:var(--gc-muted); font-size:12px; }
@@ -96,7 +101,7 @@ const styles = String.raw`
 .cal-status.sample::before { background:var(--m-solid); }
 .cal-status.warn { color:var(--cal-warn); } .cal-status.warn::before { background:var(--cal-warn); }
 .cal-status.bad { color:var(--cal-danger); } .cal-status.bad::before { background:var(--cal-danger); }
-.cal-person-actions { grid-column:2; display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:4px; }
+.cal-person-actions { grid-column:3; display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:4px; }
 .cal-person-actions .cal-btn { height:30px; font-size:13px; padding:0 12px; }
 
 .cal-best { display:grid; gap:4px; }
@@ -142,6 +147,8 @@ const styles = String.raw`
 .cal-key .k-ovl2 { background:var(--cal-ovl-2); box-shadow:inset 0 0 0 1px var(--cal-line-soft); }
 .cal-key .k-ovl3 { background:var(--cal-ovl-3); box-shadow:inset 0 0 0 1px var(--cal-line-soft); }
 .cal-key .k-free { background:var(--cal-free-bg); border-left:3px solid var(--cal-free-edge); }
+.cal-key-people { display:inline-flex; flex-wrap:wrap; align-items:center; gap:4px 14px; margin-left:auto; }
+.cal-key-member[aria-pressed="false"] { opacity:.55; }
 .cal-key-member { display:inline-flex; align-items:center; padding:2px 6px; margin:-2px -6px; border:0; border-radius:6px; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .cal-key-member:hover { background:var(--cal-surface-2); color:var(--gc-text); }
 .cal-key-member:focus-visible { outline:2px solid var(--gc-accent); outline-offset:1px; }
@@ -313,6 +320,7 @@ const script = String.raw`
   const isPhone = () => phoneQuery.matches;
   const startParams = new URLSearchParams(location.search);
   const PIN = '<svg class="gc-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>';
+  const CHECK = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
   const CLOCK = '<svg class="gc-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>';
   const HOUSE = (window.GC && GC.icon && GC.icon("home")) || "";
 
@@ -324,9 +332,15 @@ const script = String.raw`
   let popTrigger = null;
   const cache = new Map();       // weekStart -> { at, data }
   const columns = new Map();     // date -> { day, entries, right, indent }: the drawn .cal-day columns (placeExtras)
-  // Calendars hidden from the grid with the legend toggles (this browser only); free time still counts everyone.
-  const hidden = new Set((() => { try { return JSON.parse(localStorage.getItem("gc-cal-hidden") || "[]"); } catch { return []; } })());
-  const shown = (member) => !hidden.has(member.id);
+  // The Week view shows when everyone is free; a roommate's own events appear only after you tick their calendar
+  // (this browser only). Free time always counts everyone.
+  const visible = new Set((() => { try { return JSON.parse(localStorage.getItem("gc-cal-shown") || "[]"); } catch { return []; } })());
+  const shown = (member) => visible.has(member.id);
+  function toggleMember(id) {
+    if (visible.has(id)) visible.delete(id); else visible.add(id);
+    try { localStorage.setItem("gc-cal-shown", JSON.stringify([...visible])); } catch {}
+    renderGrid(); renderKey(); renderPeople();
+  }
   const inflight = new Map();    // weekStart -> Promise
   const FRESH_MS = 60000;
 
@@ -585,7 +599,8 @@ const script = String.raw`
         actions = '<label class="hv-switch cal-titles"><input type="checkbox" role="switch" data-titles="' + esc(member.id) + '"' + (member.titlesGranted ? " checked" : "") + ' /><span class="hv-track" aria-hidden="true"></span>Show event titles</label>' + actions;
       }
       const detail = member.detail && member.status !== "sample" ? ' title="' + esc(member.detail) + '"' : "";
-      return '<li class="cal-person ' + colorClass(member) + '"><span class="cal-avatar" aria-hidden="true">' + esc(member.name.slice(0, 1).toUpperCase()) + '</span>'
+      const check = '<button type="button" class="cal-check" data-toggle-member="' + esc(member.id) + '" aria-pressed="' + shown(member) + '" aria-label="Show ' + esc(member.name) + '’s calendar" title="' + (shown(member) ? "Hide " : "Show ") + esc(member.name) + '’s calendar">' + CHECK + '</button>';
+      return '<li class="cal-person ' + colorClass(member) + '">' + check + '<span class="cal-avatar" aria-hidden="true">' + esc(member.name.slice(0, 1).toUpperCase()) + '</span>'
         + '<div><div class="cal-person-name">' + esc(member.name) + '</div><div class="cal-status ' + cls + '"' + detail + '>' + esc(label) + '</div></div>'
         + '<div class="cal-person-actions">' + actions + '</div></li>';
     }).join("") || '<li class="cal-empty">No household members yet.</li>';
@@ -774,7 +789,7 @@ const script = String.raw`
       for (const w of freeByDay[index]) {
         const a = minutesInDay(w.start, day), b = minutesInDay(w.end, day);
         html += '<div class="cal-free" data-start="' + w.start + '" data-end="' + w.end + '" style="top:' + topPx(geo, a) + ';height:' + heightPx(geo, a, b) + '" title="' + esc(freeLabel(w)) + '">'
-          + '</div>';
+          + (b - a >= 45 ? '<span>Everyone free</span>' : '') + '</div>';
       }
       html += overlapHtml(day, geo);
       const entries = members.flatMap((member, memberIndex) => shown(member) ? placed(member, memberIndex, day, geo) : []);
@@ -798,10 +813,12 @@ const script = String.raw`
     let html = "";
     for (const o of data.overlaps) {
       if (o.end <= day.start || o.start >= day.end) continue;
+      const count = o.memberIds.filter((id) => visible.has(id)).length;
+      if (count < 2) continue;
       const a = Math.max(minutesInDay(o.start, day), geo.startHour * 60), b = Math.min(minutesInDay(o.end, day), geo.endHour * 60);
       if (b <= a) continue;
-      const names = o.memberIds.map((id) => (data.members.find((m) => m.id === id) || {}).name || "?").join(", ");
-      html += '<div class="cal-ovl c' + Math.min(o.count, 4) + '" style="top:' + topPx(geo, a) + ';height:' + heightPx(geo, a, b) + '" title="' + esc(o.count + " busy at once (" + names + ") · " + timeRange(Math.max(o.start, day.start), Math.min(o.end, day.end))) + '"></div>';
+      const names = o.memberIds.filter((id) => visible.has(id)).map((id) => (data.members.find((m) => m.id === id) || {}).name || "?").join(", ");
+      html += '<div class="cal-ovl c' + Math.min(count, 4) + '" style="top:' + topPx(geo, a) + ';height:' + heightPx(geo, a, b) + '" title="' + esc(count + " busy at once (" + names + ") · " + timeRange(Math.max(o.start, day.start), Math.min(o.end, day.end))) + '"></div>';
     }
     return html;
   }
@@ -913,9 +930,11 @@ const script = String.raw`
 
   function renderKey() {
     const people = data.members.filter(included).map((m) => '<button type="button" class="cal-key-member ' + colorClass(m) + '" data-toggle-member="' + esc(m.id) + '" aria-pressed="' + shown(m) + '" title="' + (shown(m) ? "Hide " : "Show ") + esc(m.name) + '’s calendar"><i class="k-member"></i>' + esc(m.name) + '</button>').join("");
-    const avail = data.members.some((m) => m.events.some((item) => item.free)) ? '<span><i class="k-avail"></i>Available (not busy)</span>' : "";
-    $("calKey").innerHTML = people + avail
-      + '<span><i class="k-ovl2"></i>2 busy at once</span><span><i class="k-ovl3"></i>3+ busy</span><span><i class="k-free"></i>Everyone free</span>';
+    const someShown = data.members.some(shown);
+    const avail = someShown && data.members.some((m) => shown(m) && m.events.some((item) => item.free)) ? '<span><i class="k-avail"></i>Available (not busy)</span>' : "";
+    const overlap = data.members.filter(shown).length >= 2 ? '<span><i class="k-ovl2"></i>2 busy at once</span><span><i class="k-ovl3"></i>3+ busy</span>' : "";
+    $("calKey").innerHTML = '<span><i class="k-free"></i>Everyone free</span>' + overlap + avail
+      + '<span class="cal-key-people">' + (someShown ? "Showing:" : "Show a calendar:") + people + '</span>';
   }
 
   // ---- Event popover --------------------------------------------------------
@@ -994,10 +1013,7 @@ const script = String.raw`
     const button = event.target.closest("[data-toggle-member]");
     if (!button || !data) return;
     const id = button.dataset.toggleMember;
-    if (hidden.has(id)) hidden.delete(id);
-    else if (data.members.some((m) => m.id !== id && shown(m))) hidden.add(id); // keep at least one calendar on screen
-    try { localStorage.setItem("gc-cal-hidden", JSON.stringify([...hidden])); } catch {}
-    renderGrid(); renderKey();
+    toggleMember(id);
     const again = $("calKey").querySelector('[data-toggle-member="' + CSS.escape(id) + '"]');
     if (again) again.focus();
   });
@@ -1059,6 +1075,13 @@ const script = String.raw`
     target.classList.remove("flash"); void target.offsetWidth; target.classList.add("flash");
   }
   $("calPeople").addEventListener("click", async (event) => {
+    const toggle = event.target.closest("[data-toggle-member]");
+    if (toggle && data) {
+      toggleMember(toggle.dataset.toggleMember);
+      const again = $("calPeople").querySelector('[data-toggle-member="' + CSS.escape(toggle.dataset.toggleMember) + '"]');
+      if (again) again.focus();
+      return;
+    }
     if (event.target.closest("[data-retry]")) return load({ force: true });
     const button = event.target.closest("[data-disconnect]");
     if (!button) return;
