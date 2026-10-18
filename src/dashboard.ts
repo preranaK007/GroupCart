@@ -11,6 +11,7 @@ import { renderBillsPlaceholder, renderCalendarPlaceholder, renderChoresPlacehol
 import { renderSettingsPage } from "./ui/settingsPage.js";
 import { renderNotice } from "./ui/shell.js";
 import { recentFeed, runCommands, runRoutes } from "./platform.js";
+import { blockRemoteRequest } from "./remoteAccess.js"; // Remote access guard (Claude connector)
 
 
 function safeSnapshot(snapshot: CartSnapshot): Omit<CartSnapshot, "members"> & {
@@ -53,6 +54,9 @@ function krogerCheckoutStatus(store: CartStore): { status: string; revision: num
 export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
   const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    // --- Remote access guard (Claude connector): tunnel/LAN requests reach only /mcp, sign-in, or authorized routes ---
+    if (blockRemoteRequest(request, response, url)) return;
+    // --- end remote access guard ---
     // Google Calendar: /calendar page, /api/calendar, and /api/google/* OAuth routes.
     if (calendar && await handleCalendarRequest(calendar, request, response, url)) return;
     // Feature routes registered through src/platform.ts (chores, lists, events, bills, connector).

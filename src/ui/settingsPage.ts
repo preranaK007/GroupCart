@@ -1,4 +1,5 @@
 import { avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
+import { claudeConnectorCard } from "./connectorCard.js"; // Claude connector card
 
 /**
  * Settings / Connections page (route "/settings"). Server-rendered on each
@@ -122,16 +123,11 @@ function splitwiseCard(): IntegrationCard {
   };
 }
 
+// --- Claude connector: per-member tokens, URLs, and tools (src/ui/connectorCard.ts) ---
 function claudeCard(): IntegrationCard {
-  return {
-    id: "claude",
-    name: "Claude",
-    icon: "spark",
-    summary: "Ask about chores, bills, and groceries",
-    status: { label: "Not configured", tone: "neutral" },
-    actions: button({ label: "Connect", variant: "outline", size: "sm", disabled: true }),
-  };
+  return claudeConnectorCard();
 }
+// --- end Claude connector ---
 
 const styles = `
 .set-wrap { max-width:760px; margin:0 auto; display:grid; gap:var(--gc-space-4); }

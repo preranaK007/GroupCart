@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "spectrum-ts": "^12.11.0"
   },
   "devDependencies": {

@@ -63,6 +63,16 @@ Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also link
 
 Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
+## Claude connector
+
+Each roommate can add GroupCart to their own Claude (Claude Code, Claude Desktop, or claude.ai) as a custom connector. GroupCart serves an MCP endpoint at `/mcp` (Streamable HTTP), and every tool call runs as the roommate whose token made it. Tools include `whats_on_my_plate`, `view_cart`, `add_to_cart` / `choose_product` (the same path as a group-chat request), `approve_cart`, `household_members`, `free_times`, `recent_activity`, and `post_to_group` (posted as "Name via Claude: ..."). Tools that feature modules register through `registerTools()` in `src/platform.ts` appear automatically. Claude cannot check out, place orders, or pay.
+
+1. Open **Settings > Claude** and press **Connect Claude** next to your name. Copy the token: it is shown once, and GroupCart stores only its SHA-256 hash. **New token** rotates it and **Revoke** turns it off.
+2. **Claude Code** (on the computer running GroupCart): `claude mcp add --transport http groupcart http://127.0.0.1:3000/mcp --header "Authorization: Bearer <token>"`.
+3. **claude.ai or Claude Desktop**: Settings > Connectors > Add custom connector, then paste your personal URL `https://<public-host>/mcp/t/<token>`. Custom connectors need a public HTTPS URL (see below). Claude Desktop can also reach the local endpoint through `mcp-remote`; the token dialog shows the `claude_desktop_config.json` snippet.
+
+**Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1`. To reach it from claude.ai or another computer, run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`. Then set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, restart GroupCart, and create a new token so the dialog shows the public URLs. Quick-tunnel addresses change on every run. Requests that come through a tunnel or proxy (non-loopback `Host`, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp` and `/mcp/t/<token>`. The dashboard, `/api/*`, demo endpoints, and OAuth starts answer 404 (see `src/remoteAccess.ts`). Because OAuth callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs when `GROUP_CART_PUBLIC_URL` points at a tunnel. Treat `/mcp/t/<token>` URLs like passwords. Repeated failed token attempts are rate-limited (10 per client and 200 overall per 15 minutes).
+
 ## Configuration
 
 | Variable | Purpose | Default |
@@ -73,6 +83,7 @@ Without Google credentials the page runs in demo mode with generated sample sche
 | `GROUP_CART_HOUSEHOLD` | Shared cart identity | `apartment-4b` |
 | `GROUP_CART_DB` | SQLite file path | `./data/groupcart.sqlite` |
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |
+| `GROUP_CART_PUBLIC_URL` | Public base URL used in links; a non-loopback HTTPS value (e.g. a tunnel) also becomes the public Claude connector URL | `http://127.0.0.1:$PORT` |
 | `PORT` | Local dashboard port | `3000` |
 | `KROGER_CLIENT_ID` | Kroger Production app client ID for product search and user-authorized cart access | unset (live Kroger features disabled) |
 | `KROGER_CLIENT_SECRET` | Kroger Production app client secret | unset (live Kroger features disabled) |
@@ -93,6 +104,7 @@ Without Google credentials the page runs in demo mode with generated sample sche
 npm run dev
 npm run typecheck
 node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
+node --import=tsx --test src/connector.test.ts      # Claude connector: tokens, tunnel guard, MCP over HTTP
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.
