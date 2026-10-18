@@ -753,8 +753,11 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
   let body: Record<string, unknown>;
   try { body = await readJsonBody(request); } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
   const members = kitchen.meals.members();
-  const viewer = requestMember(request)?.memberId;
-  const actor = viewer && members.some((member) => member.id === viewer) ? viewer : members[0]?.id ?? null;
+  const viewerId = requestMember(request)?.memberId;
+  const viewer = viewerId && members.some((member) => member.id === viewerId) ? viewerId : null;
+  // Changes are attributed to the signed-in (or "Viewing as") member; announcements name only a known viewer.
+  const actor = viewer ?? members[0]?.id ?? null;
+  const by = (text: string) => viewer ? `${firstName(kitchen.meals.memberName(viewer))}: ${text}` : text;
   const demoOnly = (what: string) => sendJson(response, 403, { error: `In live mode, ${what} in the iMessage group.` });
   const status = (value: unknown): PantryStatus | null => PANTRY_STATUSES.includes(value as PantryStatus) ? value as PantryStatus : null;
   const date = (value: unknown): string | null => typeof value === "string" && isDateString(value) ? value : null;
@@ -780,7 +783,7 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
         const items = ids.map((id) => pantry.get(id)).filter((item): item is PantryItem => Boolean(item));
         if (!items.length || !actor) return sendJson(response, 400, { error: "Choose items." });
         const result = await kitchen.addToCart(actor, items.map((item) => ({ name: item.name, quantity: 1 })), `kitchen-web:${randomUUID()}`, RESTOCK_LIST);
-        if (result.status === "added" || result.status === "listed") await notifyGroup(`${firstName(kitchen.meals.memberName(actor))}: ${result.message}`);
+        if (result.status === "added" || result.status === "listed") await notifyGroup(by(result.message));
         return sendJson(response, result.status === "blocked" ? 409 : 200, { ok: result.status !== "blocked", ...result });
       }
       case "/api/kitchen/meals/plan": {
@@ -790,7 +793,7 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
       case "/api/kitchen/meals/accept": {
         const result = meals.acceptDraft(actor);
         if (!result.ok) return sendJson(response, 400, { error: result.error });
-        await notifyGroup(`${actor ? `${firstName(meals.memberName(actor))}: ` : ""}${kitchen.savedPlanText(result.weekStart, result.days)}`);
+        await notifyGroup(by(kitchen.savedPlanText(result.weekStart, result.days)));
         return sendJson(response, 200, { ok: true, weekStart: result.weekStart });
       }
       case "/api/kitchen/meals/discard":
@@ -821,7 +824,7 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
         if (!kitchen.demoMode) return demoOnly("text “shop for meals”");
         if (!actor) return sendJson(response, 400, { error: "Add household members first." });
         const result = await kitchen.shopForMeals(actor, `kitchen-web:${randomUUID()}`);
-        if (result.status === "added" || result.status === "listed") await notifyGroup(`${firstName(meals.memberName(actor))}: ${result.message}`);
+        if (result.status === "added" || result.status === "listed") await notifyGroup(by(result.message));
         return sendJson(response, result.status === "blocked" ? 409 : 200, { ok: result.status !== "blocked", ...result });
       }
       case "/api/kitchen/recipes": {
