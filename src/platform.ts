@@ -9,8 +9,10 @@
 //   registerHelp(line)         one line appended to the "help" reply
 //   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
-// Live mode sends notifyGroup() messages to the most recent iMessage group space; demo mode
-// keeps them in an in-memory feed served at GET /api/feed so the dashboard can show them.
+// Live mode sends notifyGroup() messages to the household group that the store persists (upstream's
+// store.rememberGroupSpace / store.groupSpace, reopened with imessage(app).space.get after a restart; see
+// src/householdGroup.ts), so nudges and reminders work before anyone texts again. Every message is also kept in
+// an in-memory feed served at GET /api/feed and mirrored into the web chat; demo mode only does the latter.
 import type { IncomingMessage, ServerResponse } from "node:http";
 
 export type CommandAttachment = {
@@ -160,7 +162,7 @@ export function listTools(): ToolSpec[] {
   return [...tools.values()];
 }
 
-/** Live mode: index.ts sets this to send into the household group. */
+/** Live mode: index.ts sets this once to send into the persisted household group (src/householdGroup.ts). */
 export function setGroupSender(sender: ((text: string) => Promise<void>) | null): void {
   groupSender = sender;
 }
@@ -174,11 +176,21 @@ export function onGroupNotify(listener: (text: string) => void): void {
 }
 // --- end profiles & chat ---
 
-/** Sends a proactive message to the group (live) and always records it in the feed. */
-export async function notifyGroup(text: string): Promise<void> {
+/**
+ * Records a GroupCart message that reached the group some other way (e.g. a recurring-list check-in sent by
+ * src/reminders.ts, or one shown with a demo reply) in the feed. `mirror` also adds it to the web chat; leave it
+ * off when the web chat already recorded the text as part of a reply.
+ */
+export function recordGroupMessage(text: string, options: { mirror?: boolean } = {}): void {
   feed.push({ id: ++feedId, at: new Date().toISOString(), text });
   if (feed.length > 100) feed.splice(0, feed.length - 100);
+  if (!options.mirror) return;
   for (const listener of notifyListeners) { try { listener(text); } catch (error) { console.warn("A group notification listener failed:", error instanceof Error ? error.message : error); } } // profiles & chat
+}
+
+/** Sends a proactive message to the group (live) and always records it in the feed and the web chat. */
+export async function notifyGroup(text: string): Promise<void> {
+  recordGroupMessage(text, { mirror: true });
   if (!groupSender) return;
   try {
     await groupSender(text);

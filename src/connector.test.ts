@@ -248,6 +248,12 @@ test("MCP over HTTP: tools/list and tool calls run as the token's member", async
 
     const checkout = await client.callTool({ name: "add_to_cart", arguments: { request: "checkout" } });
     assert.equal(checkout.isError, true);
+    // Sharing sessions and recurring lists are group-chat commands (send_group_message), not grocery adds.
+    for (const request of ["start sharing with Maya", "stop sharing", "weekly: milk, eggs", "load weekly list"]) {
+      const refused = await client.callTool({ name: "add_to_cart", arguments: { request } });
+      assert.equal(refused.isError, true, request);
+      assert.match(text(refused), /send_group_message/);
+    }
     const missing = await client.callTool({ name: "add_to_cart", arguments: {} });
     assert.equal(missing.isError, true);
     assert.match(text(missing), /Missing required argument "request"/);

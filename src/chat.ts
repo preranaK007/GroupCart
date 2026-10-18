@@ -2,6 +2,8 @@
 //
 // Live mode: index.ts records every inbound allowlisted group message (text + attachment metadata; images are
 // saved so they show inline) and every GroupCart reply; notifyGroup() messages arrive through onGroupNotify.
+// Web messages are relayed to the household group persisted by the store (src/householdGroup.ts), so the web chat
+// works after a restart without waiting for someone to text.
 // A message sent from the website is posted into the iMessage group as "Maya: <text>" and then processed
 // exactly like a group message from that member (the shared processMemberMessage in index.ts).
 // Demo mode: the web chat is the group; nothing is sent anywhere.
@@ -87,6 +89,7 @@ export class ChatService {
   readonly #displayName: (memberId: string) => string | undefined;
   readonly #process: MemberMessageProcessor;
   #group: GroupChannel | null = null;
+  #groupKnown: () => boolean = () => true;
   #queue: Promise<unknown> = Promise.resolve();
   #busy = 0;
 
@@ -109,7 +112,6 @@ export class ChatService {
         source TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
-      CREATE TABLE IF NOT EXISTS chat_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
   }
 
@@ -122,22 +124,18 @@ export class ChatService {
     return this.#busy > 0;
   }
 
-  /** Live mode: whether web messages can reach the iMessage group right now. */
+  /** Live mode: whether web messages can reach the iMessage group (GroupCart has seen the household group). */
   get groupConnected(): boolean {
-    return this.#group !== null;
+    return this.#group !== null && this.#groupKnown();
   }
 
-  /** Remembers the household group (called from the message loop for every group message). */
-  useGroup(channel: GroupChannel, spaceId?: string): void {
+  /**
+   * Live mode: where web messages are relayed. index.ts passes the household group channel once at startup; it
+   * resolves the group the store persisted (one mechanism with list check-ins and notifyGroup()).
+   */
+  useGroup(channel: GroupChannel, known: () => boolean = () => true): void {
     this.#group = channel;
-    if (spaceId && spaceId !== this.savedGroupId) {
-      this.#db.prepare("INSERT INTO chat_state (key, value) VALUES ('group_space_id', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(spaceId);
-    }
-  }
-
-  /** The last group space id seen, so a restart can reconnect the web chat before anyone texts. */
-  get savedGroupId(): string | null {
-    return (this.#db.prepare("SELECT value FROM chat_state WHERE key = 'group_space_id'").get() as { value: string } | undefined)?.value ?? null;
+    this.#groupKnown = known;
   }
 
   // ---------------------------------------------------------------------------
@@ -237,7 +235,7 @@ export class ChatService {
   ): Promise<{ message: ChatMessage; reply?: string | null }> {
     const text = input.text.replace(/\r\n/g, "\n").trim().slice(0, CHAT_TEXT_LIMIT);
     if (!text && !input.image) throw new ChatError(400, "Type a message first.");
-    if (this.#live && !this.#group) throw new ChatError(409, "GroupCart hasn’t connected to the iMessage group yet. Send any message in the group, then try again.");
+    if (this.#live && !this.groupConnected) throw new ChatError(409, "GroupCart hasn’t connected to the iMessage group yet. Send any message in the group, then try again.");
     let stored: { file: string; mimeType: string } | null = null;
     if (input.image) {
       if (input.image.length > CHAT_IMAGE_LIMIT) throw new ChatError(413, "That image is too large (15 MB max).");
@@ -384,7 +382,10 @@ export class ChatService {
       { at: 240, from: alex, text: "Internet bill came in: $60 for October" },
       { at: 239, bot: "🧾 Logged Internet: $60.00 split 3 ways, $20.00 each. Pay Alex (Venmo @alex-k)." },
       { at: 45, from: maya, text: "We’re out of eggs and pasta 😩" },
-      { at: 44, from: maya, text: "eggs and pasta for everyone", process: true },
+      // Splits come from upstream's sharing sessions (per-item “for everyone” no longer shares anything).
+      { at: 44, from: maya, text: "start sharing with Alex and Jordan", process: true },
+      { at: 43, from: maya, text: "eggs and pasta", process: true },
+      { at: 42, from: maya, text: "stop sharing", process: true },
       { at: 12, from: jordan, text: "oat milk please", process: true },
     ];
     let index = 0;

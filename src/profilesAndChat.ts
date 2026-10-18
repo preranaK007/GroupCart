@@ -12,6 +12,7 @@ import { createReadStream } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dirname, extname, join, resolve } from "node:path";
 import type { Space } from "spectrum-ts";
+import type { HouseholdGroup } from "./householdGroup.js";
 import {
   AuthService, HttpError, clientKey, isLocalRequest, isSameOriginMutation, readJsonBody, readRawBody, redirect,
   safeNextPath, sendHtml, sendJson, type DirectSender,
@@ -43,14 +44,12 @@ export type ProfilesAndChat = {
   auth: AuthService;
   profiles: ProfileService;
   chat: ChatService;
-  /** Live loop: remember the household group for web-chat relays (call for every group message). */
-  useGroup(space: Space): void;
   /** Live loop: record an inbound member message; returns its attachments for command handlers. */
   recordInbound(input: { messageId: string; memberId: string; memberName: string; text: string; attachments: InboundAttachment[]; at?: Date }): CommandAttachment[];
   /** Live loop: send GroupCart's reply into the group (typing indicator) and record it. */
   replyInGroup(space: Space, text: string): Promise<void>;
-  /** Live mode: enable sign-in codes by iMessage DM and reconnect the web chat to the last group. */
-  useSpectrum(options: { sendDirect: DirectSender; getSpace?: (id: string) => Promise<Space> }): Promise<void>;
+  /** Live mode: enable sign-in codes by iMessage DM and relay web chat messages to the persisted household group. */
+  useSpectrum(options: { sendDirect: DirectSender; group: HouseholdGroup }): void;
 };
 
 function householdName(id: string): string {
@@ -457,26 +456,17 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
     auth,
     profiles,
     chat,
-    useGroup(space) {
-      chat.useGroup(spectrumChannel(space), space.id);
-    },
     recordInbound(input) {
       return chat.recordInbound(input);
     },
     async replyInGroup(space, text) {
       await chat.replyInGroup(spectrumChannel(space), text);
     },
-    async useSpectrum({ sendDirect, getSpace }) {
+    useSpectrum({ sendDirect, group }) {
       auth.setDirectSender(sendDirect);
-      const savedId = chat.savedGroupId;
-      if (!savedId || !getSpace || chat.groupConnected) return;
-      try {
-        const space = await getSpace(savedId);
-        if (!chat.groupConnected) chat.useGroup(spectrumChannel(space), savedId);
-        console.log("Web chat reconnected to the household group.");
-      } catch (error) {
-        console.warn(`Web chat will connect after the next group message (${error instanceof Error ? error.message : "group not found"}).`);
-      }
+      // One group mechanism: the store remembers the household group (upstream's rememberGroupSpace), and the
+      // web chat relays through it, so it works across restarts as soon as the group is known.
+      chat.useGroup(group.channel(), () => group.known);
     },
   };
 }

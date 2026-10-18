@@ -4,9 +4,24 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 
 ## Project structure
 
-- `src/index.ts`: Spectrum startup, group-message filtering, household mapping, and replies.
-- `src/store.ts`: SQLite persistence, cart revisions, deterministic splits, approvals, and Kroger cart checkout.
+- `src/index.ts`: Spectrum startup, group-message filtering, household mapping, the recurring-list check-in timer, and replies. `processMemberMessage` is the single path for a member's message (feature commands via `runCommands`, then the cart). The iMessage loop and the web chat both call it; keep it that way.
+- `src/store.ts`: `CartStore` facade — the public API used by `index.ts`/`dashboard.ts` and the feature modules (including `database`/`household`, `memberForHandle`/`registerMembers` with handle normalization and aliases, `markMessageProcessed`, `recordedReply`/`recordCommandReply`, Splitwise and Google Calendar persistence), message-ID idempotency, and the order in which commands and pending states are routed to the modules below.
+- `src/store/`: the feature modules behind `CartStore`. Each class takes the shared `StoreContext` (database, household settings, reply/member helpers) and the `StoreModules` registry to call the others.
+  - `schema.ts` (tables and migrations), `context.ts`, `types.ts`.
+  - `parsing.ts` (pure message parsing: commands, price caps, quantities, retailer queries, removal intents, multi-item lists), `pricing.ts` (Kroger promo/price rules), `messages.ts` (help and dashboard text; appends `registeredHelp()` lines from feature modules).
+  - `cartLedger.ts`: cart items, deterministic splits, summaries, undo, clearing, removal, approvals, mock checkout, demo catalog adds.
+  - `sharing.ts`: “start/stop sharing with …” sessions.
+  - `productSearch.ts`: live Kroger single and multi-item search with numbered choices.
+  - `krogerCheckout.ts`: availability precheck, replacements, account choice, and adding to a Kroger cart.
+  - `recurringLists.ts`, `listCommands.ts`, `listText.ts`: recurring lists (state and cadence, conversation flows, reply text), plus the persisted household group (`rememberGroupSpace`/`groupSpace`).
+  - `splitwiseLog.ts`: the `splitwise_expenses` log, checkout hooks called by mock and Kroger checkout, and the `splitwise`/`settle`/`splitwise retry` commands; `googleCalendarAccounts.ts`: per-member Google Calendar tokens.
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
+- `src/lists.ts`: recurring weekly/biweekly/monthly list command parsing and cadence math (persistence lives in `src/store/recurringLists.ts`).
+- `src/reminders.ts`: delivery of due recurring-list check-ins to the remembered household group space.
+- `src/householdGroup.ts`: the one live-mode target for everything GroupCart sends on its own (list check-ins, `notifyGroup()`, web chat relays): the group persisted by the store, reopened with `imessage(app).space.get(chatGuid, { phone })` after a restart.
+- `src/platform.ts`: shared extension points for feature modules — `registerCommand`/`runCommands`, `registerRoute`, `registerTools`, `registerHelp`, `scheduleEvery`, `notifyGroup` (+ the `/api/feed` feed), the remote authorizer, and the request member resolver.
+- `src/splitwise.ts`: Splitwise logging of each completed checkout (simulated in demo mode or without credentials).
+- `src/bills.ts` (+ `billParse.ts`, `billSplit.ts`, `billExtract.ts`, `billSample.ts`, `src/ui/billsPage.ts`, `src/ui/billsHome.ts`): household bills (capture, split, balances, reminders), wired by `setupBills()`.
 - `src/dashboard.ts`: HTTP server (127.0.0.1 unless `GROUP_CART_HOST` is set; remote requests pass `remoteAccessGuard` first): page routes, JSON API, and local demo endpoints.
 - `src/ui/shell.ts`: shared UI shell (design tokens, icons, components, `renderPage`). Build every browser page on it; see the comment block at the top.
 - `src/ui/*Page.ts`, `src/ui/placeholders.ts`: Home (`/`), Groceries (`/groceries`), Settings (`/settings`), and placeholder Chores/Bills/Calendar pages.
@@ -16,7 +31,6 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/connector.ts`: AI assistant connector (Claude, ChatGPT & dots, Grok), a stateless MCP server at `/mcp` (Streamable HTTP, official SDK) exposing every tool in `listTools()`, with per-member connector tokens (SHA-256 hashes in `connector_tokens`) and the `/api/connector/*` Settings API; `src/connectorOAuth.ts`: OAuth 2.1 for hosted assistants (RFC 9728/8414 metadata, RFC 7591 registration, PKCE S256, rotating refresh tokens, RFC 7009 revocation, pairing-code sign-in and consent pages in `src/ui/oauthPages.ts`); `src/connectorSecurity.ts`: hashing, redaction, rate limiting; `src/coreTools.ts`: core connector tools and `registerSummaryProvider` for `whats_on_my_plate`; `src/ui/connectorCard.ts`: the Settings "AI assistants" card; `src/remoteAccess.ts`: `isRemoteRequest` and the remote-access guard; `src/connector.test.ts`, `src/connectorOAuth.test.ts`: end-to-end tests.
 - `src/chores.ts`: chores (fair rotation, away status, history, group commands, nudges, `/chores` + `/api/chores*`, connector tools), wired by `setupChores()`; `src/choresLogic.ts`: pure schedule/rotation/parser logic; `src/ui/choresPage.ts`: the page and Home "Chores due" card.
 - `src/profilesAndChat.ts`: one `setupProfilesAndChat(...)` call wires profiles, web sign-in, and the web chat (routes, connector tools, demo seed). `src/profiles.ts`: member profiles (`registerProfileSection` lets features add cards to `/people/<id>`; `avatarFor`, `referTo`). `src/auth.ts`: local-vs-remote detection, the remote access guard, one-time iMessage codes, and session cookies. `src/chat.ts`: the household conversation mirrored into `chat_messages` for `/chat`. Pages: `src/ui/profilePage.ts` (`/people`, `/people/<id>`), `src/ui/chatPage.ts` (`/chat`, Home chat card), `src/ui/signinPage.ts` (`/signin`), `src/ui/accountMenu.ts` (app-bar account menu).
-- `processMemberMessage` in `src/index.ts` is the single path for a member's message (feature commands, then the cart). The iMessage loop and the web chat both call it; keep it that way.
 
 ## Environment and credentials
 

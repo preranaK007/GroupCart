@@ -92,7 +92,8 @@ async function refresh() {
 
   const shown = cart.items.slice(0, 4);
   $("homeItems").innerHTML = shown.map((item) => {
-    const people = item.participantIds.map((id, index) => ({ id, name: item.participantNames[index] || "" }));
+    // participantNames is sorted by name (not aligned with participantIds), so look names up by id.
+    const people = item.participantIds.map((id) => ({ id, name: (cart.members.find((member) => member.id === id) || {}).name || "" }));
     return window.GC.listRow({
       leading: '<span class="gc-avatars">' + people.map((person) => window.GC.avatar(person, allIds, 24)).join("") + '</span>',
       title: item.name,

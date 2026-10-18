@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { remoteAccessGuard } from "./auth.js";
 import { avatarFor } from "./profiles.js";
-import { CartStore, type CartSnapshot } from "./store.js";
+import { CartStore, isStoreCommand, type CartSnapshot } from "./store.js";
 import { KrogerClient } from "./kroger.js";
 import { splitwiseDashboardView } from "./splitwise.js";
 import { handleCalendarRequest } from "./calendarPage.js";
@@ -142,6 +142,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     if (request.method === "GET" && url.pathname === "/api/cart") {
       sendJson(response, 200, {
         ...safeSnapshot(store.snapshot()),
+        lists: store.listsSnapshot(),
         demoMode,
         krogerConfigured: Boolean(krogerClient),
         krogerLocationConfigured: Boolean(krogerClient?.hasLocation),
@@ -179,19 +180,28 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
         }
         const member = store.getMembers().find((candidate) => candidate.id === body.memberId);
         if (!member) return sendJson(response, 404, { error: "Member not found." });
+        // Normally answered by the web chat route (src/profilesAndChat.ts), which runs the same steps through the
+        // shared member-message processor; this is the fallback when that module isn't set up.
         // Feature commands (calendar, chores, bills, ...) run before cart processing, as in the group chat.
-        const commandReply = await runCommands({ messageId: `demo:${randomUUID()}`, memberId: member.id, memberName: member.name, text: body.text, attachments: [] });
-        if (commandReply) return sendJson(response, 200, { message: commandReply });
-      const reply = krogerClient
-        ? await store.processLiveIncomingText(
-          `demo:${randomUUID()}`,
-          member.id,
-          body.text,
-          (query) => krogerClient.searchProducts(query),
-          krogerClient.selectedLocationId,
-        )
-        : store.processIncomingText(`demo:${randomUUID()}`, member.id, body.text);
-        return sendJson(response, 200, { message: reply ?? "No response." });
+        const messageId = `demo:${randomUUID()}`;
+        const commandReply = isStoreCommand(body.text) ? null : await runCommands({ messageId, memberId: member.id, memberName: member.name, text: body.text, attachments: [] });
+        const reply = commandReply ?? (krogerClient
+          ? await store.processLiveIncomingText(
+            messageId,
+            member.id,
+            body.text,
+            (query) => krogerClient.searchProducts(query),
+            krogerClient.selectedLocationId,
+            false,
+            undefined,
+            (productId) => krogerClient.getProduct(productId),
+          )
+          : store.processIncomingText(messageId, member.id, body.text));
+        // Demo mode never sends anything on its own; a due recurring-list
+        // check-in is shown with the reply and clearly labelled instead.
+        const reminder = store.claimDueListReminders();
+        const message = reminder ? `${reply ?? "No response."}\n\n[Demo reminder] ${reminder.text}` : reply ?? "No response.";
+        return sendJson(response, 200, { message });
       }
       if (url.pathname === "/api/approve") {
         if (typeof body.memberId !== "string") return sendJson(response, 400, { error: "Choose a member." });

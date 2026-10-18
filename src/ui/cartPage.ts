@@ -2,7 +2,9 @@ import { chip, icon, infoTip, renderPage } from "./shell.js";
 
 /**
  * Groceries page (route "/groceries"): the shared cart. Rendered once; all data comes from GET /api/cart,
- * polled every 2.5 s. Demo-only controls (sample requests, catalog search,
+ * polled every 2.5 s. Sharing sessions and the recurring weekly/biweekly/monthly lists come from upstream's
+ * store (`sharingSessions` in the snapshot, `lists` from store.listsSnapshot()) and are read-only here; they are
+ * managed in the group chat. Demo-only controls (sample requests, catalog search,
  * approve, mock checkout) are hidden in live mode, and the server rejects
  * them there as well.
  */
@@ -53,7 +55,7 @@ const body = `
       <div class="cart-compose">
         <select class="gc-select" id="member" aria-label="Send as"></select>
         <div class="gc-field-row">
-          <input class="gc-input" id="request" placeholder="2 bananas, pasta for everyone" autocomplete="off" aria-label="Request" />
+          <input class="gc-input" id="request" placeholder="2 bananas, or start sharing with Maya" autocomplete="off" aria-label="Request" />
           <button class="gc-btn" id="send" type="button">${icon("send", { size: 18 })}<span class="gc-hide-sm">Add</span><span class="gc-sr">Add request</span></button>
         </div>
       </div>
@@ -84,12 +86,23 @@ const body = `
         <span class="gc-spacer"></span>
         ${infoTip("Estimated share per person. Any cart edit resets approvals.")}
       </div>
+      <div class="cart-sessions" id="sessions"></div>
       <ul class="gc-list" id="people"></ul>
       <div class="cart-actions" id="demoActions" hidden>
         <button class="gc-btn" id="checkout" type="button">${icon("check", { size: 18 })}Mock checkout</button>
         ${infoTip("Simulated checkout. No payment is taken.")}
       </div>
       <p class="gc-status" id="approvalStatus" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="gc-card" id="recurringPanel" aria-labelledby="recurringTitle">
+      <div class="gc-card-head">
+        <h2 class="gc-card-title" id="recurringTitle">Recurring lists</h2>
+        <span class="gc-meta">Whole household</span>
+        <span class="gc-spacer"></span>
+        ${infoTip("Weekly, every-two-weeks, and monthly lists. Manage them in the group: “weekly: milk, eggs”, “load weekly list”, “weekly list on saturdays”.")}
+      </div>
+      <ul class="gc-list" id="recurringLists"></ul>
     </section>
 
     <section class="gc-card" id="krogerPanel" aria-labelledby="krogerTitle">
@@ -105,7 +118,7 @@ const body = `
       <summary>${icon("help", { size: 20 })}How it works${icon("chevronDown", { size: 20, className: "gc-chevron" })}</summary>
       <div class="gc-disclosure-body">
         <ol class="gc-steps">
-          <li><span class="gc-step-icon">${icon("message", { size: 16 })}</span><div><strong>Text the group</strong>“2 bananas” or “eggs shared with Maya”. Text “help” for more.</div></li>
+          <li><span class="gc-step-icon">${icon("message", { size: 16 })}</span><div><strong>Text the group</strong>“2 bananas”, or “start sharing with Maya” to split what you both add. Text “help” for more.</div></li>
           <li><span class="gc-step-icon">${icon("users", { size: 16 })}</span><div><strong>Everyone approves</strong>Any change resets approvals.</div></li>
           <li><span class="gc-step-icon">${icon("store", { size: 16 })}</span><div><strong>Send to Kroger</strong>Items go to one member’s Kroger cart. They place the order on Kroger.</div></li>
         </ol>
@@ -130,6 +143,9 @@ const styles = `
 .cart-facts dd { margin:0; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:6px; text-align:right; min-width:0; }
 .cart-how-note { margin-top:var(--gc-space-3); color:var(--gc-muted); font-size:var(--gc-fs-xs); }
 .cart-how-note:empty { display:none; }
+.cart-sessions { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:var(--gc-space-3); }
+.cart-sessions:empty { display:none; }
+.cart-list-items { margin:4px 0 0; padding-left:18px; color:var(--gc-text-2); font-size:var(--gc-fs-sm); }
 .cart-price-sub { font-size:var(--gc-fs-xs); color:var(--gc-muted); text-align:right; font-weight:400; }
 @media (max-width: 760px) {
   .cart-compose { grid-template-columns:minmax(0,1fr); }
@@ -152,7 +168,8 @@ function renderItems() {
   const items = latest.items;
   $("itemCount").textContent = items.length ? items.length + (items.length === 1 ? " item" : " items") : "No items";
   $("items").innerHTML = items.length ? items.map((item) => {
-    const people = item.participantIds.map((id, index) => ({ id, name: item.participantNames[index] || "" }));
+    // participantNames is sorted by name (not aligned with participantIds), so look names up by id.
+    const people = item.participantIds.map((id) => ({ id, name: memberName(id) }));
     const shared = people.length > 1;
     const who = shared ? "Shared · " + item.participantNames.join(", ") : item.ownerName;
     const source = item.priceSource === "kroger"
@@ -163,6 +180,31 @@ function renderItems() {
       + '<div class="gc-list-sub">' + source + '<span>' + esc(who) + '</span></div></div>'
       + '<div class="gc-amount">' + dollars(item.totalCents) + '<div class="cart-price-sub">' + item.quantity + ' × ' + dollars(item.unitPriceCents) + '</div></div></li>';
   }).join("") : '<li class="gc-empty">' + icon("cart") + '<p class="gc-empty-title">Cart is empty</p><p class="gc-empty-text">' + (latest.demoMode ? "Try a request below." : "Text an item to the group.") + '</p></li>';
+}
+
+function renderSessions() {
+  // Upstream sharing sessions: everything a participant adds is split among the session.
+  $("sessions").innerHTML = (latest.sharingSessions || []).map((session) =>
+    '<span title="Since ' + esc(window.GC.time(new Date(session.startedAt))) + '. Text “stop sharing” to end it.">' + chip("Sharing: " + session.participantNames.join(", "), "accent", "users") + '</span>'
+  ).join("");
+}
+
+function renderRecurringLists() {
+  const lists = latest.lists || [];
+  const shortDate = (iso) => new Date(iso).toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  $("recurringLists").innerHTML = lists.map((list) => {
+    const status = !list.active ? chip("Not started", "neutral")
+      : !list.remindersEnabled ? chip("Paused", "neutral")
+      : list.dueNow ? chip("Due now", "warning", "clock")
+      : list.nextReminderAt ? chip("Next " + shortDate(list.nextReminderAt), "neutral", "clock") : "";
+    const loaded = list.lastLoadedAt ? " · loaded " + shortDate(list.lastLoadedAt) + (list.lastLoadedByName ? " by " + list.lastLoadedByName : "") : "";
+    const items = list.items.length
+      ? '<ul class="cart-list-items">' + list.items.map((item) => '<li>' + esc(item.quantity + " × " + item.name) + '</li>').join("") + '</ul>'
+      : '<div class="gc-list-sub">Empty. Text “' + esc(list.command) + ': …” to add items.</div>';
+    return '<li class="gc-list-item"><div class="gc-list-main"><div class="gc-list-title">' + esc(list.title) + '</div>'
+      + '<div class="gc-list-sub">' + status + '<span>' + esc("Due " + list.schedule + loaded) + '</span></div>' + items + '</div>'
+      + '<div class="gc-amount">' + (list.items.length ? "≈ " + dollars(list.estimatedCents) : "") + '</div></li>';
+  }).join("") || '<li class="gc-empty"><p class="gc-empty-text">No recurring lists.</p></li>';
 }
 
 function renderBudget() {
@@ -254,6 +296,8 @@ async function refresh() {
   $("revision").textContent = "Revision " + latest.revision;
   renderBudget();
   renderItems();
+  renderSessions();
+  renderRecurringLists();
   renderPeople();
   renderKroger();
   renderMemberSelect();

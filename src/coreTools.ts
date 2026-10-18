@@ -9,8 +9,10 @@ import { randomUUID } from "node:crypto";
 import { money } from "./cart.js";
 import type { CalendarService } from "./googleCalendar.js";
 import type { KrogerClient } from "./kroger.js";
+import { parseListCommand } from "./lists.js";
 import { notifyGroup, recentFeed, registerTools, type ToolCaller, type ToolSpec } from "./platform.js";
 import type { CartStore } from "./store.js";
+import { parseSharingCommand } from "./store/parsing.js";
 
 export type CoreToolDeps = {
   store: CartStore;
@@ -100,9 +102,13 @@ export function registerCoreTools(deps: CoreToolDeps): void {
               name: item.name,
               quantity: item.quantity,
               itemTotal: money(item.totalCents),
-              sharedWith: item.participantNames.filter((_, index) => item.participantIds[index] !== caller.memberId),
+              // participantNames is sorted by name, not aligned with participantIds, so map ids to names here.
+              sharedWith: item.participantIds.filter((id) => id !== caller.memberId).map((id) => snapshot.members.find((member) => member.id === id)?.name ?? "Member"),
             })),
             yourShare: money(me?.shareCents ?? 0),
+            // Upstream sharing session: while one is on, everything you (or they) add is split among its members.
+            sharingSessionWith: (snapshot.sharingSessions.find((session) => session.participantIds.includes(caller.memberId))?.participantIds ?? [])
+              .filter((id) => id !== caller.memberId).map((id) => snapshot.members.find((member) => member.id === id)?.name ?? "Member"),
             cartTotal: money(snapshot.totalCents),
             budget: money(snapshot.budgetCents),
             approval: !snapshot.items.length
@@ -149,6 +155,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
             sharedBy: item.participantNames,
           })),
           members: snapshot.members.map((member) => ({ name: member.name, share: money(member.shareCents), approved: member.approved })),
+          sharingSessions: snapshot.sharingSessions.map((session) => session.participantNames),
           you: { name: caller.memberName, share: money(me?.shareCents ?? 0), approved: Boolean(me?.approved) },
           ...(snapshot.items.length ? {} : { note: "The cart is empty." }),
         };
@@ -156,11 +163,11 @@ export function registerCoreTools(deps: CoreToolDeps): void {
     },
     {
       name: "add_to_cart",
-      description: "Adds groceries to the shared cart for you, exactly as if you had texted the household group. Write it the way you'd text it: \"2 bananas\", \"oat milk for everyone\", \"eggs, bread, pasta\" (up to 5 items). With Kroger connected, GroupCart replies with numbered product options; pass your pick to choose_product.",
+      description: "Adds groceries to the shared cart for you, exactly as if you had texted the household group. Write it the way you'd text it: \"2 bananas\", \"oat milk\", \"eggs, bread, pasta\" (up to 5 items). New items are yours, or split evenly when you're in a sharing session (started in the group with \"start sharing with Maya and Jordan\"; use send_group_message for that). With Kroger connected, GroupCart replies with numbered product options; pass your pick to choose_product.",
       inputSchema: {
         type: "object",
         properties: {
-          request: { type: "string", description: "What to add, in plain words. Add \"for everyone\" or \"shared with Maya\" to split an item." },
+          request: { type: "string", description: "What to add, in plain words, like \"2 bananas\" or \"eggs, bread\". Who shares it follows your sharing session, not the wording." },
         },
         required: ["request"],
       },
@@ -172,6 +179,9 @@ export function registerCoreTools(deps: CoreToolDeps): void {
         }
         if (RESERVED_TEXT.test(text)) {
           throw new Error("add_to_cart only adds groceries. Use view_cart or approve_cart; checkout, clearing, and undo happen in the group chat.");
+        }
+        if (parseSharingCommand(text) || parseListCommand(text)) {
+          throw new Error("add_to_cart only adds groceries to the cart. Sharing sessions (\"start sharing with Maya\", \"stop sharing\") and the recurring weekly/biweekly/monthly lists (\"weekly: milk, eggs\", \"load weekly list\") are group-chat commands; use send_group_message for those.");
         }
         if (REMOVAL_TEXT.test(text)) {
           throw new Error("Removing items isn't available from Claude yet. Ask in the group chat (for example \"I don't want bread anymore\").");

@@ -7,14 +7,16 @@ import { config, findMember, maskHandle, validateSpectrumConfig } from "./config
 import { KrogerClient } from "./kroger.js";
 import { CalendarService, GoogleCalendarClient } from "./googleCalendar.js";
 import { googleCalendarConfig } from "./config.js";
+import { HouseholdGroup } from "./householdGroup.js";
 import { auditGroupRoster, handleMembershipEvent, isMembershipEvent } from "./membership.js";
-import { CartStore } from "./store.js";
+import { deliverDueListReminders } from "./reminders.js";
+import { CartStore, isStoreCommand } from "./store.js";
 import { splitwiseConfig } from "./config.js";
 import { SplitwiseService } from "./splitwise.js";
 import { setupConnector } from "./connector.js";
 import { setupBills } from "./bills.js";
 import { setupChores } from "./chores.js";
-import { registerCommand, runCommands, setGroupSender, stopSchedules, type CommandAttachment, type CommandContext } from "./platform.js";
+import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 
 validateSpectrumConfig();
@@ -36,6 +38,7 @@ const store = new CartStore(
   config.budgetCents,
   config.dashboardPublicUrl,
   liveMode && Boolean(config.krogerClientId && config.krogerClientSecret),
+  { reminderHour: config.listReminderHour },
 );
 store.registerMembers(members);
 
@@ -76,8 +79,9 @@ setupChores({ store, demoMode: !liveMode });
 // --- Shared member-message processing: the iMessage group loop and the web chat both use this, so a message
 // --- sent from the website is handled exactly like the same text from that member in the group.
 async function processMemberMessage(message: CommandContext): Promise<string | null> {
-  // Feature commands (calendar, chores, bills, ...) run before cart processing.
-  const commandReply = await runCommands(message);
+  // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
+  // recurring-list phrases the store owns (upstream), which go straight to the store.
+  const commandReply = isStoreCommand(message.text) ? null : await runCommands(message);
   if (commandReply) return commandReply;
   const text = message.text;
   if (!text.trim()) return null;
@@ -90,6 +94,7 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
       krogerClient.selectedLocationId,
       liveMode,
       liveMode ? (items) => krogerClient.checkCartAvailability(items) : undefined,
+      (productId) => krogerClient.getProduct(productId),
     );
   }
   if (liveMode && /^(checkout|finish checkout)$/i.test(text.trim())) {
@@ -99,6 +104,18 @@ async function processMemberMessage(message: CommandContext): Promise<string | n
 }
 // --- end shared member-message processing ---
 
+// --- Recurring-list check-ins in the local demo (upstream behavior): nothing is sent; a due check-in is shown
+// --- with the reply, labelled [Demo reminder]. The web chat records it with the reply; the feed gets it too.
+async function processDemoMessage(message: CommandContext): Promise<string | null> {
+  const reply = await processMemberMessage(message);
+  const reminder = store.claimDueListReminders();
+  if (!reminder) return reply;
+  const shown = `[Demo reminder] ${reminder.text}`;
+  recordGroupMessage(shown);
+  return `${reply ?? "No response."}\n\n${shown}`;
+}
+// --- end demo check-ins ---
+
 // --- Profiles, web sign-in, and web chat (src/profilesAndChat.ts) ---
 const social = setupProfilesAndChat({
   store,
@@ -106,7 +123,8 @@ const social = setupProfilesAndChat({
   liveMode,
   databasePath: config.databasePath,
   publicUrl: config.dashboardPublicUrl,
-  processMessage: processMemberMessage,
+  // Demo /api/demo-message and web chat messages go through the chat, so demo check-ins show up there.
+  processMessage: liveMode ? processMemberMessage : processDemoMessage,
 });
 // --- end profiles, web sign-in, and web chat ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
@@ -128,17 +146,56 @@ if (!liveMode) {
   });
 
   console.log(`GroupCart is listening for iMessage group requests from ${members.length} configured household member(s).`);
+  // --- One household group for everything GroupCart sends on its own (src/householdGroup.ts). The store persists
+  // --- the group an allowlisted member last wrote from (upstream's rememberGroupSpace); after a restart it is
+  // --- reopened with Spectrum's `imessage(app).space.get(chatGuid, { phone })`, so chore nudges, bill reminders,
+  // --- list check-ins, and web chat relays all work before anyone texts again.
+  const group = new HouseholdGroup(store, (ref) => imessage(app).space.get(ref.id, ref.phone ? { phone: ref.phone } : undefined));
+  setGroupSender((text) => group.send(text));
   // --- Profiles & chat: sign-in codes go out as 1:1 iMessage DMs (inbound DMs are still ignored) ---
-  void social.useSpectrum({
+  social.useSpectrum({
     sendDirect: async (handle, text) => {
       const im = imessage(app);
       const dm = await im.space.create(await im.user(handle));
       await dm.send(text);
     },
-    getSpace: (id) => imessage(app).space.get(id),
+    group,
   });
   // --- end profiles & chat ---
   const auditedSpaces = new Set<string>();
+
+  // Recurring-list check-ins. Spectrum's cloud iMessage provider can send to an
+  // existing conversation outside the reply loop via `space.get(chatGuid, { phone })`.
+  // We only ever target the household group space that an allowlisted member has
+  // already messaged (persisted by the loop below), and each list's reminder is
+  // claimed at most once per cycle in SQLite before sending. A failed send
+  // releases the claim so the next attempt (or the next group reply) delivers it.
+  let reminderTimer: ReturnType<typeof setInterval> | undefined;
+  if (config.listRemindersEnabled) {
+    let checking = false;
+    const sendDueListReminders = async (): Promise<void> => {
+      if (checking) return;
+      checking = true;
+      try {
+        // Same persisted group as notifyGroup(); a sent check-in is mirrored into the web chat and feed.
+        const result = await deliverDueListReminders(
+          store,
+          () => group.reminderTarget((text) => recordGroupMessage(text, { mirror: true })),
+        );
+        if (result.status === "sent") {
+          console.log(`Sent a recurring-list check-in to the household group (${result.lists?.join(", ")}).`);
+        } else if (result.status === "failed") {
+          console.warn(`Could not send the recurring-list check-in; it will be retried or attached to the next group reply. ${result.error ?? ""}`);
+        }
+      } finally {
+        checking = false;
+      }
+    };
+    reminderTimer = setInterval(() => {
+      sendDueListReminders().catch((error) => console.warn("Recurring-list check failed:", error instanceof Error ? error.message : error));
+    }, config.listReminderCheckMinutes * 60_000);
+    reminderTimer.unref();
+  }
 
   try {
     for await (const [space, message] of app.messages) {
@@ -161,9 +218,6 @@ if (!liveMode) {
       }
       if (message.direction !== "inbound") continue;
       if (message.content.type !== "text" && message.content.type !== "attachment") continue;
-      // Remember the latest group so features can post proactive updates (nudges, reminders).
-      setGroupSender(async (text) => { await space.send(text); });
-      social.useGroup(space); // profiles & chat: web chat relays into this group
 
       const senderHandle = message.sender?.id;
       if (!senderHandle) continue;
@@ -175,6 +229,9 @@ if (!liveMode) {
 
       const member = store.memberForHandle(configuredMember.handle);
       if (!member) continue;
+      // Upstream: persist the household group an allowlisted member wrote from. Proactive messages (list
+      // check-ins, notifyGroup(), web chat relays) only ever go there (src/householdGroup.ts).
+      group.remember(space, groupSpace.phone);
       const content = message.content;
       const text = content.type === "text" ? content.text : "";
       // --- Profiles & chat: mirror into the web chat, process like any member message, reply (and record) ---
@@ -190,11 +247,23 @@ if (!liveMode) {
       });
       const reply = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments });
       if (!reply) continue;
-      await social.replyInGroup(space, reply);
+
+      // Fallback delivery (upstream): a due list check-in not yet sent rides along with
+      // this group reply (still at most once per cycle).
+      const reminder = config.listRemindersEnabled ? store.claimDueListReminders() : null;
+      const outgoing = reminder ? `${reply}\n\n${reminder.text}` : reply;
+      try {
+        await social.replyInGroup(space, outgoing);
+      } catch (error) {
+        if (reminder) store.releaseListReminders(reminder);
+        throw error;
+      }
+      if (reminder) recordGroupMessage(reminder.text); // the web chat already has it as part of the reply
       // --- end profiles & chat ---
       console.log(`Replied in the household group for ${configuredMember.name}.`);
     }
   } finally {
+    if (reminderTimer) clearInterval(reminderTimer);
     stopSchedules();
     dashboard.close();
     store.close();
