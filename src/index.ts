@@ -10,7 +10,7 @@ import { googleCalendarConfig } from "./config.js";
 import { HouseholdGroup } from "./householdGroup.js";
 import { auditGroupRoster, handleMembershipEvent, isMembershipEvent } from "./membership.js";
 import { deliverDueListReminders } from "./reminders.js";
-import { CartStore, isStoreCommand } from "./store.js";
+import { CartStore } from "./store.js";
 import { splitwiseConfig } from "./config.js";
 import { SplitwiseService } from "./splitwise.js";
 import { setupConnector } from "./connector.js";
@@ -96,7 +96,7 @@ setupHouse({ store, calendar, demoMode: !liveMode, publicUrl: config.dashboardPu
 async function processMemberMessage(message: CommandContext): Promise<string | null> {
   // Feature commands (calendar, chores, bills, ...) run before cart processing, except for the cart, sharing, and
   // recurring-list phrases the store owns (upstream), which go straight to the store.
-  const commandReply = isStoreCommand(message.text) ? null : await runCommands(message);
+  const commandReply = store.ownsMessage(message.text, message.memberId) ? null : await runCommands(message);
   if (commandReply) return commandReply;
   const text = message.text;
   if (!text.trim()) return null;

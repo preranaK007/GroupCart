@@ -13,7 +13,7 @@ import { KrogerCheckout } from "./store/krogerCheckout.js";
 import { ListCommands } from "./store/listCommands.js";
 import { ListText } from "./store/listText.js";
 import { dashboardMessage, helpMessage } from "./store/messages.js";
-import { CART_COMMAND_PATTERN, cancellationQuery, isBanter, isHelpRequest, parseSharingCommand } from "./store/parsing.js";
+import { CANCEL_REPLY_PATTERN, CART_COMMAND_PATTERN, cancellationQuery, isBanter, isHelpRequest, normalizeCancelReply, parseReviewCommand, parseSharingCommand } from "./store/parsing.js";
 import { ProductSearch } from "./store/productSearch.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
@@ -59,7 +59,8 @@ export function isStoreCommand(text: string): boolean {
   return CART_COMMAND_PATTERN.test(normalized) || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
 }
 
-const CANCEL_PATTERN = /^(cancel|never mind|nevermind)$/i;
+const CANCEL_CHECKOUT_PATTERN = /^(?:please\s+)?cancel\s+(?:the\s+)?(?:kroger\s+)?checkout(?:\s+please)?[.!]*$/i;
+const APPROVE_PATTERN = /^(approve|approve cart|confirm cart)$/i;
 /** Commands that stay available while a Kroger checkout is mid-flight. */
 const READ_ONLY_COMMAND_PATTERN = /^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i;
 
@@ -144,6 +145,20 @@ export class CartStore {
     return this.#ctx.getMembers();
   }
 
+  /**
+   * Whether this message belongs to the store before any feature command sees it: the store's own phrases
+   * (`isStoreCommand`), “cancel checkout”, and checkout-review choices (“remove 2”, “replace 1 with 2”) while a
+   * review is open or just finished, so chores' “skip …” or a bill draft's “remove …” can't take them.
+   */
+  ownsMessage(text: string, memberId?: string): boolean {
+    const normalized = text.trim();
+    if (isStoreCommand(normalized) || CANCEL_CHECKOUT_PATTERN.test(normalized)) return true;
+    // A feature draft must not take a cancel meant for this member's grocery question.
+    if (memberId && CANCEL_REPLY_PATTERN.test(normalized) && this.hasPendingChoice(memberId)) return true;
+    return parseReviewCommand(normalized) !== undefined
+      && (this.#m.checkout.hasOpenReview() || this.#m.checkout.reviewRecentlyEnded());
+  }
+
   memberForHandle(handle: string): Member | undefined {
     return this.#ctx.db.prepare(
       "SELECT id, handle, name FROM members WHERE household_id = ? AND handle = ?",
@@ -183,10 +198,11 @@ export class CartStore {
 
   /**
    * Group banter (“lol”, “👍”, “thanks”) while the store has nothing to ask this member: stay quiet instead of
-   * answering “I couldn’t match that” (or running a live product search). With a question open it goes through as usual.
+   * answering “I couldn’t match that” (or running a live product search). With a question open, or a checkout
+   * paused for the group, it goes through as usual so the checkout nudge still reaches them.
    */
   #isIdleBanter(memberId: string, text: string): boolean {
-    return isBanter(text) && this.pendingQuestionAt(memberId) === null;
+    return isBanter(text) && this.pendingQuestionAt(memberId) === null && this.pendingKrogerCheckout() === undefined;
   }
 
   hasPendingChoice(memberId: string): boolean {
@@ -213,7 +229,7 @@ export class CartStore {
     const { cart, sharing, listCommands } = this.#m;
     db.exec("BEGIN IMMEDIATE");
     try {
-      const normalized = text.trim();
+      const normalized = normalizeCancelReply(text);
       let reply: string | null;
       const sharingCommand = parseSharingCommand(normalized);
       // Splitwise status is a plain command: it never feeds a pending list selection.
@@ -267,7 +283,7 @@ export class CartStore {
 
   /**
    * Live Kroger conversation. Pending states are checked in priority order:
-   * sharing commands, Kroger checkout, recurring lists, item removal, multi-item
+   * sharing commands, recurring-list commands, Kroger checkout, item removal, multi-item
    * search, single product choice, then a new search. Plain commands and
    * anything that isn't a live search fall back to `processIncomingText`.
    */
@@ -287,7 +303,7 @@ export class CartStore {
 
     const { db } = this.#ctx;
     const { cart, checkout, search, listCommands } = this.#m;
-    const normalized = text.trim();
+    const normalized = normalizeCancelReply(text);
     // Sharing-session commands never touch the cart or Kroger, so they are
     // handled before any pending checkout, choice, list, or clarification state.
     if (parseSharingCommand(normalized)) return this.processIncomingText(messageId, memberId, normalized);
@@ -309,15 +325,24 @@ export class CartStore {
       if (!allowKrogerCartCheckout) return this.processIncomingText(messageId, memberId, normalized);
       return checkout.startKrogerCheckout(messageId, memberId, locationId, checkCartAvailability);
     }
-    if (/^cancel checkout$/i.test(normalized)) {
+    if (CANCEL_CHECKOUT_PATTERN.test(normalized)) {
       return checkout.cancelKrogerCheckout(messageId, memberId);
     }
-    const pendingKrogerCheckout = checkout.getPendingKrogerCheckout();
-    // Recurring-list commands that do not touch the cart stay available while a
-    // Kroger checkout is in progress; loading a list into the cart does not.
+    // List maintenance never changes the cart and must win over review parsing, even if its item text says
+    // “drop” or “remove”. Loading a list is a cart change and still goes through the checkout lock below.
     const listOnlyCommand = listCommand !== undefined && listCommand.kind !== "load";
+    if (listOnlyCommand) {
+      return listCommands.handleLiveListCommand(messageId, memberId, listCommand, searchProducts, locationId, quoteProduct);
+    }
+    const pendingKrogerCheckout = checkout.getPendingKrogerCheckout();
+    // “remove 2” / “replace 1 with 2” right after the review ended (someone else finished it) must not turn into a
+    // Kroger product search for “remove 2”.
+    const reviewCommand = pendingKrogerCheckout?.status === "replacement_review" ? undefined : parseReviewCommand(normalized);
+    if (reviewCommand && this.pendingQuestionAt(memberId) === null) {
+      return checkout.handleReviewCommand(messageId, memberId, reviewCommand);
+    }
     if (pendingKrogerCheckout) {
-      const reply = this.#pendingCheckoutTurn(messageId, memberId, normalized, pendingKrogerCheckout, isCommand, listOnlyCommand);
+      const reply = this.#pendingCheckoutTurn(messageId, memberId, normalized, pendingKrogerCheckout, isCommand);
       if (reply !== undefined) return reply;
     }
 
@@ -368,7 +393,7 @@ export class CartStore {
     if (pendingChoiceRow && !isCommand) {
       return search.choosePending(messageId, memberId, normalized, pendingChoiceRow);
     }
-    if (isCommand || CANCEL_PATTERN.test(normalized)) {
+    if (isCommand || CANCEL_REPLY_PATTERN.test(normalized)) {
       return this.processIncomingText(messageId, memberId, normalized);
     }
     return await search.searchSingle(messageId, memberId, normalized, searchProducts, locationId)
@@ -505,11 +530,10 @@ export class CartStore {
     normalized: string,
     pending: PendingKrogerCheckout,
     isCommand: boolean,
-    listOnlyCommand: boolean,
   ): string | undefined {
     const { checkout } = this.#m;
     if (pending.status === "adding") {
-      if (!READ_ONLY_COMMAND_PATTERN.test(normalized) && !listOnlyCommand) {
+      if (!READ_ONLY_COMMAND_PATTERN.test(normalized)) {
         return this.#ctx.saveAndReturnReply(messageId, "GroupCart is sending the approved list to Kroger right now. Please wait for the result before changing the cart.");
       }
     }
@@ -519,13 +543,24 @@ export class CartStore {
       return checkout.handleKrogerAccountChoice(messageId, memberId, normalized, pending);
     }
     if (pending.status === "replacement_review") {
-      const selection = normalized.match(/^replace\s+(\d{1,2})\s+with\s+(\d{1,2})$/i);
-      if (selection) return checkout.handleKrogerReplacementChoice(messageId, memberId, Number(selection[1]), Number(selection[2]));
-      if (!READ_ONLY_COMMAND_PATTERN.test(normalized) && !listOnlyCommand) {
-        return this.#ctx.saveAndReturnReply(messageId, "Kroger’s precheck found unavailable items. Choose a suggested option with “replace 1 with 2”, or text “cancel checkout” to leave GroupCart unchanged and manage the item yourself. No replacement is made unless you choose one.");
+      // The group's review of unavailable items. Items are only ever chosen by number.
+      const command = parseReviewCommand(normalized);
+      if (command) return checkout.handleReviewCommand(messageId, memberId, command) ?? "";
+      // List maintenance was already handled; read-only commands and approvals also keep working.
+      if (READ_ONLY_COMMAND_PATTERN.test(normalized) || APPROVE_PATTERN.test(normalized)) return undefined;
+      // A member answering their own question (“cancel” to a product pick, a number for a list pick) isn't
+      // talking to the review; let their own flow take it. Cart-changing answers wait until the review ends.
+      const removalQuery = cancellationQuery(this.#ctx.getMembers(), normalized);
+      const answersListPick = !isCommand && !removalQuery && this.#m.listCommands.pendingListSelection(memberId) !== undefined;
+      if (answersListPick || (CANCEL_REPLY_PATTERN.test(normalized) && this.pendingQuestionAt(memberId) !== null)) return undefined;
+      if (CANCEL_REPLY_PATTERN.test(normalized)) return checkout.cancelKrogerCheckout(messageId, memberId);
+      if (removalQuery) {
+        const hint = checkout.reviewNameHint(messageId, removalQuery);
+        if (hint !== undefined) return hint;
       }
+      return checkout.reviewNudge(messageId);
     }
-    if (pending.requesterId !== memberId && /^(\d+|cancel)$/i.test(normalized)) {
+    if (pending.requesterId !== memberId && /^(\d+|cancel)$/i.test(normalized) && this.pendingQuestionAt(memberId) === null) {
       const requester = this.#ctx.getMembers().find((member) => member.id === pending.requesterId)?.name ?? "the member who requested checkout";
       return this.#ctx.saveAndReturnReply(messageId, `Please have ${requester} finish the Kroger account selection, or ask them to text “cancel checkout”.`);
     }
