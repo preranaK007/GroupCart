@@ -13,6 +13,7 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/config.ts`: environment configuration, member allowlist parsing, and handle normalization/masking.
 - `src/googleCalendar.ts`: per-member Google OAuth (free/busy scope only), freeBusy API, and the calendar service used by `/calendar` and the `calendar` command; `src/calendarPage.ts`: the `/calendar` page and its routes; `src/availability.ts`: pure overlap/free-time math (`src/availability.test.ts`); `src/calendarDemo.ts`: deterministic sample schedules when Google is not configured.
 - `src/membership.ts`: group join/leave events and roster checks against the allowlist.
+- `src/chores.ts`: chores (fair rotation, away status, history, group commands, nudges, `/chores` + `/api/chores*`, connector tools), wired by `setupChores()`; `src/choresLogic.ts`: pure schedule/rotation/parser logic; `src/ui/choresPage.ts`: the page and Home "Chores due" card.
 
 ## Environment and credentials
 

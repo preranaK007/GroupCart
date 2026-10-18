@@ -12,6 +12,7 @@ import { CartStore } from "./store.js";
 import { splitwiseConfig } from "./config.js";
 import { SplitwiseService } from "./splitwise.js";
 import { registerCommand, runCommands, setGroupSender, stopSchedules, type CommandAttachment } from "./platform.js";
+import { setupChores } from "./chores.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -59,6 +60,9 @@ const calendar = new CalendarService(
 // Group-chat commands registered by feature modules run before cart processing (see src/platform.ts).
 registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCommand(messageId, text) : null));
 // --- end Google Calendar ---
+// --- Chores: rotations, nudges, /chores page, connector tools (src/chores.ts) ---
+setupChores({ store, demoMode: !liveMode });
+// --- end Chores ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {

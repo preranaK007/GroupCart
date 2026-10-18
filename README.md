@@ -63,6 +63,19 @@ Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also link
 
 Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
+## Chores
+
+Open [http://127.0.0.1:3000/chores](http://127.0.0.1:3000/chores). A Mon–Sun week strip shows each day's chores in the assignee's color (late ones get a red dot and move to today; done ones are struck through; later weeks show the planned rotation). Below are **Up next** (tap the circle to mark done, **⋮** to skip, give the turn to someone, or delete), **People** (completions in the last 30 days, plus an away toggle), and **Recent**. **Add chore** picks a name, an icon, One-off / Weekly / Monthly, and who is in the rotation. Home shows a **Chores due** card with today's and overdue chores. The page can change chores in demo and live mode; it only accepts same-origin JSON requests.
+
+- **Schedules:** weekly on a weekday (or every 2–8 weeks), monthly on a day (29–31 fall on the last day of shorter months; "monthly" alone means the last day), or one-off by a date. Doing a chore early counts for the current cycle; doing it late moves to the next date after today. A chore can be marked done once a day, and not again until its next cycle starts.
+- **Fair rotation:** the next turn goes to whoever in the chore's rotation has gone longest without doing it, then fewest completions, then name order. Members who are away are skipped. `skip` passes the current turn on (the skipper is still first in line next time); `swap` hands it to someone else. If someone covers, the person whose turn it was stays up next.
+- **Group chat:** `chores` (due this week and who's up), `my chores`, `done dishes` / `I did the dishes` / `I took out the trash`, `skip dishes`, `swap dishes with Maya`, `away until Oct 30` / `I'm back`, and `add chore vacuum every Sunday`, `add chore take out trash weekly on Tuesday`, `add chore deep clean fridge monthly`, `add chore fix lamp by Friday` (add `for Maya and Jordan` to limit the rotation). Replies are idempotent by message ID; phrases that don't name a chore (like "finished the milk") fall through to groceries.
+- **Nudges:** a morning digest of what's due today (after 9 AM, only if something is due) and at most one overdue nudge per chore per day, e.g. "🍽️ Maya hasn’t done the dishes in 2 weeks. Maya’s up next." Sent between 9 AM and 9 PM server time; in the demo they appear in `GET /api/feed`.
+- **Claude connector tools:** `list_chores`, `my_chores`, `complete_chore`, `add_chore`, `skip_chore`, `set_away` (run as the calling member).
+- **API:** `GET /api/chores?week=YYYY-MM-DD`; JSON `POST /api/chores` (create), `/api/chores/done`, `/undo`, `/skip`, `/assign`, `/delete`, `/restore`, `/away`.
+
+The local demo seeds sample chores and history (dishes, trash, vacuum, bathroom, plants, recycling, fridge) once; live mode starts empty. Data lives in `chore_*` tables in the same SQLite file.
+
 ## Configuration
 
 | Variable | Purpose | Default |
