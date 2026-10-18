@@ -26,12 +26,18 @@ const START = Date.UTC(2026, 9, 14, 15, 0);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
 
 before(() => { directory = mkdtempSync(join(tmpdir(), "groupcart-house-")); });
-after(() => { rmSync(directory, { recursive: true, force: true }); });
+// Close every store before cleanup: Windows refuses to delete an open SQLite file.
+const openStores: CartStore[] = [];
+after(() => {
+  for (const store of openStores) store.close();
+  rmSync(directory, { recursive: true, force: true });
+});
 
 function setup(name: string) {
   let now = START;
   const clock = { now: () => now, advance: (ms: number) => { now += ms; }, set: (ms: number) => { now = ms; } };
   const store = new CartStore(join(directory, `${name}.sqlite`), "household-test", 5000, "http://127.0.0.1:3999", false, { now: () => new Date(now) });
+  openStores.push(store);
   store.registerMembers([{ handle: "demo:alex", name: "Alex" }, { handle: "demo:maya", name: "Maya" }, { handle: "demo:jordan", name: "Jordan" }]);
   const byName = (memberName: string) => store.getMembers().find((member) => member.name === memberName)!;
   const sent: string[] = [];
