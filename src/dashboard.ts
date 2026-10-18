@@ -11,6 +11,7 @@ import { renderBillsPlaceholder, renderCalendarPlaceholder, renderChoresPlacehol
 import { renderSettingsPage } from "./ui/settingsPage.js";
 import { renderNotice } from "./ui/shell.js";
 import { recentFeed, runCommands, runRoutes } from "./platform.js";
+import { runWithRequestSkin } from "./ui/themes.js";
 
 
 function safeSnapshot(snapshot: CartSnapshot): Omit<CartSnapshot, "members"> & {
@@ -51,7 +52,8 @@ function krogerCheckoutStatus(store: CartStore): { status: string; revision: num
 }
 
 export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
-  const server = createServer(async (request, response) => {
+  // runWithRequestSkin: pages render the browser's theme (gc-skin cookie) without a flash.
+  const server = createServer((request, response) => runWithRequestSkin(request, async () => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     // Google Calendar: /calendar page, /api/calendar, and /api/google/* OAuth routes.
     if (calendar && await handleCalendarRequest(calendar, request, response, url)) return;
@@ -199,7 +201,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     } catch (error) {
       sendJson(response, 400, { error: error instanceof Error ? error.message : "Request failed." });
     }
-  });
+  }));
   server.listen(port, "127.0.0.1", () => {
     console.log(`GroupCart dashboard available at http://127.0.0.1:${port}`);
   });

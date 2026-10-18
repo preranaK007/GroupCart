@@ -1,4 +1,4 @@
-import { avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
+import { appearanceCard, avatarHtml, button, chip, escapeHtml, icon, infoTip, renderPage, sectionHeader, type IconName, type Tone } from "./shell.js";
 
 /**
  * Settings / Connections page (route "/settings"). Server-rendered on each
@@ -148,7 +148,8 @@ const styles = `
 
 export function renderSettingsPage(context: SettingsContext): string {
   const body = `<div class="set-wrap">
-  ${sectionHeader("Connections")}
+  ${appearanceCard()}
+  ${sectionHeader("Connections", { flavor: "settings.connections" })}
   ${[imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), claudeCard()].map(renderIntegrationCard).join("\n")}
 </div>`;
   return renderPage({

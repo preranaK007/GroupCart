@@ -9,6 +9,7 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
 - `src/dashboard.ts`: loopback-only HTTP server: page routes, JSON API, and local demo endpoints.
 - `src/ui/shell.ts`: shared UI shell (design tokens, icons, components, `renderPage`). Build every browser page on it; see the comment block at the top.
+- `src/ui/themes.ts`: skins (Classic plus Elden Ring, Minecraft, Red Dead Redemption, and Cyberpunk 2077 reskins) applied through the shell's `--gc-*` tokens and `.gc-*` components, the theme picker, and opt-in flavor text (`data-flavor`, `GC.t`, `GC.celebrate`). Use tokens, not hard-coded colors, so new pages inherit every skin.
 - `src/ui/*Page.ts`, `src/ui/placeholders.ts`: Home (`/`), Groceries (`/groceries`), Settings (`/settings`), and placeholder Chores/Bills/Calendar pages.
 - `src/config.ts`: environment configuration, member allowlist parsing, and handle normalization/masking.
 - `src/googleCalendar.ts`: per-member Google OAuth (free/busy scope only), freeBusy API, and the calendar service used by `/calendar` and the `calendar` command; `src/calendarPage.ts`: the `/calendar` page and its routes; `src/availability.ts`: pure overlap/free-time math (`src/availability.test.ts`); `src/calendarDemo.ts`: deterministic sample schedules when Google is not configured.

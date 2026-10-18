@@ -36,7 +36,7 @@ const body = `
 
     <section class="gc-card" aria-labelledby="itemsTitle">
       <div class="gc-card-head">
-        <h2 class="gc-card-title" id="itemsTitle">Items</h2>
+        <h2 class="gc-card-title" id="itemsTitle" data-flavor="cart.items.title">Items</h2>
         <span class="gc-spacer"></span>
         ${infoTip("Sample prices are estimates. Kroger prices are store-specific quotes. Every change creates a new revision.")}
       </div>
@@ -79,7 +79,7 @@ const body = `
   <div class="gc-stack">
     <section class="gc-card" id="approvalsPanel" aria-labelledby="splitTitle">
       <div class="gc-card-head">
-        <h2 class="gc-card-title" id="splitTitle">Split</h2>
+        <h2 class="gc-card-title" id="splitTitle" data-flavor="cart.split.title">Split</h2>
         <span class="gc-meta">Pre-tax</span>
         <span class="gc-spacer"></span>
         ${infoTip("Estimated share per person. Any cart edit resets approvals.")}
@@ -162,7 +162,7 @@ function renderItems() {
       + '<div class="gc-list-main"><div class="gc-list-title">' + esc(item.name) + '</div>'
       + '<div class="gc-list-sub">' + source + '<span>' + esc(who) + '</span></div></div>'
       + '<div class="gc-amount">' + dollars(item.totalCents) + '<div class="cart-price-sub">' + item.quantity + ' × ' + dollars(item.unitPriceCents) + '</div></div></li>';
-  }).join("") : '<li class="gc-empty">' + icon("cart") + '<p class="gc-empty-title">Cart is empty</p><p class="gc-empty-text">' + (latest.demoMode ? "Try a request below." : "Text an item to the group.") + '</p></li>';
+  }).join("") : '<li class="gc-empty">' + icon("cart") + '<p class="gc-empty-title" data-flavor="empty.cart.title">Cart is empty</p><p class="gc-empty-text">' + (latest.demoMode ? "Try a request below." : "Text an item to the group.") + '</p></li>';
 }
 
 function renderBudget() {
@@ -305,12 +305,23 @@ $("people").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-approve]");
   if (!button || button.disabled) return;
   button.disabled = true;
-  try { const result = await post("/api/approve", { memberId: button.getAttribute("data-approve") }); $("approvalStatus").textContent = result.message; await refresh(); }
+  const memberId = button.getAttribute("data-approve");
+  try {
+    const result = await post("/api/approve", { memberId });
+    $("approvalStatus").textContent = result.message;
+    if (result.ok) window.GC.celebrate(memberName(memberId) + " approved the cart");
+    await refresh();
+  }
   catch (error) { $("approvalStatus").textContent = error.message; button.disabled = false; }
 });
 
 $("checkout").addEventListener("click", async () => {
-  try { const result = await post("/api/checkout", {}); $("approvalStatus").textContent = result.message; await refresh(); }
+  try {
+    const result = await post("/api/checkout", {});
+    $("approvalStatus").textContent = result.message;
+    if (result.ok) window.GC.celebrate("Groceries checked out");
+    await refresh();
+  }
   catch (error) { $("approvalStatus").textContent = error.message; }
 });
 

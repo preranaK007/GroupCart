@@ -10,6 +10,7 @@ import { button, card, chip, renderPage } from "./shell.js";
 const groceriesCard = card({
   id: "homeGroceries",
   title: "Groceries",
+  flavor: "home.groceries",
   icon: "cart",
   actions: button({ label: "Open", variant: "text", size: "sm", href: "/groceries" }),
   body: `
@@ -24,7 +25,8 @@ const peopleCard = card({
   title: "People",
   icon: "users",
   meta: "Grocery shares",
-  body: `<ul class="gc-list" id="homePeopleList"></ul>`,
+  flavor: "home.people",
+  body: `<ul class="gc-list gc-people" id="homePeopleList"></ul>`,
 });
 
 const body = `
