@@ -3,7 +3,7 @@
 // Local requests (loopback socket, loopback Host header, no proxy/tunnel headers) count as signed in as a
 // chosen member: the "Viewing as" switcher stores that choice in the gc_view_as cookie, so the host machine
 // and the demo work with zero setup. Every other request is remote: it may reach only /signin*, /api/auth/*,
-// and the connector's /mcp paths until it carries a session cookie. A session is created by entering a
+// and the connector's /mcp, /oauth/*, and /.well-known/* paths until it carries a session cookie. A session is created by entering a
 // one-time 6-digit code that GroupCart texts to the member by iMessage DM (demo mode shows it on screen).
 //
 // Codes: random, HMAC-hashed at rest, expire in 10 minutes, single-use, at most 5 guesses each, and
