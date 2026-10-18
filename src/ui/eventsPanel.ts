@@ -9,7 +9,10 @@ import { digestHomeLine } from "./pointsUi.js"; // money & points: "Next digest"
  * blocks across the day columns, tentative blocks for open time polls, a voting
  * strip, a Create button (app bar) with suggested everyone-free times, and the
  * event / poll dialogs. It draws after each calendar render: calendarPage.ts
- * dispatches `gc:calendar-rendered` with { data, startHour, endHour, ppm }.
+ * dispatches `gc:calendar-rendered` with { data, startHour, endHour, ppm, view,
+ * date, days }. Week view: one .cal-day[data-date] column per day. Day view: the
+ * House lane is the only .cal-day, and the all-day row (only when there is an
+ * all-day event that day) spans every column.
  *
  * homeUpcomingCard() is the Home "Upcoming" card (id homeUpcoming): open plans,
  * the next events with RSVPs, and the next time everyone is free.
@@ -72,6 +75,7 @@ const calendarStyles = `
 :root[data-theme="dark"] { --hv-house:#a8c7fa; --hv-house-on:#062e6f; --hv-social:#e1b5ff; --hv-social-on:#3b0a57; --hv-free-bg:rgba(129,201,149,.13); --hv-free-edge:#81c995; --hv-free-text:#a8dab5; }
 .hv-row-label { position:sticky; left:0; z-index:5; display:flex; align-items:center; justify-content:flex-end; padding:0 8px 0 0; background:var(--gc-surface); border-bottom:1px solid var(--cal-line); color:var(--gc-muted); font-size:10.5px; font-weight:500; }
 .hv-row { grid-column:2 / -1; display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); grid-auto-rows:24px; row-gap:2px; align-content:start; min-height:30px; padding:3px 0; background:var(--gc-surface); border-bottom:1px solid var(--cal-line); }
+.hv-row.is-day { grid-template-columns:minmax(0, 1fr); }
 .hv-chip { min-width:0; margin:0 2px; padding:0 8px; border:0; border-radius:5px; background:var(--hv-house); color:var(--hv-house-on); font:500 11.5px/24px var(--gc-font); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
 .hv-chip.is-social, .hv-block.is-social { background:var(--hv-social); color:var(--hv-social-on); }
 .hv-chip:hover, .hv-block:hover { filter:brightness(1.08); }
@@ -282,35 +286,42 @@ const calendarScript = String.raw`
     const heads = grid.querySelectorAll(".cal-head");
     const lastHead = heads[heads.length - 1];
     if (!lastHead) return;
+    const dayView = view.view === "day"; // [calendar-detail] Day view: one day, full-width all-day row
 
-    // House row: all-day events spanning day columns.
+    // House row: all-day events spanning day columns (Day view: full-width chips, only when there are some).
     const label = document.createElement("div");
     label.className = "hv-row-label";
     label.textContent = "House";
     const row = document.createElement("div");
-    row.className = "hv-row";
+    row.className = "hv-row" + (dayView ? " is-day" : "");
     const lanes = [];
     const allDay = ev.occurrences.filter((o) => o.allDay);
     for (const o of allDay) {
-      let first = days.findIndex((d) => d.date === o.date);
-      let last = days.findIndex((d) => d.date === o.endDate);
-      if (first < 0 && o.date < days[0].date) first = 0;
-      if (last < 0 && o.endDate > days[6].date) last = 6;
-      if (first < 0 || last < 0 || last < first) continue;
+      let first, last;
+      if (dayView) {
+        if (!(o.date <= view.date && o.endDate >= view.date)) continue;
+        first = last = 0;
+      } else {
+        first = days.findIndex((d) => d.date === o.date);
+        last = days.findIndex((d) => d.date === o.endDate);
+        if (first < 0 && o.date < days[0].date) first = 0;
+        if (last < 0 && o.endDate > days[6].date) last = 6;
+        if (first < 0 || last < 0 || last < first) continue;
+      }
       let lane = lanes.findIndex((end) => end < first);
       if (lane < 0) { lane = lanes.length; lanes.push(-1); }
       lanes[lane] = last;
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "hv-chip" + (o.kind !== "house" ? " is-social" : "");
-      chip.style.gridColumn = (first + 1) + " / " + (last + 2);
+      chip.style.gridColumn = dayView ? "1 / -1" : (first + 1) + " / " + (last + 2);
       chip.style.gridRow = String(lane + 1);
       chip.dataset.hvEvent = o.eventId;
       chip.title = o.title + " · " + o.label;
       chip.textContent = o.emoji + " " + o.title;
       row.appendChild(chip);
     }
-    lastHead.after(label, row);
+    if (!dayView || row.childElementCount) lastHead.after(label, row);
 
     // Timed events and poll options as blocks in the day columns.
     const ppm = view.ppm;
@@ -375,6 +386,7 @@ const calendarScript = String.raw`
     if (eventEl) { openEvent(eventEl.dataset.hvEvent); return; }
     const pollEl = target.closest("[data-hv-poll]");
     if (pollEl) { openPoll(pollEl.dataset.hvPoll); return; }
+    if (target.closest("[data-ev], [data-goto-day]")) return; // member entries and day headers (calendarPage.ts)
     const day = target.closest(".cal-day");
     if (day && view && !target.closest(".cal-free span")) {
       const rect = day.getBoundingClientRect();

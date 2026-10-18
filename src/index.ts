@@ -66,6 +66,7 @@ const calendar = new CalendarService(
   googleCalendarConfig.clientId && googleCalendarConfig.clientSecret
     ? new GoogleCalendarClient(googleCalendarConfig.clientId, googleCalendarConfig.clientSecret, googleCalendarConfig.redirectUri)
     : undefined,
+  { demoCalendarFile: googleCalendarConfig.demoCalendarFile }, // GROUP_CART_DEMO_CALENDAR
 );
 // Group-chat commands registered by feature modules run before cart processing (see src/platform.ts).
 registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCommand(messageId, text) : null));
