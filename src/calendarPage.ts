@@ -2,6 +2,7 @@
 // pieces (renderCalendarBody -> { styles, body, script }) so it can be dropped
 // into a shared app shell; renderCalendarPage() wraps it as a standalone document.
 // Colors come from --gc-* custom properties (defined by the wrapper or a shell).
+import { renderNotice, renderPage } from "./ui/shell.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { GoogleCalendarError, type CalendarService } from "./googleCalendar.js";
 
@@ -209,7 +210,19 @@ const script = String.raw`
     return h ? (m ? h + "h " + m + "m" : h + "h") : m + "m";
   }
   const hourLabel = (h) => utcHour.format(new Date(Date.UTC(2020, 0, 1, h))).replace(/\s/g, " ");
-  const colorClass = (member) => "m" + (member.colorIndex % 6);
+  const colorClass = (member) => "mx-" + String(member.id).replace(/[^a-zA-Z0-9_-]/g, "");
+  // Member colors come from the shared shell (GC.memberColor) so they match every other page.
+  function applyMemberColors(members) {
+    const ids = members.map((m) => m.id);
+    const fallback = ["#1a73e8", "#e37400", "#9334e6", "#12a4af", "#d01884", "#8d6e63"];
+    const rules = members.map((m, i) => {
+      const solid = window.GC && GC.memberColor ? GC.memberColor(m.id, ids).solid : fallback[i % fallback.length];
+      return ".cal ." + colorClass(m) + " { --m-solid:" + solid + "; --m-soft:color-mix(in srgb, " + solid + " 16%, var(--gc-surface)); --m-on:color-mix(in srgb, " + solid + " 72%, var(--gc-text)); }";
+    }).join("\n");
+    let tag = document.getElementById("calMemberColors");
+    if (!tag) { tag = document.createElement("style"); tag.id = "calMemberColors"; document.head.appendChild(tag); }
+    tag.textContent = rules;
+  }
 
   function showNotice(text, warn) {
     $("calNoticeText").textContent = text;
@@ -231,6 +244,7 @@ const script = String.raw`
       if (!response.ok) throw new Error(body.error || "Could not load the calendar.");
       if (token !== loading) return;
       data = body;
+      applyMemberColors(data.members);
       week = data.weekStart;
       const url = new URL(location.href);
       url.searchParams.delete("connected"); url.searchParams.delete("disconnected");
@@ -487,6 +501,12 @@ body { margin:0; background:var(--gc-bg); color:var(--gc-text); font:14px/1.45 "
 
 export function renderCalendarPage(): string {
   const page = renderCalendarBody();
+  return renderPage({ title: "Calendar", active: "calendar", styles: page.styles, body: page.body, script: page.script });
+}
+
+/** Standalone document (no shared shell); kept for reference/testing. */
+export function renderStandaloneCalendarPage(): string {
+  const page = renderCalendarBody();
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -518,7 +538,8 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
 
 function sendResultPage(response: ServerResponse, status: number, title: string, message: string): void {
   response.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-  response.end(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GroupCart · Calendar</title><style>${tokens}.box{max-width:560px;margin:12vh auto;padding:28px;border:1px solid var(--gc-border);border-radius:16px;background:var(--gc-surface)}h1{font-size:20px;font-weight:500;margin:0 0 8px}p{color:var(--gc-muted);margin:0 0 20px}a{display:inline-block;padding:9px 18px;border-radius:999px;background:var(--gc-accent);color:var(--gc-on-accent);text-decoration:none;font-weight:500}</style><body><div class="box"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p><a href="/calendar">Back to calendar</a></div></body></html>`);
+  const success = status < 400;
+  response.end(renderNotice({ title, message, tone: success ? "success" : "warning", active: "calendar", links: [{ href: "/calendar", label: "Back to calendar" }] }));
 }
 
 function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {

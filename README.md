@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Data is stored in `./data/groupcart.sqlite` by default.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Groceries (`/groceries`) shows the shared cart, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default.
 
 ## Connect your Spectrum dedicated line
 
