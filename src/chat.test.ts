@@ -187,3 +187,13 @@ test("iMessage polls: an open poll card goes out as a native poll, and votes fro
   assert.deepEqual((chat.findByCardId("imsg:1")!.card as PollCard).votes.fri, ["m-maya"]);
   assert.deepEqual(votes().fri, [], "the newer poll with the same options is untouched");
 });
+
+test("a bot author can post an image; non-images are refused", async () => {
+  const chat = newChat();
+  const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+  const message = await chat.postBotImage({ text: "movie night energy", image: png, author: "Claude" });
+  assert.equal(message.name, "Claude");
+  assert.equal(message.text, "movie night energy");
+  assert.equal(message.attachments[0]?.image, true);
+  await assert.rejects(chat.postBotImage({ text: "", image: Buffer.from("not an image at all"), author: "Claude" }), /supported image/);
+});

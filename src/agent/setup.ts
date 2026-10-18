@@ -13,6 +13,7 @@ import type { CartStore } from "../store.js";
 import { coordinatorSettingsCard } from "../ui/coordinatorCard.js";
 import type { IntegrationCard } from "../ui/settingsPage.js";
 import { runClaudeCode } from "./claudeCode.js";
+import { fetchPublicImage } from "./images.js";
 import { COORDINATOR_NAME, HouseholdCoordinator, type CoordinatorChannel } from "./coordinator.js";
 import { findGroceries } from "./groceries.js";
 import { CARD_OWNER, coordinatorTools } from "./tools.js";
@@ -68,6 +69,10 @@ export function setupCoordinator(options: {
     channel,
     findGroceries: (query, limit) => findGroceries(query, kroger, limit),
     groceriesFrom,
+    postImage: async (url, caption) => {
+      const image = await fetchPublicImage(url);
+      await chat.postBotImage({ text: caption, image: image.data, author: COORDINATOR_NAME });
+    },
     runCommand: (memberId, text) => {
       const member = store.getMembers().find((candidate) => candidate.id === memberId);
       return member ? options.runCommand({ messageId: `coordinator:${randomUUID()}`, memberId, memberName: member.name, text, attachments: [] }) : Promise.resolve(null);

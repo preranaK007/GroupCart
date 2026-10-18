@@ -14,6 +14,8 @@ export type CoordinatorToolDeps = {
   groceriesFrom: "kroger" | "sample";
   /** The images attached to a chat message. */
   photos: (messageId: number) => Promise<Array<{ mimeType: string; data: Buffer }>>;
+  /** Downloads an image from a public https URL and posts it to the group with a caption. */
+  postImage: (url: string, caption: string) => Promise<void>;
   /** Runs GroupCart's built-in command handling for a member's text and returns its reply (nothing is posted). */
   runCommand: (memberId: string, text: string) => Promise<string | null>;
   now?: () => Date;
@@ -140,6 +142,16 @@ export function coordinatorTools(deps: CoordinatorToolDeps): ToolSpec[] {
       handler: async (args, caller) => {
         const reply = await deps.runCommand(caller.memberId, text(args.text, 500));
         return { reply: reply ?? "(GroupCart had nothing to say to that.)" };
+      },
+    },
+    {
+      name: "post_image",
+      description: "Post an image to the group chat (iMessage and the app): a GIF, a meme, or a photo, from a direct https image link (a .gif/.png/.jpg/.webp file, e.g. from media.giphy.com, i.imgur.com, upload.wikimedia.org). Use it sparingly, when it genuinely fits the moment.",
+      inputSchema: { type: "object", properties: { url: { type: "string", description: "Direct https link to the image file." }, caption: { type: "string", description: "Optional short line to go with it." } }, required: ["url"] },
+      mutates: true,
+      handler: async (args) => {
+        await deps.postImage(text(args.url, 2000), text(args.caption, 300));
+        return { posted: true };
       },
     },
     {

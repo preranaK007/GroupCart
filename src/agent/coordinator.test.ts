@@ -39,9 +39,10 @@ function setup(replies: Array<string | null>) {
     pollSettleMs: 0,
   });
   const commands: Array<{ memberId: string; text: string }> = [];
-  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
+  const images: Array<{ url: string; caption: string }> = [];
+  const tools = coordinatorTools({ coordinator, channel, findGroceries: async () => [], groceriesFrom: "sample", photos: async () => [], postImage: async (url, caption) => { images.push({ url, caption }); }, runCommand: async (memberId, text) => { commands.push({ memberId, text }); return "Started sharing for Ben and Ana."; } });
   const tool = (name: string) => tools.find((spec) => spec.name === name)!;
-  return { coordinator, posted, turns, tool, channel, commands };
+  return { coordinator, posted, turns, tool, channel, commands, images };
 }
 
 const message = (memberId: string, text: string) => ({ messageId: `x:${text}`, memberId, memberName: members.find((m) => m.id === memberId)!.name, text, attachments: [] });
@@ -140,4 +141,10 @@ test("a bare \"yes\" right after Claude spoke still reaches Claude (it may answe
   await channel.post("Found 2% milk and flour. Do these work?");
   await coordinator.handleMessage(message("m-ben", "yes"));
   assert.equal(turns.length, 1);
+});
+
+test("post_image hands the link and caption to the poster", async () => {
+  const { tool, images } = setup([]);
+  assert.deepEqual(await tool("post_image").handler({ url: "https://media.giphy.com/media/x/giphy.gif", caption: "movie night energy" }, { memberId: "m-ana", memberName: "Ana" }), { posted: true });
+  assert.deepEqual(images, [{ url: "https://media.giphy.com/media/x/giphy.gif", caption: "movie night energy" }]);
 });

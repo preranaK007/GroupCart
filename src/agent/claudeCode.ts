@@ -1,6 +1,6 @@
 // Runs one coordinator turn with Claude Code in headless mode, signed in with the host's own Claude account
-// (no API key). Claude Code gets no built-in tools (no shell or files); its only tools are GroupCart's, over the
-// connector's MCP endpoint with a short-lived token for the roommate being answered.
+// (no API key). Claude Code gets no shell or file tools: only web search and fetch (to find a GIF, a meme, a fact)
+// and GroupCart's tools, over the connector's MCP endpoint with a short-lived token for the roommate being answered.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,9 +30,9 @@ export async function runClaudeCode(turn: ClaudeCodeTurn, binary = process.env.G
     const args = [
       "-p", "--output-format", "json",
       "--system-prompt-file", systemPrompt,
-      "--tools", "",
+      "--tools", "WebSearch,WebFetch",
       "--strict-mcp-config", "--mcp-config", mcpConfig,
-      "--allowedTools", `mcp__${SERVER}`,
+      "--allowedTools", `mcp__${SERVER}`, "WebSearch", "WebFetch",
       ...(turn.disallowedTools.length ? ["--disallowedTools", ...turn.disallowedTools.map((name) => `mcp__${SERVER}__${name}`)] : []),
       "--setting-sources", "",
       "--no-session-persistence",

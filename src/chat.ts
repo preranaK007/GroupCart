@@ -260,6 +260,30 @@ export class ChatService {
   }
 
   /**
+   * A bot author (the household coordinator) posts an image, e.g. a GIF or meme it found: stored like a member's
+   * photo, shown in the web chat, and in live mode sent to the group signed "Author: caption".
+   */
+  async postBotImage(input: { text: string; image: Buffer; author: string }): Promise<ChatMessage> {
+    const stored = this.#storeImage(input.image);
+    if (!stored) throw new ChatError(400, "That isn't a supported image.");
+    const name = `image.${stored.file.split(".").pop()}`;
+    const message = this.#insert({
+      kind: "bot", memberId: null, authorName: input.author, text: input.text.trim().slice(0, 2_000),
+      attachments: [{ name, mimeType: stored.mimeType, size: input.image.length, file: stored.file }], source: "notify",
+    })!;
+    const group = this.#live && this.groupConnected ? this.#group : null;
+    if (group) {
+      try {
+        if (input.text.trim()) await group.sendText(`${input.author}: ${input.text.trim()}`);
+        await group.sendImage(join(this.#filesDir, stored.file), stored.mimeType, name);
+      } catch (error) {
+        console.warn("Could not send an image to the iMessage group:", error instanceof Error ? error.message : error);
+      }
+    }
+    return message;
+  }
+
+  /**
    * Records a bot message: GroupCart's replies and notifications, or another bot author such as "Claude". Without a
    * card, a reply built with cardReply() (src/platform.ts) gets its card back here, and the web chat stores the short
    * text plus the card instead of the iMessage fallback text.
