@@ -2,6 +2,7 @@ import { balancesCard, choresDueCard, upcomingCard } from "./placeholders.js";
 import { button, card, chip, renderPage } from "./shell.js";
 import { choresHomeCard } from "./choresPage.js"; // Chores: live "Chores due" card (replaces the placeholder)
 import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
+import { HOME_TONIGHT } from "./mealsPanel.js"; // Kitchen: "Tonight" line in the Groceries card
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -19,7 +20,7 @@ const groceriesCard = card({
   <div class="home-total"><span class="home-big" id="homeTotal">–</span><span class="gc-meta" id="homeCount"></span></div>
   <div class="gc-track" role="progressbar" aria-label="Budget used" aria-valuemin="0" aria-valuemax="100" id="homeBudgetTrack"><div class="gc-fill" id="homeBudget" style="width:0%"></div></div>
   <div class="home-budget-row"><span class="gc-meta" id="homeBudgetText"></span><span id="homeApprovals"></span></div>
-  <ul class="gc-list home-items" id="homeItems"></ul>`,
+  <ul class="gc-list home-items" id="homeItems"></ul>${HOME_TONIGHT.html /* kitchen */}`,
 });
 
 const peopleCard = card({
@@ -124,5 +125,5 @@ setInterval(() => refresh().catch(showSyncError), 2500);
 `;
 
 export function renderHomePage(): string {
-  return renderPage({ title: "Home", active: "home", body, styles, actions, script });
+  return renderPage({ title: "Home", active: "home", body, styles: styles + HOME_TONIGHT.styles, actions, script: script + HOME_TONIGHT.script }); // kitchen: Tonight line
 }

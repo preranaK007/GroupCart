@@ -17,6 +17,7 @@ import { setupConnector } from "./connector.js";
 import { setupBills } from "./bills.js";
 import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
+import { setupKitchen } from "./kitchen.js"; // Kitchen: pantry and meal plans
 import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 
@@ -70,6 +71,10 @@ registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCom
 // --- Claude connector: /mcp for each roommate's own Claude (src/connector.ts) ---
 setupConnector({ store, demoMode: !liveMode, calendar, krogerClient, port: config.port, publicUrl: config.dashboardPublicUrl });
 // --- end Claude connector ---
+// --- Kitchen: pantry and weekly dinner plans (src/kitchen.ts). Registered before bills and lists/events so a
+// --- “yes”/“ok” to a newer kitchen question and “plan dinners” reach it (it leaves everything else alone).
+setupKitchen({ store, demoMode: !liveMode, kroger: krogerClient });
+// --- end Kitchen ---
 // --- Bills: capture, split, balances, reminders, Splitwise logging (src/bills.ts) ---
 setupBills({ store, liveMode });
 // --- end Bills ---

@@ -351,7 +351,8 @@ setInterval(() => refresh().catch(showSyncError), 2500);
 // --- One-off lists tab (src/ui/listsPanel.ts) ---
 import { withListsTabs } from "./listsPanel.js";
 // --- end One-off lists tab ---
+import { withKitchenTabs } from "./mealsPanel.js"; // Kitchen: Pantry and Meals tabs
 
 export function renderCartPage(): string {
-  return renderPage(withListsTabs({ title: "Groceries", active: "groceries", body, styles, actions, script }));
+  return renderPage(withKitchenTabs(withListsTabs({ title: "Groceries", active: "groceries", body, styles, actions, script })));
 }
