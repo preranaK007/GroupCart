@@ -11,8 +11,8 @@ New-Item -ItemType Directory -Force (Join-Path $repo "data") | Out-Null
 $log = Join-Path $repo "data\groupcart.log"
 
 while ($true) {
-  Add-Content $log "$(Get-Date -Format s) starting GroupCart"
-  & node --env-file=.env --import=tsx src/index.ts *>> $log
-  Add-Content $log "$(Get-Date -Format s) GroupCart stopped (exit $LASTEXITCODE); restarting in 5 seconds"
+  Add-Content -Encoding utf8 $log "$(Get-Date -Format s) starting GroupCart"
+  & node --env-file=.env --import=tsx src/index.ts *>&1 | Out-File -Append -Encoding utf8 $log
+  Add-Content -Encoding utf8 $log "$(Get-Date -Format s) GroupCart stopped (exit $LASTEXITCODE); restarting in 5 seconds"
   Start-Sleep -Seconds 5
 }
