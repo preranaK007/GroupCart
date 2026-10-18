@@ -85,8 +85,11 @@ export { appearanceCard };
 // ---------------------------------------------------------------------------
 
 // --- Profiles & chat: "chat" nav item; "people" pages highlight no nav item ---
-export type NavKey = "home" | "chat" | "groceries" | "chores" | "bills" | "calendar" | "settings" | "people";
+export type NavKey = "home" | "chat" | "groceries" | "chores" | "bills" | "calendar" | "settings" | "people" | HouseNavKey;
 // --- end profiles & chat ---
+// --- House: nav key (src/ui/housePage.ts registers its "nav.house" flavor) ---
+type HouseNavKey = "house";
+// --- end House ---
 
 export type NavItem = { key: NavKey; href: string; label: string; icon: IconName };
 
@@ -97,6 +100,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { key: "chores", href: "/chores", label: "Chores", icon: "chores" },
   { key: "bills", href: "/bills", label: "Bills", icon: "receipt" },
   { key: "calendar", href: "/calendar", label: "Calendar", icon: "calendar" },
+  { key: "house", href: "/house", label: "House", icon: "door" }, // House
   { key: "settings", href: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -143,6 +147,7 @@ const ICON_PATHS = {
   edit: '<path d="M4.5 19.5l1-4L15.8 5.2a2 2 0 0 1 2.9 0l.1.1a2 2 0 0 1 0 2.9L8.5 18.5z"/><path d="M13.5 7.5l3 3"/>',
   logout: '<path d="M14 4.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5H14"/><path d="M10 12h10M16.5 8.5L20 12l-3.5 3.5"/>',
   // --- end profiles & chat icons ---
+  door: '<path d="M6.5 20.5V4.8a1.3 1.3 0 0 1 1.3-1.3h8.4a1.3 1.3 0 0 1 1.3 1.3v15.7"/><path d="M4 20.5h16"/><path d="M14.3 12.2h.01" stroke-width="2.6"/>', // House
 } as const;
 
 export type IconName = keyof typeof ICON_PATHS;

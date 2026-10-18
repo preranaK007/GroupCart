@@ -127,6 +127,19 @@ Besides the recurring lists, the household can keep **one-off lists** for a sing
 
 **Events and plans:** `add event house meeting Sunday 7pm`, `events`, `cancel event house meeting`, `plan house meeting 1h` (GroupCart suggests times from everyone's calendars; reply `1`–`3` to book). Casual messages such as “hey we all want to watch a movie” or “game night this week?” start a vote on a few free times; reply with numbers (`1 3`, `can’t do 2`), and `book 2` decides. Movie ideas: `add movie Dune`, `vote Dune`; RSVP with `I’m in` / `can’t make it`. A bare number goes to the plan vote unless GroupCart asked you a grocery question (product pick, milk kind, list selection) more recently. Booked events show on the Calendar page and the Home “Upcoming” card; GroupCart reminds the group a day and an hour before (through the same household group as other notifications). Connector tools: `list_lists`, `add_to_list`, `move_list_to_cart`, `list_events`, `add_event`, `suggest_event_times`, `plan_activity`, `vote`, `book_event`, `rsvp_event`. The demo seeds a one-off list, a few events, a game night, and a movie-night vote.
 
+## House
+
+Open [http://127.0.0.1:3000/house](http://127.0.0.1:3000/house). The top row holds pinned info tiles: Wi-Fi, door codes, trash day, and the landlord's number (tap to call). Passwords and codes stay masked until you tap the eye (or copy them); the page fetches them only then, so they never sit in the page. House rules, emergency info, and notes sit as small pills underneath. Tap any tile to edit, pin or unpin, or move it. Below are **Repairs** (status chips and photo thumbnails; open one for its photo, status Open → Reported → Fixed, who's on it, and its timeline), **Guests & quiet hours**, and **Polls** (vote bars). Home shows at most one line from House under the date (extra quiet hours tonight, guests today, or open repairs), and quiet hours appear as a light hatched band on the Calendar.
+
+- **Info:** `wifi`, `door code` (or `gate code`, `lockbox code`), `house rules`, `landlord`, `trash day`, `emergency`. `wifi` and `door code` answer in the group (it's the household's own chat), with a tip to tap-to-reveal on the House page next time.
+- **Repairs:** `broken: kitchen faucet leaking`, `leaky faucet`, or `the dishwasher won't drain`; send a photo with a "broken …" caption, or right after (within 5 minutes). `reported faucet` (or `told the landlord about the faucet`), `I'll handle the faucet` / `assign faucet to Maya`, `fixed faucet`, `repairs`. Requests open 7+ days get one reminder a week (9 AM–9 PM, not during quiet hours).
+- **Guests:** `having friends over Fri 8pm`, `my sister is staying Sat–Sun`, `my parents are visiting this weekend`. GroupCart adds a 🧳 household event (so it shows on the Calendar and Home and gets the usual event reminders) and posts a heads-up; others reply `ok` or `concern: exam Saturday`.
+- **Quiet hours:** a household default (weeknights 11 PM–8 AM; change it on the page or with `set quiet hours 11pm-7am weeknights`), plus one-night requests like `quiet hours tonight from 10pm` or `exam tomorrow, quiet please after 9`. `quiet hours` shows them; `cancel quiet hours` drops tonight's extra window.
+- **Polls:** `poll: takeout tonight? thai, pizza, sushi` or `poll: thermostat 68 or 70?` (no options means yes/no). Vote with a number; a bare number goes to the poll only while it is the newest question you were asked (a newer grocery choice or event plan vote keeps it). One vote each; a poll closes when everyone has voted or after 24 hours (announced in the group, not during quiet hours). `polls`, `close poll`.
+- **AI assistants:** `get_house_info` (passwords and codes masked unless `include_secrets`, which returns them only to the calling member), `create_maintenance_request`, `update_maintenance_request`, `announce_guest`, `set_quiet_hours`, `create_poll`, `vote_poll`; `whats_on_my_plate` gains a `house` section.
+
+The demo seeds a board (sample Wi-Fi, a door code, rules, the landlord "Pat Rivera, 555-0100"), an open repair with a sample photo, a guest visit, tonight's quiet hours, and an open thermostat poll. Data lives in `house_*` tables; repair photos in `house-files/` next to the database.
+
 ## Profiles, sign-in, and web chat
 
 Each member has a profile at `/people/<id>`: a name, a photo or emoji avatar, optional pronouns (GroupCart never guesses; it uses names or they/them), a short bio, dietary notes and allergies, favorite snacks, movie and game picks, a birthday, and a payment handle such as Venmo. Open your own profile from the avatar menu in the top right to edit it.
@@ -176,6 +189,7 @@ node --import=tsx --test src/store.test.ts          # store facade: sharing → 
 node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
 node --import=tsx --test src/connector.test.ts      # connector: tokens, tunnel guard, MCP over HTTP
 node --import=tsx --test src/connectorOAuth.test.ts # connector OAuth: discovery, DCR, PKCE, refresh rotation, revocation
+node --import=tsx --test src/house.test.ts          # House: parsers, masking, polls and number disambiguation, nudges
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.

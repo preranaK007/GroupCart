@@ -505,10 +505,11 @@ body { margin:0; background:var(--gc-bg); color:var(--gc-text); font:14px/1.45 "
 // --- Household events on the calendar (src/ui/eventsPanel.ts) ---
 import { withHouseEvents } from "./ui/eventsPanel.js";
 // --- end Household events ---
+import { withQuietHours } from "./ui/housePage.js"; // House: quiet-hours band
 
 export function renderCalendarPage(): string {
   const page = renderCalendarBody();
-  return renderPage(withHouseEvents({ title: "Calendar", active: "calendar", styles: page.styles, body: page.body, script: page.script }));
+  return renderPage(withQuietHours(withHouseEvents({ title: "Calendar", active: "calendar", styles: page.styles, body: page.body, script: page.script })));
 }
 
 /** Standalone document (no shared shell); kept for reference/testing. */

@@ -2,6 +2,7 @@ import { balancesCard, choresDueCard, upcomingCard } from "./placeholders.js";
 import { button, card, chip, renderPage } from "./shell.js";
 import { choresHomeCard } from "./choresPage.js"; // Chores: live "Chores due" card (replaces the placeholder)
 import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
+import { houseHomeChip } from "./housePage.js"; // House: one compact line in the date header
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -36,6 +37,7 @@ const body = `
 <div class="home-hello">
   <p class="home-date" id="homeDate"></p>
   <p class="gc-meta" id="homeSummary"></p>
+  ${houseHomeChip()}
 </div>
 <div class="gc-cards">
   ${groceriesCard}

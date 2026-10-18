@@ -17,6 +17,7 @@ import { setupConnector } from "./connector.js";
 import { setupBills } from "./bills.js";
 import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
+import { setupHouse } from "./house.js";
 import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
 
@@ -79,6 +80,9 @@ setupChores({ store, demoMode: !liveMode });
 // --- Lists & events: one-off named lists, household events and plans (src/listsEvents.ts) ---
 setupListsAndEvents({ store, calendar, demoMode: !liveMode, kroger: krogerClient });
 // --- end Lists & events ---
+// --- House: info board, repairs, guests & quiet hours, quick polls (src/house.ts) ---
+setupHouse({ store, calendar, demoMode: !liveMode, publicUrl: config.dashboardPublicUrl });
+// --- end House ---
 
 // --- Shared member-message processing: the iMessage group loop and the web chat both use this, so a message
 // --- sent from the website is handled exactly like the same text from that member in the group.
