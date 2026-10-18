@@ -131,7 +131,8 @@ async function runGroupCartCommand(message: CommandContext): Promise<string | nu
     store.recordCommandReply(message.messageId, commandReply);
     return commandReply;
   }
-  const text = message.text;
+  // "claude we need eggs" is addressed to Claude; the cart should search for "we need eggs", not "claude eggs".
+  const text = message.text.replace(/^\s*@?claude\b[\s,:!-]*/i, "");
   if (!text.trim()) return null;
   if (krogerClient) {
     return store.processLiveIncomingText(
