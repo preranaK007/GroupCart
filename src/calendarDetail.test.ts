@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, test } from "node:test";
-import { computeAvailability, zonedTimeToEpoch } from "./availability.js";
+import { addDays, computeAvailability, zonedTimeToEpoch } from "./availability.js";
 import { DemoCalendarFile, demoBusyBlocks, demoCalendarEvents, demoEvents, parseDemoCalendar } from "./calendarDemo.js";
 import { busyFromItems, cleanLocation, normalizeGoogleEvents, type CalendarItem } from "./calendarItems.js";
 import { calendarStateHelpers } from "./calendarView.js";
@@ -128,6 +128,28 @@ test("sample schedules are titled, stable per week, and varied per member", () =
   }
   const personas = [0, 1, 2, 3].map((index) => demoEvents("demo:same", index, week, TZ).map((item) => item.title).join("|"));
   assert.equal(new Set(personas).size, 4);
+});
+
+// Catches the sample week getting cluttered again: overlapping blocks for one person,
+// crowded days, or evening plans that leave the movie-night demo poll without slots.
+test("sample schedules stay sparse and leave weeknight evenings open", () => {
+  for (const week of ["2026-10-19", "2026-10-26", "2026-03-02"]) {
+    for (const index of [0, 1, 2, 3]) {
+      const items = demoEvents(`demo:m${index}`, index, week, TZ);
+      for (let i = 1; i < items.length; i += 1) assert.ok(items[i]!.start >= items[i - 1]!.end, `overlap for persona ${index} in ${week}`);
+      for (let offset = 0; offset < 7; offset += 1) {
+        const dayStart = zonedTimeToEpoch(week, offset * 24 * 60, TZ);
+        const count = items.filter((item) => item.start >= dayStart && item.start < dayStart + 24 * 3_600_000).length;
+        assert.ok(count <= (offset >= 5 ? 2 : 3), `persona ${index} has ${count} events on day ${offset} of ${week}`);
+      }
+      // Wednesday 9-11:30 PM and Thursday 8-10:30 PM (the demo's movie-night options).
+      for (const [day, from, to] of [[2, 21, 24], [3, 20, 22.5]] as const) {
+        const start = zonedTimeToEpoch(week, day * 24 * 60 + from * 60, TZ);
+        const end = zonedTimeToEpoch(week, day * 24 * 60 + to * 60, TZ);
+        assert.ok(items.every((item) => item.end <= start || item.start >= end), `persona ${index} busy on day ${day} evening of ${week}`);
+      }
+    }
+  }
 });
 
 // ---------------------------------------------------------------------------

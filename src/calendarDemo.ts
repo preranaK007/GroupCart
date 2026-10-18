@@ -32,62 +32,52 @@ type Entry = { start: number; end: number; title: string; location?: string; fre
 type Persona = (weekday: number, random: () => number) => Entry[];
 
 const h = (hours: number) => Math.round(hours * 60);
-/** Random offset in 15-minute steps between -steps and +steps. */
-const jitter = (random: () => number, steps: number) => (Math.floor(random() * (steps * 2 + 1)) - steps) * 15;
+/** Random offset in 15-minute steps between 0 and +steps. */
+const later = (random: () => number, steps: number) => Math.floor(random() * (steps + 1)) * 15;
 const pick = <T>(random: () => number, options: readonly T[]): T => options[Math.floor(random() * options.length)]!;
 const entry = (start: number, end: number, title: string, extra: Partial<Entry> = {}): Entry => ({ start, end, title, ...extra });
 
+// Each persona is deliberately sparse: one recurring anchor on weekdays (work, classes,
+// or a shift), at most one evening plan, and little or nothing on weekends. Blocks never
+// overlap within a persona. Evening plans end by 8 PM on Wednesday and Thursday so the
+// demo's movie-night poll can find everyone-free evenings.
 // weekday: 0 = Sunday ... 6 = Saturday
 const personas: Persona[] = [
-  // Office job with a lunch gap, an early gym session, evening plans, and a Saturday market.
+  // Office job, a weekly climbing session, book club, and a Saturday market.
   (weekday, random) => {
-    if (weekday === 0) return random() < 0.5 ? [entry(h(14) + jitter(random, 2), h(16), pick(random, ["Call with family", "Brunch with friends", "Grocery run"]))] : [];
-    if (weekday === 6) {
-      const blocks: Entry[] = [];
-      if (random() < 0.6) blocks.push(entry(h(10), h(11.5) + jitter(random, 2), "Farmers market", { location: "Market square", free: true }));
-      if (random() < 0.4) blocks.push(entry(h(18.5), h(20.5), "Dinner with friends"));
-      return blocks;
-    }
-    const blocks: Entry[] = [
-      entry(h(9) + jitter(random, 2), h(12), "Work", { location: "Office" }),
-      entry(h(13), h(17.5) + jitter(random, 2), weekday === 2 || weekday === 4 ? "Meetings" : "Work", { location: "Office" }),
-    ];
-    if (random() < 0.4) blocks.push(entry(h(18.5), h(20) + jitter(random, 2), pick(random, ["Dinner with friends", "Climbing", "Book club", "Movie night"])));
-    if (random() < 0.3) blocks.push(entry(h(7.5), h(8.25), "Gym", { location: "Rec center" }));
+    if (weekday === 0) return random() < 0.4 ? [entry(h(14), h(15), "Call with family")] : [];
+    if (weekday === 6) return random() < 0.6 ? [entry(h(10), h(11.5), "Farmers market", { location: "Market square", free: true })] : [];
+    const blocks = [entry(h(9), h(17) + later(random, 2), "Work", { location: "Office" })];
+    if (weekday === 2) blocks.push(entry(h(18.5), h(20), "Climbing", { location: "Climbing gym" }));
+    if (weekday === 4 && random() < 0.5) blocks.push(entry(h(18), h(19.5), "Book club"));
+    if (weekday === 5 && random() < 0.5) blocks.push(entry(h(19), h(21), "Dinner with friends"));
     return blocks;
   },
-  // Student: lectures and labs, evening study group, weekend practice and brunch.
+  // Student: lectures on Mon/Wed/Fri, labs on Tue/Thu, a Monday study group, Saturday practice.
   (weekday, random) => {
-    if (weekday === 0) return random() < 0.5 ? [entry(h(11), h(12.5), "Brunch")] : [];
-    if (weekday === 6) return random() < 0.5 ? [entry(h(13) + jitter(random, 2), h(15), "Practice", { location: "Field 2" })] : [];
-    const blocks: Entry[] = [];
-    const classes: Array<[number, string, string]> = weekday % 2 === 1
-      ? [[8.5, "Lecture", "Hall 120"], [11, "Calculus", "Math 204"], [14, "Lab", "Science 3"]]
-      : [[10, "Seminar", "Hall 120"], [13.5, "Lab", "Science 3"]];
-    for (const [start, title, location] of classes) {
-      if (random() < 0.85) blocks.push(entry(h(start) + jitter(random, 1), h(start + 1.25 + Math.floor(random() * 3) * 0.25), title, { location }));
-    }
+    if (weekday === 0) return random() < 0.4 ? [entry(h(11), h(12.5), "Brunch")] : [];
+    if (weekday === 6) return random() < 0.7 ? [entry(h(10), h(12), "Practice", { location: "Field 2" })] : [];
+    if (weekday === 2 || weekday === 4) return [entry(h(13), h(16), "Lab", { location: "Science 3" })];
+    const blocks = [entry(h(9.5), h(11), "Lecture", { location: "Hall 120" })];
+    if (weekday === 1) blocks.push(entry(h(19), h(20.5), "Study group", { location: "Library, 3rd floor" }));
     if (weekday === 3 && random() < 0.6) blocks.push(entry(h(15.5), h(16.5), "Office hours (optional)", { location: "Math 204", free: true }));
-    if (random() < 0.45) blocks.push(entry(h(19), h(21), "Study group", { location: "Library, 3rd floor" }));
     return blocks;
   },
-  // Shift worker: alternating early/late shifts, two days off with the gym.
+  // Shift worker: early shifts Mon/Thu, closing shifts Tue/Fri, a Saturday shift, Wednesdays off.
   (weekday, random) => {
-    if (weekday === 3 || weekday === 0) {
-      const blocks: Entry[] = random() < 0.7 ? [entry(h(9), h(10.5), "Gym", { location: "Rec center" })] : [];
-      if (weekday === 0 && random() < 0.4) blocks.push(entry(h(17), h(19), "Dinner with friends"));
-      return blocks;
-    }
-    if (weekday === 1 || weekday === 4) return [entry(h(7), h(15) + jitter(random, 1), "Work shift", { location: "Café" })];
+    if (weekday === 3) return [entry(h(10), h(11.5), "Gym", { location: "Rec center" })];
+    if (weekday === 0) return random() < 0.4 ? [entry(h(17), h(19), "Dinner with friends")] : [];
+    if (weekday === 1 || weekday === 4) return [entry(h(7), h(15), "Work shift", { location: "Café" })];
     if (weekday === 6) return [entry(h(11), h(19), "Work shift", { location: "Café" })];
-    return [entry(h(14) + jitter(random, 1), h(22), "Closing shift", { location: "Café" })];
+    return [entry(h(14), h(22), "Closing shift", { location: "Café" })];
   },
-  // Hybrid worker: meetings in blocks, focus time, an evening class.
+  // Hybrid worker: a morning anchor, sometimes one afternoon meeting, Tuesday yoga.
   (weekday, random) => {
-    if (weekday === 0 || weekday === 6) return random() < 0.4 ? [entry(h(16), h(18), pick(random, ["Hike", "Soccer game", "Dinner with friends"]))] : [];
-    const blocks: Entry[] = [entry(h(8.5), h(10) + jitter(random, 1), "Team meeting"), entry(h(10.5) + jitter(random, 1), h(12), "Focus time")];
-    if (random() < 0.7) blocks.push(entry(h(14), h(16) + jitter(random, 2), pick(random, ["Client call", "Design review", "1:1 with manager"])));
-    if (random() < 0.3) blocks.push(entry(h(17.5), h(19), "Yoga", { location: "Yoga studio" }));
+    if (weekday === 6) return random() < 0.5 ? [entry(h(9), h(13), "Hike")] : [];
+    if (weekday === 0) return random() < 0.3 ? [entry(h(16), h(17.5), "Soccer game")] : [];
+    const blocks = [weekday % 2 === 1 ? entry(h(9.5), h(10.5), "Team meeting") : entry(h(9), h(12), "Focus time")];
+    if (random() < 0.5) blocks.push(entry(h(14), h(15) + later(random, 2), pick(random, ["Client call", "Design review", "1:1 with manager"])));
+    if (weekday === 2) blocks.push(entry(h(18), h(19.25), "Yoga", { location: "Yoga studio" }));
     return blocks;
   },
 ];
