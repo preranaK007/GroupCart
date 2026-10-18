@@ -323,6 +323,10 @@ refresh().catch((error) => { $("mode").innerHTML = chip("Offline", "warning", "a
 setInterval(() => refresh().catch(showSyncError), 2500);
 `;
 
+// --- Lists & staples tabs (src/ui/listsPanel.ts) ---
+import { withListsTabs } from "./listsPanel.js";
+// --- end Lists & staples tabs ---
+
 export function renderCartPage(): string {
-  return renderPage({ title: "Groceries", active: "groceries", body, styles, actions, script });
+  return renderPage(withListsTabs({ title: "Groceries", active: "groceries", body, styles, actions, script }));
 }

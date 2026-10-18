@@ -59,6 +59,10 @@ const calendar = new CalendarService(
 // Group-chat commands registered by feature modules run before cart processing (see src/platform.ts).
 registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCommand(messageId, text) : null));
 // --- end Google Calendar ---
+// --- Lists & events: staples, one-off lists, household events and plans (src/listsEvents.ts) ---
+import { setupListsAndEvents } from "./listsEvents.js";
+setupListsAndEvents({ store, calendar, demoMode: !liveMode, kroger: krogerClient });
+// --- end Lists & events ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {

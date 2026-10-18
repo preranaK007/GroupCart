@@ -23,6 +23,19 @@ export const CATALOG: Product[] = [
   { id: "bread", name: "Bread", priceCents: 299, aliases: ["bread", "loaf"] },
   { id: "peanut-butter", name: "Peanut butter", priceCents: 349, aliases: ["peanut butter"] },
   { id: "apples", name: "Apples", priceCents: 299, aliases: ["apples", "apple"] },
+  // --- Lists & events: household staples and party snacks (src/lists.ts, src/eventsParse.ts) ---
+  { id: "coffee", name: "Coffee", priceCents: 899, aliases: ["coffee", "ground coffee", "coffee beans"] },
+  { id: "paper-towels", name: "Paper towels", priceCents: 799, aliases: ["paper towels", "paper towel"] },
+  { id: "popcorn", name: "Popcorn", priceCents: 399, aliases: ["popcorn"] },
+  { id: "candy", name: "Candy", priceCents: 299, aliases: ["candy", "candies"] },
+  { id: "tortilla-chips", name: "Tortilla chips", priceCents: 349, aliases: ["tortilla chips", "chips"] },
+  { id: "salsa", name: "Salsa", priceCents: 329, aliases: ["salsa"] },
+  { id: "soda", name: "Soda 12-pack", priceCents: 699, aliases: ["soda 12-pack", "sodas", "soda"] },
+  { id: "party-cups", name: "Party cups", priceCents: 399, aliases: ["party cups", "cups"] },
+  { id: "trail-mix", name: "Trail mix", priceCents: 549, aliases: ["trail mix"] },
+  { id: "granola-bars", name: "Granola bars", priceCents: 449, aliases: ["granola bars", "granola bar"] },
+  { id: "bottled-water", name: "Bottled water", priceCents: 499, aliases: ["bottled water", "water"] },
+  // --- end Lists & events ---
 ];
 
 const aliasEntries = CATALOG.flatMap((product) =>
