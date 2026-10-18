@@ -357,9 +357,21 @@ function renderHeader() {
   input.disabled = banner;
   $("chAttach").style.pointerEvents = banner ? "none" : "";
   updateSend();
-  const chips = ["cart", "help", "2 bananas", "approve"];
-  $("chSuggest").innerHTML = chips.map((text) => '<button type="button" data-suggest="' + GC.esc(text) + '">' + GC.esc(text) + '</button>').join("");
+  $("chSuggest").innerHTML = suggestions().map(([label, text]) => '<button type="button" data-suggest="' + GC.esc(text) + '">' + GC.esc(label) + '</button>').join("");
   $("chSuggest").hidden = Boolean(input.value.trim() || state.file);
+}
+
+/** Composer suggestions as [label, text]: questions for the coordinator when one is connected, else group commands. */
+function suggestions() {
+  const name = state.assistant;
+  if (name) return [
+    ["Ask " + name, name + ", "],
+    ["What's in the cart?", name + ", what's in the cart?"],
+    ["Who owes whom?", name + ", who owes whom?"],
+    ["This week", name + ", what's coming up this week?"],
+  ];
+  if (state.live) return [["Cart", "cart"], ["Who owes", "who owes"], ["Chores", "chores"], ["Help", "help"]];
+  return [["cart", "cart"], ["help", "help"], ["2 bananas", "2 bananas"], ["approve", "approve"]];
 }
 
 async function load(params) {
@@ -371,7 +383,7 @@ async function load(params) {
 
 async function initial() {
   const data = await load("limit=60");
-  state.me = data.me; state.household = data.household; state.live = data.live; state.groupConnected = data.groupConnected;
+  state.me = data.me; state.household = data.household; state.live = data.live; state.groupConnected = data.groupConnected; state.assistant = data.assistant || null;
   state.typing = data.typing; state.hasEarlier = data.hasEarlier;
   $("chTitle").textContent = data.householdName || "Household";
   $("chTip").innerHTML = data.live
@@ -399,7 +411,7 @@ async function poll() {
     state.typing = data.typing;
     if (added && data.messages.some((message) => message.kind === "bot")) state.expectReply = false;
     if (!data.typing && state.expectReply && !added) state.expectReply = state.expectReply === "first" ? false : "first";
-    if (state.groupConnected !== data.groupConnected) { state.groupConnected = data.groupConnected; renderHeader(); }
+    if (state.groupConnected !== data.groupConnected || state.assistant !== (data.assistant || null)) { state.groupConnected = data.groupConnected; state.assistant = data.assistant || null; renderHeader(); }
     if (added || typingChanged || cardsChanged) {
       render();
       if (wasNear || stick) toBottom(); else if (added) $("chJump").hidden = false;

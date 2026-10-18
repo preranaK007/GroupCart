@@ -18,6 +18,7 @@ import {
   AuthService, HttpError, clientKey, isLocalRequest, isSameOriginMutation, readJsonBody, readRawBody, redirect,
   safeNextPath, sendHtml, sendJson, type DirectSender,
 } from "./auth.js";
+import { activeCoordinatorName } from "./agent/setup.js";
 import { ChatError, ChatService, spectrumChannel, type InboundAttachment, type MemberMessageProcessor } from "./chat.js";
 import { money } from "./cart.js";
 import { cardText, onGroupNotify, registerHelp, registerRoute, registerTools, setCardSink, setRemoteAuthorizer, setRequestMemberResolver, type CommandAttachment } from "./platform.js";
@@ -178,6 +179,8 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
       live: liveMode,
       groupConnected: !liveMode || chat.groupConnected,
       typing: chat.typing,
+      /** The household coordinator answering the group, if one is connected (the composer's suggestions ask it). */
+      assistant: activeCoordinatorName(),
     };
   }
 

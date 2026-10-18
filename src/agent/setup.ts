@@ -23,10 +23,16 @@ const TURN_TOKEN_TTL_MS = 5 * 60_000;
 const FOLLOW_UP_INTERVAL_MS = 60_000;
 
 let settingsCard: (() => IntegrationCard) | null = null;
+let activeName: (() => string | null) | null = null;
 
 /** The Settings card, once setupCoordinator has run. */
 export function coordinatorCard(): IntegrationCard | null {
   return settingsCard?.() ?? null;
+}
+
+/** The coordinator's name while a roommate has it connected (it then answers the group), else null. */
+export function activeCoordinatorName(): string | null {
+  return activeName?.() ?? null;
 }
 
 export function setupCoordinator(options: {
@@ -105,5 +111,6 @@ export function setupCoordinator(options: {
     return true;
   });
   settingsCard = () => coordinatorSettingsCard({ status: coordinator.status(), members: store.getMembers() });
+  activeName = () => coordinator.status().active ? COORDINATOR_NAME : null;
   return coordinator;
 }
