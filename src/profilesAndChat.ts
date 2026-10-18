@@ -402,7 +402,7 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
         properties: {
           displayName: { type: "string" }, pronouns: { type: "string" }, bio: { type: "string" }, dietary: { type: "string", description: "Dietary notes and allergies" },
           snacks: { type: "string" }, genres: { type: "string", description: "Movie and game genres" }, birthday: { type: "string" },
-          paymentHandle: { type: "string", description: "e.g. Venmo @name" }, avatarEmoji: { type: "string" },
+          paymentHandle: { type: "string", description: "Pay-back handles, e.g. \"Venmo @name · Cash App $tag · PayPal.me/name\"" }, avatarEmoji: { type: "string" },
         },
       },
       handler: (args, caller) => {

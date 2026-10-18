@@ -19,6 +19,7 @@ import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
 import { recordGroupMessage, registerCommand, runCommands, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
+import { setupMoneyPoints } from "./moneyPoints.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -131,6 +132,9 @@ const social = setupProfilesAndChat({
   processMessage: liveMode ? processMemberMessage : processDemoMessage,
 });
 // --- end profiles, web sign-in, and web chat ---
+// --- Money & points: pay-back links, points/streaks/leaderboard, Sunday digest (src/moneyPoints.ts) ---
+setupMoneyPoints({ store, demoMode: !liveMode, checkoutHooks: splitwise, paymentHandle: (memberId) => social.profiles.get(memberId)?.paymentHandle ?? "" });
+// --- end money & points ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {

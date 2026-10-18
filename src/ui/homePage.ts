@@ -2,6 +2,7 @@ import { balancesCard, choresDueCard, upcomingCard } from "./placeholders.js";
 import { button, card, chip, renderPage } from "./shell.js";
 import { choresHomeCard } from "./choresPage.js"; // Chores: live "Chores due" card (replaces the placeholder)
 import { chatPreviewCard } from "./chatPage.js"; // profiles & chat
+import { POINTS_CLIENT_JS, POINTS_CSS } from "./pointsUi.js"; // money & points: points chips on the people card
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -104,7 +105,7 @@ async function refresh() {
   }).join("") + (cart.items.length > shown.length ? '<li class="home-more">+' + (cart.items.length - shown.length) + ' more</li>' : "");
 
   $("homePeopleList").innerHTML = cart.members.map((member) => window.GC.listRow({
-    leading: window.GC.avatar(member, allIds, 32),
+    leading: window.GCPoints ? window.GCPoints.badge(member.id, window.GC.avatar(member, allIds, 32)) : window.GC.avatar(member, allIds, 32), // money & points
     title: member.name,
     sub: cart.items.length ? (member.approved ? chip("Approved", "success", "check") : chip("Waiting", "neutral", "clock")) : "",
     trailing: '<span class="gc-amount">' + dollars(member.shareCents) + '</span>',
@@ -124,5 +125,5 @@ setInterval(() => refresh().catch(showSyncError), 2500);
 `;
 
 export function renderHomePage(): string {
-  return renderPage({ title: "Home", active: "home", body, styles, actions, script });
+  return renderPage({ title: "Home", active: "home", body, styles: styles + POINTS_CSS, actions, script: script + POINTS_CLIENT_JS }); // money & points
 }

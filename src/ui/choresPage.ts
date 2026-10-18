@@ -1,5 +1,6 @@
 import { EMOJI_RULES } from "../choresLogic.js";
 import { button, card, dialog, emptyState, icon, renderPage } from "./shell.js";
+import { POINTS_CLIENT_JS } from "./pointsUi.js"; // money & points
 
 /**
  * Chores (route "/chores") and the Home "Chores due" card. Data comes from
@@ -454,6 +455,7 @@ async function complete(id, buttonEl) {
     const next = result.next && result.next.assigneeId ? " · " + nameOf(result.next.assigneeId) + " next" : "";
     snack(chore.emoji + " " + chore.name + " done" + next, () => post("/api/chores/undo", { logId: result.logId }));
     if (GC.celebrate) GC.celebrate(chore.name + " done"); // [themes] completion flourish (no-op in Classic)
+    if (window.GCPoints) setTimeout(window.GCPoints.check, 1200); // money & points: a level-up replaces the flourish
   } catch (error) { snack(error.message); }
   refresh();
 }
@@ -639,7 +641,7 @@ setInterval(() => {
 `;
 
 export function renderChoresPage(): string {
-  return renderPage({ title: "Chores", active: "chores", body, styles, script });
+  return renderPage({ title: "Chores", active: "chores", body, styles, script: script + POINTS_CLIENT_JS }); // money & points: level-up celebrations
 }
 
 // ---------------------------------------------------------------------------

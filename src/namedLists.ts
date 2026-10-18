@@ -10,6 +10,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { localDate } from "./availability.js";
 import { extractCartRequests, isGenericMilkRequest } from "./cart.js";
 import type { KrogerClient } from "./kroger.js";
+import { awardPoints } from "./points.js"; // money & points
 import type { CartStore } from "./store.js";
 
 // ---------------------------------------------------------------------------
@@ -231,11 +232,24 @@ export class NamedListsService {
     return Number(this.#db.prepare("DELETE FROM list_items WHERE id = ? AND list_id IN (SELECT id FROM list_lists WHERE household_id = ?)").run(itemId, this.#store.household).changes) > 0;
   }
 
-  setItemChecked(itemId: string, checked: boolean): boolean {
+  setItemChecked(itemId: string, checked: boolean, actorId: string | null = null): boolean {
     const result = this.#db.prepare("UPDATE list_items SET checked = ?, carted_at = CASE WHEN ? = 0 THEN NULL ELSE carted_at END WHERE id = ? AND list_id IN (SELECT id FROM list_lists WHERE household_id = ?)")
       .run(checked ? 1 : 0, checked ? 1 : 0, itemId, this.#store.household);
+    // --- Money & points: checking off the last item finishes the list ---
+    if (checked && actorId && Number(result.changes) > 0) {
+      const row = this.#db.prepare("SELECT list_id FROM list_items WHERE id = ?").get(itemId) as { list_id: string } | undefined;
+      if (row) this.#creditIfFinished(row.list_id, actorId);
+    }
+    // --- end money & points ---
     return Number(result.changes) > 0;
   }
+
+  // --- Money & points: finishing a one-off list (every item checked off or moved to the cart) earns points once ---
+  #creditIfFinished(listId: string, memberId: string): void {
+    const list = this.getList(listId);
+    if (list && list.items.length && list.remaining === 0) awardPoints({ kind: "list", memberId, key: `list:${listId}`, label: `Finished ${list.name}` });
+  }
+  // --- end money & points ---
 
   deleteList(listId: string): boolean {
     return Number(this.#db.prepare("DELETE FROM list_lists WHERE id = ? AND household_id = ?").run(listId, this.#store.household).changes) > 0;
@@ -281,6 +295,7 @@ export class NamedListsService {
     const markCarted = (ids: string[]) => {
       const stamp = new Date(this.#now()).toISOString();
       for (const id of ids) this.#db.prepare("UPDATE list_items SET checked = 1, carted_at = ? WHERE id = ?").run(stamp, id);
+      this.#creditIfFinished(list.id, memberId); // money & points
     };
 
     if (this.#kroger) {

@@ -22,6 +22,7 @@ import {
 } from "./platform.js";
 import type { CartStore } from "./store.js";
 import { renderChoresPage } from "./ui/choresPage.js";
+import { awardPoints, revokePoints } from "./points.js"; // money & points
 
 /** Morning digest goes out from this local hour; overdue nudges only between these hours (live mode). */
 const DIGEST_HOUR = 9;
@@ -491,6 +492,9 @@ export class ChoreService {
       this.#db.prepare("UPDATE chore_chores SET next_due = ?, assignee_override = NULL, skipped_json = '[]' WHERE id = ?").run(nextDue, chore.id);
       return Number(inserted.lastInsertRowid);
     });
+    // --- Money & points: on your turn and on time earns the most; covering still counts; late counts less ---
+    if (doer) awardPoints({ kind: "chore", memberId: doer, key: `chore:${logId}`, label: chore.name, onTime: open.lateDays === 0, covering: Boolean(open.assigneeId) && doer !== open.assigneeId, day: open.dueDate });
+    // --- end money & points ---
     const after = this.#context();
     const updated = this.#chore(chore.id)!;
     return { ok: true, chore: open, doneBy: doer, wasTurn: doer === open.assigneeId, next: this.#open(updated, after), logId };
@@ -509,6 +513,7 @@ export class ChoreService {
       this.#db.prepare("UPDATE chore_chores SET next_due = ?, assignee_override = ?, skipped_json = ? WHERE id = ?").run(prev.nextDue, prev.override, JSON.stringify(prev.skipped ?? []), chore.id);
       this.#db.prepare("DELETE FROM chore_log WHERE id = ?").run(logId);
     });
+    revokePoints(`chore:${logId}`); // money & points
     return { ok: true, name: chore.name };
   }
 
@@ -1098,9 +1103,17 @@ export async function handleChoresRequest(service: ChoreService, request: Incomi
 // ---------------------------------------------------------------------------
 // Wiring
 
+// --- Money & points: the running chores service, for streaks and the Sunday digest (src/moneyPoints.ts) ---
+let activeChores: ChoreService | null = null;
+export function choreService(): ChoreService | null {
+  return activeChores;
+}
+// --- end money & points ---
+
 /** Registers chores with the platform: command, help, routes, connector tools, and the nudge schedule. */
 export function setupChores(options: { store: CartStore; demoMode: boolean }): ChoreService {
   const service = new ChoreService(options.store, { demoMode: options.demoMode });
+  activeChores = service; // money & points
   if (options.demoMode && service.seedDemo()) console.log("Chores: added sample chores and history for the demo.");
   registerCommand("chores", (context) => (context.text ? service.handleCommand(context) : null));
   registerHelp("Chores: “chores” for this week, “my chores”, “done dishes” when finished, “skip dishes” or “swap dishes with Maya” to trade a turn.");

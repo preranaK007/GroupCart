@@ -33,6 +33,10 @@ import {
 import { buildCreateExpenseBody, parseSplitwiseMembers, SplitwiseClient, SplitwiseError, splitwiseDashboardView, splitwiseExpenseUrl, type SplitwiseFetch, type SplitwiseUserRef } from "./splitwise.js";
 import type { CartStore } from "./store.js";
 import { setBillsIntegrationStatus } from "./ui/billsHome.js";
+// --- Money & points: points for paying on time, pay-back links in "who owes" (src/points.ts, src/payLinks.ts) ---
+import { payLinkLine } from "./payLinks.js";
+import { awardPoints, revokePoints } from "./points.js";
+// --- end money & points ---
 import { renderBillsPage } from "./ui/billsPage.js";
 
 const execFileAsync = promisify(execFile);
@@ -945,6 +949,10 @@ export class BillsService {
     if (!bill || bill.state !== "saved") return { ok: false, message: "Only saved bills can be marked paid." };
     bill.paidAt = paid ? bill.paidAt ?? this.#nowIso() : null;
     this.#updateBill(bill);
+    // --- Money & points: the payer earns points for paying the vendor (more when by the due date) ---
+    if (paid && bill.payerId) awardPoints({ kind: "bill", memberId: bill.payerId, key: `bill:${bill.id}`, label: `Paid ${bill.vendor || CATEGORY_LABEL[bill.category]}`, onTime: !bill.dueDate || isoDate(new Date(bill.paidAt!)) <= bill.dueDate });
+    if (!paid) revokePoints(`bill:${bill.id}`);
+    // --- end money & points ---
     return {
       ok: true,
       message: paid
@@ -988,11 +996,15 @@ export class BillsService {
     if (!members.some((member) => member.id === input.fromId) || !members.some((member) => member.id === input.toId)) return { ok: false, message: "Pick two household members." };
     if (input.fromId === input.toId) return { ok: false, message: "Pick someone else to pay." };
     if (!Number.isSafeInteger(input.cents) || input.cents <= 0 || input.cents > 10_000_000) return { ok: false, message: "Enter an amount between $0.01 and $100,000." };
+    const owedBefore = this.balances().transfers.some((transfer) => transfer.fromId === input.fromId && transfer.toId === input.toId); // money & points
     const result = this.#db.prepare("INSERT OR IGNORE INTO bill_payments (id, household_id, from_member_id, to_member_id, cents, note, message_id, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(randomUUID(), this.#household, input.fromId, input.toId, input.cents, input.note ? cleanLabel(input.note, 80) : null, input.messageId ?? null, input.createdBy, this.#nowIso());
     const from = this.#name(input.fromId, members);
     const to = this.#name(input.toId, members);
     const recorded = Number(result.changes) > 0;
+    // --- Money & points: paying back what you owed earns points (once per person per day) ---
+    if (recorded && owedBefore) awardPoints({ kind: "payback", memberId: input.fromId, key: `payback:${input.fromId}:${input.toId}:${this.#todayIso()}`, label: `Paid ${to.split(/\s+/)[0]} back` });
+    // --- end money & points ---
     const balances = this.balances();
     const still = balances.transfers.find((transfer) => transfer.fromId === input.fromId && transfer.toId === input.toId);
     const net = balances.net.find((entry) => entry.memberId === input.fromId)?.cents ?? 0;
@@ -1042,7 +1054,10 @@ export class BillsService {
     const mine = memberId ? transfers.find((transfer) => transfer.fromId === memberId) : undefined;
     const example = mine ?? transfers[0]!;
     const standing = net.filter((entry) => entry.cents !== 0).sort((a, b) => b.cents - a.cents).map((entry) => `${entry.name} ${entry.cents > 0 ? "+" : "−"}${dollars(Math.abs(entry.cents))}`).join(" · ");
-    return `To settle up: ${lines.join(" · ")}.\nBalances: ${standing}.\nAfter paying, reply “paid ${example.toName.split(/\s+/)[0]} ${dollars(example.cents)}”.`;
+    // --- Money & points: one-tap pay links for what the asker owes (opens Venmo/Cash App/PayPal; nothing is paid automatically) ---
+    const payLines = transfers.filter((transfer) => transfer.fromId === memberId).map((transfer) => payLinkLine(transfer.toId, transfer.toName, transfer.cents)).filter((line): line is string => Boolean(line));
+    // --- end money & points ---
+    return `To settle up: ${lines.join(" · ")}.\nBalances: ${standing}.${payLines.length ? `\n${payLines.join("\n")}` : ""}\nAfter paying, reply “paid ${example.toName.split(/\s+/)[0]} ${dollars(example.cents)}”.`;
   }
 
   billsReply(): string {
@@ -1690,6 +1705,13 @@ export class BillsService {
   }
 }
 
+// --- Money & points: the running bills service, for the digest and pay links (src/moneyPoints.ts) ---
+let activeBills: BillsService | null = null;
+export function billsService(): BillsService | null {
+  return activeBills;
+}
+// --- end money & points ---
+
 /** Wires bills into the app: command, routes, tools, help, and schedules (one call from index.ts). */
 export function setupBills(options: { store: CartStore; liveMode: boolean }): BillsService {
   const service = new BillsService({
@@ -1700,6 +1722,7 @@ export function setupBills(options: { store: CartStore; liveMode: boolean }): Bi
     splitwise: splitwiseConfig,
   });
   service.seedDemo();
+  activeBills = service; // money & points
   registerCommand("bills", (context) => service.handleCommand(context));
   registerRoute((request, response, url) => service.handleRequest(request, response, url));
   registerTools(service.tools());

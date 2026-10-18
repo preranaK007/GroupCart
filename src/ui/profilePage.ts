@@ -1,5 +1,9 @@
 import type { Profile, ProfileSection } from "../profiles.js";
 import { avatarHtml, button, card, chip, dialog, emptyState, escapeHtml, icon, renderPage, sectionHeader, type IconName } from "./shell.js";
+// --- Money & points: pay-back handles (Venmo / Cash App / PayPal.me), leaderboard and points chips ---
+import { payHandleFields, payHandlesHtml } from "./payUi.js";
+import { leaderboardCard, withPointsBadge } from "./pointsUi.js";
+// --- end money & points ---
 
 /**
  * People pages: /people (household grid) and /people/<id> (one profile, its "About" facts, and summary
@@ -27,9 +31,7 @@ export function formatBirthday(value: string): string {
 }
 
 function paymentHtml(handle: string): string {
-  const venmo = /venmo/i.test(handle) ? /@([A-Za-z0-9_-]{2,30})/.exec(handle)?.[1] : undefined;
-  if (!venmo) return escapeHtml(handle);
-  return `<a href="https://venmo.com/u/${encodeURIComponent(venmo)}" target="_blank" rel="noopener noreferrer">${escapeHtml(handle)}</a>`;
+  return payHandlesHtml(handle); // money & points: one link per service (src/ui/payUi.ts)
 }
 
 const sharedStyles = `
@@ -98,7 +100,7 @@ export function renderPeoplePage(context: { profiles: Profile[]; viewerId: strin
     ].join("");
     return `<a class="pp-card" href="/people/${encodeURIComponent(profile.memberId)}">
   ${profile.memberId === context.viewerId ? `<span class="pp-you">${chip("You", "accent")}</span>` : ""}
-  ${avatarHtml(look(profile), { allMemberIds: ids, size: 72 })}
+  ${withPointsBadge(profile.memberId, avatarHtml(look(profile), { allMemberIds: ids, size: 72 }))}
   <span class="pp-name">${escapeHtml(profile.displayName)}</span>
   ${profile.pronouns ? `<span class="pp-pronouns">${escapeHtml(profile.pronouns)}</span>` : ""}
   ${profile.bio ? `<p class="pp-bio">${escapeHtml(profile.bio)}</p>` : ""}
@@ -106,6 +108,7 @@ export function renderPeoplePage(context: { profiles: Profile[]; viewerId: strin
 </a>`;
   }).join("");
   const body = `
+${leaderboardCard(context.viewerId) /* money & points: this month's standings */}
 ${sectionHeader(context.householdName, {
     meta: `${context.profiles.length} ${context.profiles.length === 1 ? "person" : "people"}`,
     actions: me ? button({ label: "Edit your profile", variant: "tonal", size: "sm", icon: "edit", href: `/people/${encodeURIComponent(me.memberId)}?edit=1` }) : "",
@@ -156,7 +159,7 @@ function editDialog(profile: Profile, ids: string[]): string {
     <label class="pf-field"><span>Birthday month</span><select class="gc-select" name="month"><option value="">—</option>${MONTHS.map((name, index) => `<option value="${String(index + 1).padStart(2, "0")}"${month === String(index + 1).padStart(2, "0") ? " selected" : ""}>${name}</option>`).join("")}</select></label>
     <label class="pf-field"><span>Day</span><select class="gc-select" name="day"><option value="">—</option>${Array.from({ length: 31 }, (_, index) => String(index + 1).padStart(2, "0")).map((value) => `<option value="${value}"${day === value ? " selected" : ""}>${Number(value)}</option>`).join("")}</select></label>
   </div>
-  ${field("paymentHandle", "Payment handle", profile.paymentHandle, { max: 40, placeholder: "Venmo @name" })}
+  ${payHandleFields(profile.paymentHandle) /* money & points: Venmo / Cash App / PayPal.me, saved as paymentHandle */}
   <p class="pf-status" id="pfStatus" role="status" aria-live="polite"></p>
 </form>`;
   return dialog({

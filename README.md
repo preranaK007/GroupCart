@@ -137,6 +137,13 @@ Everything GroupCart sends on its own in live mode (recurring-list check-ins, ch
 
 On the computer running GroupCart you are already signed in; the avatar menu's **Viewing as** list picks which member you act as. To use GroupCart from your own phone or laptop, set `GROUP_CART_HOST=0.0.0.0` (or put it behind a tunnel), open `/signin`, and enter the phone number or Apple ID you use in the group. GroupCart texts you a 6-digit code by iMessage (valid 10 minutes, single use). Sessions last 30 days. If iMessage isn't connected, sign-in from other devices is unavailable and the page says so. In the demo the code is shown on screen.
 
+## Paying back, points, and the Sunday digest
+
+- **Pay back in one tap.** Add Venmo, Cash App, or PayPal.me handles in your profile (Edit profile). When you owe someone, Bills > Balances and the Home balances card show **Pay $26.67** (Venmo, Cash App, or PayPal opens with the amount filled in) and **Mark paid**, which records the payback in the ledger and tells the group. Texting `who owes` adds the same links for what you owe. GroupCart never sends money or assumes a payment happened.
+- **Points.** Chores earn 15 on your turn and on time (10 when covering, 5 when late), bills paid by the due date 10, paybacks 8, grocery checkouts 12 (the shopper), hosting a plan 10, and finishing a one-off list 6. Undoing the action takes the points back. Levels come from all-time points; the leaderboard at the top of People and the monthly MVP use this month's. A streak counts weeks in a row with every chore on your turn done on time. Text `points` or `leaderboard`; profiles show points, level, and badges; the wording follows the theme (XP, Bounty, Runes, Street cred).
+- **Sunday digest.** Every Sunday at 6pm (server time) GroupCart posts one short message with the week's chores and who has them, who owes whom, upcoming plans, lists and bills coming due, and one fun stat. It goes out once per week (catching up until Monday noon if GroupCart was off). Text `digest` for a preview; Home shows when the next one is due.
+- Assistant tools: `get_leaderboard`, `my_points`, `get_weekly_digest`, `get_pay_links`.
+
 ## Configuration
 
 | Variable | Purpose | Default |
@@ -176,6 +183,9 @@ node --import=tsx --test src/store.test.ts          # store facade: sharing → 
 node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
 node --import=tsx --test src/connector.test.ts      # connector: tokens, tunnel guard, MCP over HTTP
 node --import=tsx --test src/connectorOAuth.test.ts # connector OAuth: discovery, DCR, PKCE, refresh rotation, revocation
+node --import=tsx --test src/payLinks.test.ts       # pay-back links: amounts, URL encoding, handle parsing
+node --import=tsx --test src/points.test.ts         # points rules, levels, streaks, MVP, chore and checkout hooks
+node --import=tsx --test src/digest.test.ts         # Sunday digest text and once-per-week delivery
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.

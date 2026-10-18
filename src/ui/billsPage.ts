@@ -1,4 +1,6 @@
 import { CLIENT_SPLIT_JS } from "../billSplit.js";
+import { PAY_CLIENT_JS, PAY_CSS } from "./payUi.js"; // money & points: "Pay $26.67" / "Mark paid" for your own debts
+import { POINTS_CLIENT_JS } from "./pointsUi.js"; // money & points: level-up celebrations
 import { button, chip, dialog, icon, renderPage } from "./shell.js";
 
 /**
@@ -185,6 +187,8 @@ const body = `
 
 const script = String.raw`
 ${CLIENT_SPLIT_JS}
+${PAY_CLIENT_JS}
+${POINTS_CLIENT_JS}
 (function () {
   var GC = window.GC, Split = window.BillSplit;
   var $ = function (id) { return document.getElementById(id); };
@@ -290,8 +294,9 @@ ${CLIENT_SPLIT_JS}
     }).join("");
     var settle = b.transfers.length
       ? '<div class="bl-settle"><span class="bl-label">Settle up</span>' + b.transfers.map(function (t, i) {
+        var pay = window.GCPay ? window.GCPay.actions(t) : ""; // money & points: your own debts get Pay + Mark paid
         return '<div class="bl-transfer">' + GC.avatar({ id: t.fromId, name: t.fromName }, all, 24) + '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span>' + GC.avatar({ id: t.toId, name: t.toName }, all, 24)
-          + '<span class="gc-meta">' + GC.esc(first(t.fromName)) + ' pays ' + GC.esc(first(t.toName)) + '</span><span class="bl-amt">' + GC.dollars(t.cents) + '</span><button type="button" class="gc-btn gc-btn-text gc-btn-sm" data-settle="' + i + '">Record</button></div>';
+          + '<span class="gc-meta">' + GC.esc(first(t.fromName)) + ' pays ' + GC.esc(first(t.toName)) + '</span><span class="bl-amt">' + GC.dollars(t.cents) + '</span>' + (pay ? "" : '<button type="button" class="gc-btn gc-btn-text gc-btn-sm" data-settle="' + i + '">Record</button>') + '</div>' + pay;
       }).join("") + '</div>'
       : '<div class="bl-even">' + GC.icon("checkCircle") + 'Everyone’s even</div>';
     $("blBalancesBody").innerHTML = '<ul class="bl-bal">' + rows + '</ul>' + settle;
@@ -308,10 +313,11 @@ ${CLIENT_SPLIT_JS}
   function render() { renderPayer(); renderLists(); renderBalances(); renderConnections(); }
 
   async function refresh() {
-    if (document.querySelector("dialog[open]") || state.busy) return;
+    if (document.querySelector("dialog[open]") || document.querySelector("details.gp-menu[open]") || state.busy) return; // money & points: keep an open Pay menu
     var response = await fetch("/api/bills");
     if (!response.ok) throw new Error("Could not load bills");
     state.data = await response.json();
+    if (window.GCPay) await window.GCPay.load(); // money & points: pay-back links for the viewer
     $("mode").innerHTML = state.data.demoMode ? GC.chip("Demo", "neutral") : GC.chip("Live", "accent", "lock");
     $("sync").classList.remove("is-paused");
     $("syncState").textContent = "Synced " + GC.time();
@@ -613,6 +619,7 @@ ${CLIENT_SPLIT_JS}
     } catch (error) { $("blPayErr").textContent = error.message; }
   });
   $("blPay").addEventListener("close", function () { refresh().catch(showSyncError); });
+  document.addEventListener("gc:paid", function (ev) { toast(ev.detail.message); refresh().catch(showSyncError); }); // money & points
 
   refresh().catch(function (error) { $("mode").innerHTML = GC.chip("Offline", "warning", "alert"); showSyncError(error); });
   setInterval(function () { refresh().catch(showSyncError); }, 5000);
@@ -621,5 +628,5 @@ ${CLIENT_SPLIT_JS}
 
 export function renderBillsPage(options: { demoMode: boolean }): string {
   const actions = `<span id="mode">${options.demoMode ? chip("Demo", "neutral") : chip("Live", "accent", "lock")}</span><span class="gc-sync gc-hide-sm" id="sync"><span class="gc-dot"></span><span id="syncState">Connecting…</span></span>`;
-  return renderPage({ title: "Bills", active: "bills", body, styles, script, actions });
+  return renderPage({ title: "Bills", active: "bills", body, styles: styles + PAY_CSS, script, actions }); // money & points: PAY_CSS
 }

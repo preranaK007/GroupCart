@@ -13,6 +13,7 @@ import {
 } from "./eventsParse.js";
 import type { CalendarService } from "./googleCalendar.js";
 import { normalizeName, type ListView, type NamedListsService } from "./namedLists.js";
+import { awardPoints, revokePoints } from "./points.js"; // money & points
 import type { CartStore } from "./store.js";
 
 export type EventKind = ActivityKey | "house";
@@ -334,6 +335,9 @@ export class EventsService {
       this.timeZone, recurrence, everyone ? 1 : 0, JSON.stringify(everyone ? [] : [...attendees].sort()), notes, options.pollId ?? null, actorId, createdAt,
     );
     const event = this.getEvent(id)!;
+    // --- Money & points: hosting a social plan or booking a timed household event (all-day reminders earn nothing) ---
+    if (actorId) awardPoints({ kind: "event", memberId: actorId, key: `event:${id}`, label: event.title, social: kind !== "house", timed: startMin !== null, at: createdAt });
+    // --- end money & points ---
     const rsvps: Record<string, RsvpStatus> = { ...(options.rsvps ?? {}) };
     if (kind !== "house" && actorId && members.some((member) => member.id === actorId) && !rsvps[actorId]) rsvps[actorId] = "going";
     for (const [memberId, status] of Object.entries(rsvps)) this.setRsvp(id, memberId, status);
@@ -350,6 +354,7 @@ export class EventsService {
     const event = this.getEvent(eventId);
     if (!event) return undefined;
     this.#db.prepare("UPDATE event_events SET cancelled_at = ? WHERE id = ?").run(new Date(this.#now()).toISOString(), eventId);
+    revokePoints(`event:${eventId}`); // money & points
     const list = this.#lists.listForEvent(eventId);
     if (list && !list.items.some((item) => item.carted || item.checked)) this.#lists.deleteList(list.id);
     return event;

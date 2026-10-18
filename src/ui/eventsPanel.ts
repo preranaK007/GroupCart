@@ -1,5 +1,6 @@
 import { ACTIVITIES } from "../eventsParse.js";
 import { button, card, dialog, icon, type PageOptions } from "./shell.js";
+import { digestHomeLine } from "./pointsUi.js"; // money & points: "Next digest" line in the Home Upcoming card
 
 /**
  * Household events on /calendar and Home.
@@ -758,6 +759,6 @@ export function homeUpcomingCard(): string {
     icon: "calendar",
     flavor: "home.upcoming", // [themes]
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/calendar" }),
-    body: `<ul class="gc-list hu-list" id="homeUpcomingList"><li class="gc-empty"><p class="gc-empty-text">Loading…</p></li></ul><style>${homeStyles}</style><script>${homeScript}</script>`,
+    body: `<ul class="gc-list hu-list" id="homeUpcomingList"><li class="gc-empty"><p class="gc-empty-text">Loading…</p></li></ul>${digestHomeLine() /* money & points: "Next digest: Sun 6pm" */}<style>${homeStyles}</style><script>${homeScript}</script>`,
   });
 }

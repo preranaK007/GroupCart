@@ -42,7 +42,8 @@ export type ProfilePatch = Partial<Pick<Profile, "displayName" | "pronouns" | "b
   avatarEmoji?: string;
 };
 
-export const PROFILE_LIMITS = { displayName: 40, pronouns: 24, bio: 160, dietary: 160, snacks: 120, genres: 120, paymentHandle: 40 } as const;
+// Money & points: paymentHandle holds up to three handles ("Venmo @alex-k · Cash App $alexk · PayPal.me/alexk"), see src/payLinks.ts.
+export const PROFILE_LIMITS = { displayName: 40, pronouns: 24, bio: 160, dietary: 160, snacks: 120, genres: 120, paymentHandle: 100 } as const;
 const TEXT_FIELDS = ["displayName", "pronouns", "bio", "dietary", "snacks", "genres", "paymentHandle"] as const;
 const COLUMN: Record<(typeof TEXT_FIELDS)[number] | "birthday", string> = {
   displayName: "display_name", pronouns: "pronouns", bio: "bio", dietary: "dietary", snacks: "snacks", genres: "genres", paymentHandle: "payment_handle", birthday: "birthday",
@@ -351,7 +352,7 @@ export class ProfileService {
         avatarEmoji: "🧗", avatarKind: "emoji", pronouns: "he/him",
         bio: "Climbs on weekends. Usually cooking Sunday dinner.",
         dietary: "No shellfish", snacks: "Kettle chips, clementines", genres: "Sci-fi, co-op board games",
-        birthday: "--03-14", paymentHandle: "Venmo @alex-k",
+        birthday: "--03-14", paymentHandle: "Venmo @alex-k · Cash App $alexk", // money & points: two pay-back options
       },
       maya: {
         avatarEmoji: "🌿", avatarKind: "emoji", pronouns: "she/her",
@@ -363,7 +364,7 @@ export class ProfileService {
         avatarEmoji: "🎧", avatarKind: "emoji",
         bio: "Night owl. Makes a playlist for everything.",
         dietary: "Lactose intolerant (oat milk, please)", snacks: "Popcorn, gummy bears", genres: "Horror, Mario Kart",
-        paymentHandle: "Venmo @jordan-p",
+        paymentHandle: "Venmo @jordan-p · PayPal.me/jordanp", // money & points: two pay-back options
       },
     };
     for (const member of this.#members()) {

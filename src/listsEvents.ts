@@ -14,7 +14,7 @@ import {
 import { CalendarService } from "./googleCalendar.js";
 import type { KrogerClient } from "./kroger.js";
 import { NamedListsService, RECURRING_LIST_WORDS, cartPromptAt, type ListView } from "./namedLists.js";
-import { notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
+import { notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
 import type { CartStore } from "./store.js";
 
 export type ListsEventsOptions = {
@@ -24,6 +24,13 @@ export type ListsEventsOptions = {
   kroger?: KrogerClient;
   now?: () => number;
 };
+
+// --- Money & points: the running lists/events services, for the Sunday digest (src/moneyPoints.ts) ---
+let activeListsEvents: { lists: NamedListsService; events: EventsService } | null = null;
+export function listsEventsServices(): { lists: NamedListsService; events: EventsService } | null {
+  return activeListsEvents;
+}
+// --- end money & points ---
 
 export function setupListsAndEvents(options: ListsEventsOptions): { lists: NamedListsService; events: EventsService } {
   const { store, demoMode } = options;
@@ -41,6 +48,7 @@ export function setupListsAndEvents(options: ListsEventsOptions): { lists: Named
   registerHelp("Plans: say “we all want to watch a movie” or “game night this week?” and vote with numbers (“1 3”, “can’t do 2”); “book 2” decides. Movies: “add movie Dune”, “vote Dune”. RSVP: “I’m in” / “can’t make it”.");
   scheduleEvery("event reminders", 60_000, async () => { await events.runReminders(); });
   if (demoMode) void seedDemo(store, lists, events).catch((error) => console.warn("Lists/events demo seed failed:", error instanceof Error ? error.message : error));
+  activeListsEvents = { lists, events }; // money & points
   return { lists, events };
 }
 
@@ -118,7 +126,7 @@ class ChatCommands {
       const names = splitItems(match[1]!).map((name) => name.toLowerCase());
       const items = list.items.filter((item) => names.some((name) => item.name.toLowerCase().includes(name)));
       if (!items.length) return `I couldn’t find ${match[1]} on ${list.name}.`;
-      for (const item of items) lists.setItemChecked(item.id, true);
+      for (const item of items) lists.setItemChecked(item.id, true, context.memberId); // money & points: credits finishing the list
       return `✓ ${items.map((item) => item.name.toLowerCase()).join(", ")}. ${lists.getList(list.id)!.remaining} left on ${list.name}.`;
     }
 
@@ -508,7 +516,7 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
         return sendJson(response, 200, { ok: true, added: lists.addItems(listId, names, null) });
       }
       case "/api/named-lists/items/toggle":
-        return sendJson(response, lists.setItemChecked(str(body.itemId, 64) ?? "", body.checked === true) ? 200 : 404, { ok: true });
+        return sendJson(response, lists.setItemChecked(str(body.itemId, 64) ?? "", body.checked === true, requestMember(request)?.memberId ?? null) ? 200 : 404, { ok: true }); // money & points: viewer finishing the list
       case "/api/named-lists/items/delete":
         return sendJson(response, lists.deleteItem(str(body.itemId, 64) ?? "") ? 200 : 404, { ok: true });
       case "/api/named-lists/delete":

@@ -1,4 +1,5 @@
 import { button, card, chip, emptyState, escapeHtml } from "./shell.js";
+import { PAY_CLIENT_JS, PAY_CSS } from "./payUi.js"; // money & points: "Pay $26.67" / "Mark paid" for your own debts
 import type { IntegrationCard } from "./settingsPage.js";
 
 /**
@@ -77,6 +78,7 @@ document.addEventListener("DOMContentLoaded", function () {
           : '<span class="hb-amt hb-zero">Even</span>';
         return '<li class="hb-person">' + GC.avatar(m, ids, 28) + '<span class="hb-name">' + GC.esc(m.name) + '</span>' + amt + '</li>';
       }).join("") + '</ul>';
+      if (window.GCPay) html += window.GCPay.homeRows(); // money & points: what you owe, with pay links
       if (data.nextBill) {
         var b = data.nextBill, d = due(b.dueDate, data.today);
         html += '<a class="hb-next" href="/bills"><span class="hb-emoji" aria-hidden="true">' + GC.esc(b.emoji) + '</span><span class="hb-next-main"><span class="hb-next-title">' + GC.esc(b.vendor || "Next bill") + '</span><span class="gc-meta"> \\u00b7 ' + GC.dollars(b.totalCents) + '</span></span>' + GC.chip(d.label, d.tone, "clock") + '</a>';
@@ -86,8 +88,11 @@ document.addEventListener("DOMContentLoaded", function () {
     root.innerHTML = html;
   }
   function load() {
-    fetch("/api/bills/summary").then(function (r) { return r.ok ? r.json() : null; }).then(function (d) { if (d) render(d); }).catch(function () {});
+    if (document.querySelector("#homeBalances details.gp-menu[open]")) return; // money & points: keep an open Pay menu
+    var pay = window.GCPay ? window.GCPay.load() : Promise.resolve(); // money & points
+    fetch("/api/bills/summary").then(function (r) { return r.ok ? r.json() : null; }).then(function (d) { if (d) pay.then(function () { render(d); }); }).catch(function () {});
   }
+  document.addEventListener("gc:paid", load); // money & points: refresh after "Mark paid"
   load();
   setInterval(load, 10000);
 });
@@ -101,7 +106,7 @@ export function homeBalancesCard(): string {
     icon: "wallet",
     flavor: "home.balances", // [themes]
     actions: button({ label: "Open", variant: "text", size: "sm", href: "/bills" }),
-    body: `<style>${HOME_STYLES}</style><div id="homeBalancesBody">${emptyState({ icon: "receipt", title: "No bills yet", text: "Bill splits will show up here.", flavor: "empty.bills" })}</div><script>${HOME_SCRIPT}</script>`,
+    body: `<style>${HOME_STYLES}${PAY_CSS}</style><div id="homeBalancesBody">${emptyState({ icon: "receipt", title: "No bills yet", text: "Bill splits will show up here.", flavor: "empty.bills" })}</div><script>${PAY_CLIENT_JS}</script><script>${HOME_SCRIPT}</script>`,
   });
 }
 
