@@ -14,6 +14,7 @@ import { SplitwiseService } from "./splitwise.js";
 import { registerCommand, runCommands, setGroupSender, stopSchedules, type CommandAttachment } from "./platform.js";
 import { setupConnector } from "./connector.js";
 import { setupBills } from "./bills.js";
+import { setupChores } from "./chores.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -67,6 +68,9 @@ setupConnector({ store, demoMode: !liveMode, calendar, krogerClient, port: confi
 // --- Bills: capture, split, balances, reminders, Splitwise logging (src/bills.ts) ---
 setupBills({ store, liveMode });
 // --- end Bills ---
+// --- Chores: rotations, nudges, /chores page, connector tools (src/chores.ts) ---
+setupChores({ store, demoMode: !liveMode });
+// --- end Chores ---
 const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {

@@ -1,5 +1,6 @@
 import { balancesCard, choresDueCard, upcomingCard } from "./placeholders.js";
 import { button, card, chip, renderPage } from "./shell.js";
+import { choresHomeCard } from "./choresPage.js"; // Chores: live "Chores due" card (replaces the placeholder)
 
 /**
  * Home (route "/"): a calm "today" overview. Groceries and People come from
@@ -35,7 +36,7 @@ const body = `
 <div class="gc-cards">
   ${groceriesCard}
   ${peopleCard}
-  ${choresDueCard()}
+  ${choresHomeCard()}
   ${upcomingCard()}
   ${balancesCard()}
 </div>`;
