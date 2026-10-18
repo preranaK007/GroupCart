@@ -169,7 +169,7 @@ test("a direct reply to Claude is always for Claude, even a one-word laugh", asy
   coordinator.connect("m-ana");
   await coordinator.handleMessage({ ...message("m-ben", "lol"), replyTo: { messageId: 4, name: "Claude", text: "Bananas are in the cart 🍌", fromBot: true } });
   assert.equal(turns.length, 1);
-  assert.match(turns[0]!.prompt, /a direct reply to your message #4 \(“Bananas are in the cart 🍌”\), so it's for you: answer it: “lol”/);
+  assert.match(turns[0]!.prompt, /a direct reply to your message #4 \(“Bananas are in the cart 🍌”\), so it's for you: answer it, or if words would add nothing .*react to it with one fitting emoji.*: “lol”/);
   await coordinator.handleMessage({ ...message("m-ben", "lol"), replyTo: { messageId: 5, name: "Ana", text: "the fridge is a crime scene", fromBot: false } });
   assert.equal(turns.length, 1, "a laugh replying to a roommate is still banter");
 });

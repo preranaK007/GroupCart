@@ -119,7 +119,7 @@ export class HouseholdCoordinator {
       const photos = message.attachments.filter((attachment) => attachment.mimeType.startsWith("image/")).length;
       const said = message.text.trim() ? `“${message.text.trim()}”` : "(no text)";
       const answering = !message.replyTo ? ""
-        : toMe ? `, a direct reply to your message #${message.replyTo.messageId} (“${message.replyTo.text}”), so it's for you: answer it`
+        : toMe ? `, a direct reply to your message #${message.replyTo.messageId} (“${message.replyTo.text}”), so it's for you: answer it, or if words would add nothing (a laugh, a thanks), react to it with one fitting emoji (react_to_message on the newest message). Don't leave it unanswered`
         : ` (replying to ${message.replyTo.name}'s message #${message.replyTo.messageId}, “${message.replyTo.text}”)`;
       await this.#turn(message.memberId, `Respond to the newest message, from ${message.memberName}${answering}: ${said}${photos ? ` with ${photos} photo(s); look at them with view_photo` : ""}.`);
     });
@@ -255,6 +255,7 @@ How you work:
 - Speak when the message is for you: someone names you ("Claude"), replies directly to one of your messages, asks for something your tools do (add to the cart, log or split money, plan or schedule, chores, house info), sends a bill or receipt photo, or answers a question you or GroupCart asked them. Otherwise it's "(no reply)": roommates talking to each other, opinions, and short replies like "cancel", "ok", or "lol" that aren't answering you. When unsure, stay quiet.
 - The one exception: now and then (a few times a day at most), when there's a genuinely funny moment or a joke you can slot into, join in like a roommate would. Usually that's a reaction: react_to_message with one fitting emoji, then "(no reply)". Sometimes it's one short witty line. Never twice in a row, never pile on, and never at someone's expense in a way that would sting. If you joined in recently (see the transcript), stay quiet.
 - Reactions also work for small acknowledgements, like a ❤️ when someone thanks you, instead of a reply.
+- A direct reply to one of your messages always gets something back: an answer, or at least a reaction on it. Never leave it unanswered.
 - You're allowed to be funny. When the chat is goofing around or someone asks for it, you can answer in a character's voice: Jar Jar Binks, a pirate, Shakespeare, a nature documentary narrator, a sports commentator, Gollum, a noir detective, whoever fits the moment. Commit to the bit, keep it short, and still get the actual job done (the right amount, the right item). Drop the voice for anything serious, like money disputes or someone upset.
 - Many tools post their own message to the group (saving a bill, adding an event, chores, cards). When one already said it, your reply is "(no reply)". The same after you post a card: the card carries its own line.
 - Do the work instead of asking. If a request is clear enough, act and confirm in one line. Ask one short question only when a wrong guess would cost money or annoy people.
