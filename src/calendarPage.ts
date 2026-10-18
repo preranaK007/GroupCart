@@ -22,6 +22,7 @@ const styles = String.raw`
   --cal-free-bg: rgba(24,128,56,.09); --cal-free-edge: #1e8e3e; --cal-free-text: #137333;
   --cal-ovl-2: rgba(60,64,67,.12); --cal-ovl-3: rgba(60,64,67,.24); --cal-ovl-4: rgba(60,64,67,.34); --cal-ovl-edge: #5f6368;
   --cal-now: #d93025; --cal-warn: #b06000; --cal-danger: #c5221f;
+  --cal-on-mix: 72%; /* share of the member color in event text (lower on dark surfaces, for contrast) */
   color: var(--gc-text); }
 .cal .m0 { --m-solid:#1a73e8; --m-soft:#e8f0fe; --m-on:#174ea6; }
 .cal .m1 { --m-solid:#e37400; --m-soft:#feefe3; --m-on:#9a4a00; }
@@ -31,7 +32,7 @@ const styles = String.raw`
 .cal .m5 { --m-solid:#8d6e63; --m-soft:#f2ebe8; --m-on:#5d4037; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .cal { --cal-free-bg: rgba(129,201,149,.13); --cal-free-edge:#81c995; --cal-free-text:#a8dab5;
-    --cal-ovl-2: rgba(255,255,255,.07); --cal-ovl-3: rgba(255,255,255,.14); --cal-ovl-4: rgba(255,255,255,.2); --cal-ovl-edge:#9aa0a6; --cal-now:#f28b82; --cal-warn:#fdd663; --cal-danger:#f28b82; }
+    --cal-ovl-2: rgba(255,255,255,.07); --cal-ovl-3: rgba(255,255,255,.14); --cal-ovl-4: rgba(255,255,255,.2); --cal-ovl-edge:#9aa0a6; --cal-now:#f28b82; --cal-warn:#fdd663; --cal-danger:#f28b82; --cal-on-mix: 38%; }
   :root:not([data-theme="light"]) .cal .m0 { --m-solid:#8ab4f8; --m-soft:rgba(138,180,248,.2); --m-on:#d2e3fc; }
   :root:not([data-theme="light"]) .cal .m1 { --m-solid:#fcad70; --m-soft:rgba(252,173,112,.2); --m-on:#fde3cf; }
   :root:not([data-theme="light"]) .cal .m2 { --m-solid:#c58af9; --m-soft:rgba(197,138,249,.2); --m-on:#efe1fd; }
@@ -40,7 +41,7 @@ const styles = String.raw`
   :root:not([data-theme="light"]) .cal .m5 { --m-solid:#bcaaa4; --m-soft:rgba(188,170,164,.2); --m-on:#efebe9; }
 }
 :root[data-theme="dark"] .cal { --cal-free-bg: rgba(129,201,149,.13); --cal-free-edge:#81c995; --cal-free-text:#a8dab5;
-  --cal-ovl-2: rgba(255,255,255,.07); --cal-ovl-3: rgba(255,255,255,.14); --cal-ovl-4: rgba(255,255,255,.2); --cal-ovl-edge:#9aa0a6; --cal-now:#f28b82; --cal-warn:#fdd663; --cal-danger:#f28b82; }
+  --cal-ovl-2: rgba(255,255,255,.07); --cal-ovl-3: rgba(255,255,255,.14); --cal-ovl-4: rgba(255,255,255,.2); --cal-ovl-edge:#9aa0a6; --cal-now:#f28b82; --cal-warn:#fdd663; --cal-danger:#f28b82; --cal-on-mix: 38%; }
 :root[data-theme="dark"] .cal .m0 { --m-solid:#8ab4f8; --m-soft:rgba(138,180,248,.2); --m-on:#d2e3fc; }
 :root[data-theme="dark"] .cal .m1 { --m-solid:#fcad70; --m-soft:rgba(252,173,112,.2); --m-on:#fde3cf; }
 :root[data-theme="dark"] .cal .m2 { --m-solid:#c58af9; --m-soft:rgba(197,138,249,.2); --m-on:#efe1fd; }
@@ -322,6 +323,7 @@ const script = String.raw`
   let flashSlot = null;          // best-time slot to highlight after the next render
   let popTrigger = null;
   const cache = new Map();       // weekStart -> { at, data }
+  const columns = new Map();     // date -> { day, entries, right, indent }: the drawn .cal-day columns (placeExtras)
   // Calendars hidden from the grid with the legend toggles (this browser only); free time still counts everyone.
   const hidden = new Set((() => { try { return JSON.parse(localStorage.getItem("gc-cal-hidden") || "[]"); } catch { return []; } })());
   const shown = (member) => !hidden.has(member.id);
@@ -384,7 +386,7 @@ const script = String.raw`
     const fallback = ["#1a73e8", "#e37400", "#9334e6", "#12a4af", "#d01884", "#8d6e63"];
     const rules = members.map((m, i) => {
       const solid = window.GC && GC.memberColor ? GC.memberColor(m.id, ids).solid : fallback[i % fallback.length];
-      return ".cal ." + colorClass(m) + " { --m-solid:" + solid + "; --m-soft:color-mix(in srgb, " + solid + " 16%, var(--gc-surface)); --m-on:color-mix(in srgb, " + solid + " 72%, var(--gc-text)); }";
+      return ".cal ." + colorClass(m) + " { --m-solid:" + solid + "; --m-soft:color-mix(in srgb, " + solid + " 16%, var(--gc-surface)); --m-on:color-mix(in srgb, " + solid + " var(--cal-on-mix), var(--gc-text)); }";
     }).join("\n");
     let tag = document.getElementById("calMemberColors");
     if (!tag) { tag = document.createElement("style"); tag.id = "calMemberColors"; document.head.appendChild(tag); }
@@ -675,18 +677,26 @@ const script = String.raw`
     if (cluster.length) flush();
     return sorted;
   }
-  // right: px kept free on the column's right edge; indent: px per nesting level.
+  // Position of a packed entry. right: px kept free on the column's right edge; indent: px per
+  // nesting level. Nested entries stack above the one they start inside (but under the past shade).
+  function boxStyle(p, geo, right, indent) {
+    const area = "(100% - " + right + "px)";
+    const shift = p.depth ? "min(" + (p.depth * indent) + "px, " + area + " * " + (p.span / p.cols / 2).toFixed(4) + ")" : "0px";
+    return {
+      top: topPx(geo, p.a),
+      left: "calc(" + area + " * " + (p.col / p.cols).toFixed(4) + " + " + shift + ")",
+      width: "calc(" + area + " * " + (p.span / p.cols).toFixed(4) + " - " + shift + " - 1px)",
+      zIndex: p.depth ? "3" : "2",
+    };
+  }
   function blockHtml(p, geo, right, indent) {
     const { item, member } = p;
     const title = item.title == null ? "Busy" : item.title;
     const height = item.free ? 20 : Math.max(15, (p.b - p.a) * geo.ppm - 1);
-    const area = "(100% - " + right + "px)";
-    const shift = p.depth ? "min(" + (p.depth * indent) + "px, " + area + " * " + (p.span / p.cols / 2).toFixed(4) + ")" : "0px";
-    const left = "calc(" + area + " * " + (p.col / p.cols).toFixed(4) + " + " + shift + ")";
-    const width = "calc(" + area + " * " + (p.span / p.cols).toFixed(4) + " - " + shift + " - 1px)";
+    const box = boxStyle(p, geo, right, indent);
     const label = title + ", " + timeRange(item.start, item.end) + ", " + member.name + (item.location ? ", " + item.location : "") + (item.free ? ", shown as available" : "");
     return '<button type="button" class="cal-busy cal-ev ' + colorClass(member) + (item.free ? " is-free" : "") + (item.title == null ? " is-anon" : "") + '" data-ev="' + p.memberIndex + ':' + p.itemIndex + '"'
-      + ' style="top:' + topPx(geo, p.a) + ';height:' + height.toFixed(1) + 'px;left:' + left + ';width:' + width + '" aria-label="' + esc(label) + '">'
+      + ' style="top:' + box.top + ';height:' + height.toFixed(1) + 'px;left:' + box.left + ';width:' + box.width + ';z-index:' + box.zIndex + '" aria-label="' + esc(label) + '">'
       + '<span class="cal-ev-title">' + esc(title) + '</span>'
       + '<span class="cal-ev-at">' + esc(compactTime(item.start)) + '</span>'
       + '<span class="cal-ev-time">' + esc(compactRange(item.start, item.end)) + '</span>'
@@ -734,6 +744,7 @@ const script = String.raw`
     const members = data.members;
     const geo = makeGeometry();
     const grid = $("calGrid");
+    columns.clear();
     grid.className = "cal-grid is-week";
     grid.style.setProperty("--cal-hours", String(geo.endHour - geo.startHour));
     grid.style.removeProperty("--cal-cols");
@@ -763,11 +774,12 @@ const script = String.raw`
       for (const w of freeByDay[index]) {
         const a = minutesInDay(w.start, day), b = minutesInDay(w.end, day);
         html += '<div class="cal-free" data-start="' + w.start + '" data-end="' + w.end + '" style="top:' + topPx(geo, a) + ';height:' + heightPx(geo, a, b) + '" title="' + esc(freeLabel(w)) + '">'
-          + ((b - a) * geo.ppm >= 22 ? '<span>All free</span>' : "") + '</div>';
+          + '</div>';
       }
       html += overlapHtml(day, geo);
-      const items = pack(members.flatMap((member, memberIndex) => shown(member) ? placed(member, memberIndex, day, geo) : []), geo);
-      for (const p of items) html += blockHtml(p, geo, 8, 12);
+      const entries = members.flatMap((member, memberIndex) => shown(member) ? placed(member, memberIndex, day, geo) : []);
+      columns.set(day.date, { day, entries, right: 8, indent: 12 });
+      for (const p of pack(entries, geo)) html += blockHtml(p, geo, 8, 12);
       html += nowHtml(day, geo, now);
       html += '</div>';
     });
@@ -815,6 +827,7 @@ const script = String.raw`
     const members = data.members.filter(shown);
     const geo = makeGeometry();
     const grid = $("calGrid");
+    columns.clear();
     grid.className = "cal-grid is-day";
     grid.style.setProperty("--cal-hours", String(geo.endHour - geo.startHour));
     grid.style.setProperty("--cal-cols", String(Math.max(1, members.length)));
@@ -839,6 +852,7 @@ const script = String.raw`
     });
     // The House lane is a .cal-day column, so src/ui/eventsPanel.ts draws household events and plans into it.
     html += '<div class="cal-day cal-col-house" data-date="' + day.date + '"></div>';
+    columns.set(day.date, { day, entries: [], right: 4, indent: 18 });
     html += '<div class="cal-bands" aria-hidden="true">';
     for (const w of data.everyoneFree) {
       if (w.end <= day.start || w.start >= day.end) continue;
@@ -861,10 +875,38 @@ const script = String.raw`
     }
   }
 
+  // Lays extra entries (household events, poll options: [{ start, end }] in ms) out together with
+  // the members' entries of one .cal-day column, Google Calendar style, so neither covers the
+  // other's title. Re-draws that column's member blocks and returns a box per extra
+  // ({ top, height, left, width, zIndex } CSS strings, or null when it is outside the visible hours).
+  function placeExtras(geo, date, extras) {
+    const column = columns.get(date);
+    const el = $("calGrid").querySelector('.cal-day[data-date="' + date + '"]');
+    if (!column || !el) return extras.map(() => null);
+    const startMin = geo.startHour * 60, endMin = geo.endHour * 60, minPx = 18;
+    const added = [];
+    const boxes = extras.map((extra) => {
+      const a = Math.max(minutesInDay(extra.start, column.day), startMin);
+      const b = Math.min(minutesInDay(extra.end, column.day), endMin);
+      if (b <= a) return null;
+      const p = { extra: true, a, b, vb: Math.max(b, a + minPx / geo.ppm) };
+      added.push(p);
+      return p;
+    });
+    if (!added.length) return boxes;
+    const entries = pack(column.entries.concat(added), geo);
+    el.querySelectorAll(".cal-ev").forEach((node) => node.remove());
+    el.insertAdjacentHTML("beforeend", entries.filter((p) => !p.extra).map((p) => blockHtml(p, geo, column.right, column.indent)).join(""));
+    fitBlocks(el);
+    return boxes.map((p) => p && Object.assign(boxStyle(p, geo, column.right, column.indent), { height: Math.max(minPx, (p.b - p.a) * geo.ppm - 1).toFixed(1) + "px" }));
+  }
+
   function afterGrid(geo, shownDays) {
     // --- Household events hook (src/ui/eventsPanel.ts draws events after each render) ---
     // Week view: one .cal-day[data-date] column per day. Day view: the House lane is the only .cal-day.
-    document.dispatchEvent(new CustomEvent("gc:calendar-rendered", { detail: { data, startHour: geo.startHour, endHour: geo.endHour, ppm: geo.ppm, view: state.view, date: shownDays.length === 1 ? shownDays[0].date : selectedDate(), days: shownDays } }));
+    // place(date, extras) lays extra blocks out beside the members' entries (see placeExtras).
+    const place = (date, extras) => placeExtras(geo, date, extras);
+    document.dispatchEvent(new CustomEvent("gc:calendar-rendered", { detail: { data, startHour: geo.startHour, endHour: geo.endHour, ppm: geo.ppm, view: state.view, date: shownDays.length === 1 ? shownDays[0].date : selectedDate(), days: shownDays, place } }));
     // --- end Household events hook ---
     flashBest();
   }

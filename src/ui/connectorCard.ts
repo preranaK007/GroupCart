@@ -28,7 +28,7 @@ function memberHtml(member: ConnectorMemberStatus): string {
     const label = connection.clientName && connection.clientName !== connection.via ? `${connection.via} (${connection.clientName})` : connection.via;
     pills.push(`<span class="cc-conn" title="${escapeHtml(`${connection.clientName} · returns to ${connection.redirectHost}`)}"><strong>${escapeHtml(label)}</strong><span class="cc-meta">${escapeHtml(lastUsedLabel(connection.lastUsedAt))}</span><button type="button" class="cc-x" data-cc-revoke-grant="${escapeHtml(connection.grantId)}" data-cc-label="${escapeHtml(`${label} for ${member.name}`)}" aria-label="Disconnect ${escapeHtml(label)}" title="Disconnect">${icon("close", { size: 14 })}</button></span>`);
   }
-  if (!pills.length) pills.push(chip("Not connected", "neutral"));
+  // No "Not connected" chip: the buttons beside the name already say so (and the card header shows the status).
   const pairing = member.pairingExpiresAt
     ? `<span class="cc-meta">Code active until ${escapeHtml(new Date(member.pairingExpiresAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }))}</span>`
     : "";
@@ -86,7 +86,8 @@ function setupTabs(view: ConnectorView): string {
   ];
   const tablist = tabs.map((tab, index) => `<button type="button" role="tab" class="cc-tab" id="cc-tab-${tab.id}" aria-controls="cc-panel-${tab.id}" aria-selected="${index === 0}" tabindex="${index === 0 ? 0 : -1}">${escapeHtml(tab.label)}</button>`).join("");
   const panels = tabs.map((tab, index) => `<div role="tabpanel" class="cc-panel" id="cc-panel-${tab.id}" aria-labelledby="cc-tab-${tab.id}"${index === 0 ? "" : " hidden"}>${tab.body}</div>`).join("");
-  return `<div class="cc-setup"><div class="cc-setup-head"><h3 class="cc-setup-title">Set up an assistant</h3><span class="cc-meta">Each assistant acts as the roommate who connects it. Posts show as “Name via Claude/ChatGPT/Grok”.</span></div><div class="cc-tabs" role="tablist" aria-label="Assistant">${tablist}</div>${panels}</div>`;
+  // Collapsed by default: the steps are only needed once per assistant.
+  return `<details class="cc-setup"><summary class="cc-setup-head"><h3 class="cc-setup-title">Set up an assistant</h3><span class="cc-meta">Each assistant acts as the roommate who connects it. Posts show as “Name via Claude/ChatGPT/Grok”.</span>${icon("chevronDown", { size: 18, className: "cc-chevron" })}</summary><div class="cc-tabs" role="tablist" aria-label="Assistant">${tablist}</div>${panels}</details>`;
 }
 
 const styles = `
@@ -107,7 +108,11 @@ const styles = `
 .cc-tool-list code, .cc-pre code, .cc-steps code, .cc-note code, .cc-warn code { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }
 .cc-tag { font-size:11px; color:var(--gc-warning); }
 .cc-setup { border-top:1px solid var(--gc-border); padding-top:var(--gc-space-4); display:grid; gap:var(--gc-space-3); }
-.cc-setup-head { display:grid; gap:2px; }
+.cc-setup-head { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:2px var(--gc-space-2); list-style:none; cursor:pointer; }
+.cc-setup-head::-webkit-details-marker { display:none; }
+.cc-setup-head .cc-meta { grid-column:1; }
+.cc-chevron { grid-column:2; grid-row:1 / span 2; align-self:center; color:var(--gc-muted); transition:transform .15s ease; }
+.cc-setup[open] .cc-chevron { transform:rotate(180deg); }
 .cc-setup-title { font-size:var(--gc-fs-md); font-weight:500; }
 .cc-tabs { display:flex; gap:4px; border-bottom:1px solid var(--gc-border); overflow-x:auto; }
 .cc-tab { border:0; background:transparent; color:var(--gc-text-2); font:500 var(--gc-fs-sm) var(--gc-font); padding:8px 14px; border-bottom:2px solid transparent; margin-bottom:-1px; cursor:pointer; white-space:nowrap; }

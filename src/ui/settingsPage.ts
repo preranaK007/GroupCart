@@ -135,6 +135,8 @@ const styles = `
 .set-actions { display:flex; align-items:center; gap:var(--gc-space-2); margin-top:var(--gc-space-4); }
 .set-members { display:flex; flex-wrap:wrap; gap:var(--gc-space-2) var(--gc-space-3); justify-content:flex-end; }
 .set-member { display:inline-flex; align-items:center; gap:6px; }
+/* Phones: the one-line summaries crowd the title next to the status chip; the info tip keeps the detail. */
+@media (max-width: 760px) { .set-name .gc-meta { display:none; } }
 `;
 
 export function renderSettingsPage(context: SettingsContext): string {

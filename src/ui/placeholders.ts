@@ -34,7 +34,7 @@ export function renderCalendarPlaceholder(): string {
 }
 
 export function renderBillsPlaceholder(): string {
-  return placeholderPage({ title: "Bills", active: "bills", icon: "receipt", heading: "Bills are coming", text: "Snap a bill, split it, log it to Splitwise." });
+  return placeholderPage({ title: "Money", active: "bills", icon: "receipt", heading: "Bills are coming", text: "Snap a bill, split it, log it to Splitwise." });
 }
 
 export function renderChoresPlaceholder(): string {

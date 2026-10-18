@@ -105,9 +105,10 @@ export type FlavorEntry = { classic?: string } & Partial<Record<GameSkin, string
 const FLAVOR: Record<string, FlavorEntry> = {
   // Navigation and app-bar titles (keys follow NavKey; extra keys are ready for upcoming pages).
   "nav.home": { classic: "Home", elden: "Grace", minecraft: "Spawn", rdr: "Camp", cyberpunk: "Crib" },
-  "nav.groceries": { classic: "Groceries", elden: "Merchant", minecraft: "Inventory", rdr: "Supplies", cyberpunk: "Rations" },
+  "nav.groceries": { classic: "Kitchen", elden: "Hearth", minecraft: "Furnace", rdr: "Chuckwagon", cyberpunk: "Rations" },
   "nav.chores": { classic: "Chores", elden: "Trials", minecraft: "Quests", rdr: "Odd Jobs", cyberpunk: "Gigs" },
-  "nav.bills": { classic: "Bills", elden: "Runes", minecraft: "Emeralds", rdr: "Bounties", cyberpunk: "Eddies" },
+  "nav.bills": { classic: "Money", elden: "Runes", minecraft: "Emeralds", rdr: "Bounties", cyberpunk: "Eddies" },
+  "nav.more": { classic: "More", elden: "Items", minecraft: "More", rdr: "Saddlebag", cyberpunk: "More" },
   "nav.calendar": { classic: "Calendar", elden: "Omens", minecraft: "Clock", rdr: "Almanac", cyberpunk: "Schedule" },
   "nav.settings": { classic: "Settings", elden: "System", minecraft: "Options", rdr: "Satchel", cyberpunk: "Cyberdeck" },
   "nav.chat": { classic: "Chat", elden: "Whispers", minecraft: "Chat", rdr: "Telegraph", cyberpunk: "Holocall" },

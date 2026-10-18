@@ -23,10 +23,6 @@ export const ACCOUNT_MENU_CSS = `
 .gc-me-label { padding:var(--gc-space-2) var(--gc-space-4) var(--gc-space-1); color:var(--gc-muted); font-size:var(--gc-fs-xs); font-weight:500; border-top:1px solid var(--gc-border); margin-top:var(--gc-space-1); }
 .gc-me-item[aria-checked="true"] { font-weight:500; }
 .gc-me-check { margin-left:auto; color:var(--gc-accent); }
-@media (max-width: 760px) {
-  /* Settings stays reachable from the account menu; the bottom bar keeps room for the main sections. */
-  .gc-rail .gc-nav-item[href="/settings"] { display:none; }
-}
 `;
 
 export const ACCOUNT_MENU_SCRIPT = `
@@ -51,8 +47,8 @@ export const ACCOUNT_MENU_SCRIPT = `
       + '<div class="gc-me-pop" role="menu" hidden>'
       + '<div class="gc-me-head">' + GC.avatar(mine, ids, 44) + '<div style="min-width:0"><div class="gc-me-name">' + GC.esc(mine.name) + '</div><div class="gc-me-sub">' + GC.esc(sub) + '</div></div></div>'
       + item("/people/" + encodeURIComponent(mine.id), "person", "Your profile")
-      + item("/people", "users", "Household")
-      + item("/settings", "settings", "Settings");
+      + item("/people", "users", GC.t ? GC.t("nav.people", "People") : "People")
+      + item("/settings", "settings", GC.t ? GC.t("nav.settings", "Settings") : "Settings");
     if (me.via === "local" && me.members && me.members.length > 1) {
       html += '<div class="gc-me-label">Viewing as</div>' + me.members.map(function (m) {
         var on = m.id === mine.id;

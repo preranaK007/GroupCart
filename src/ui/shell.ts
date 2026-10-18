@@ -4,7 +4,8 @@
  * Look: Google Workspace style. Flat surfaces, hairline borders, one restrained
  * accent (blue), small rounded chips, inline SVG icons, short labels, no
  * gradients, no heavy shadows. Light + dark via prefers-color-scheme. Phone
- * width (<=760px) turns the left rail into a bottom bar.
+ * width (<=760px) turns the left rail into a bottom bar: the first five sections
+ * plus "More" (a sheet with the rest, People and Settings).
  *
  * ── Building a page ─────────────────────────────────────────────────────────
  *   import { renderPage, card, listRow, list, chip, button } from "./ui/shell.js";
@@ -93,14 +94,23 @@ type HouseNavKey = "house";
 
 export type NavItem = { key: NavKey; href: string; label: string; icon: IconName };
 
+/** Main sections: the desktop rail, in order. People and Settings live in the account (avatar) menu. */
 export const NAV_ITEMS: readonly NavItem[] = [
   { key: "home", href: "/", label: "Home", icon: "home" },
   { key: "chat", href: "/chat", label: "Chat", icon: "message" }, // profiles & chat
-  { key: "groceries", href: "/groceries", label: "Groceries", icon: "cart" },
+  { key: "groceries", href: "/groceries", label: "Kitchen", icon: "cart" },
   { key: "chores", href: "/chores", label: "Chores", icon: "chores" },
-  { key: "bills", href: "/bills", label: "Bills", icon: "receipt" },
+  { key: "bills", href: "/bills", label: "Money", icon: "receipt" },
   { key: "calendar", href: "/calendar", label: "Calendar", icon: "calendar" },
   { key: "house", href: "/house", label: "House", icon: "door" }, // House
+];
+
+/** Phones show this many NAV_ITEMS in the bottom bar; the rest go in the "More" sheet. */
+const PHONE_BAR_ITEMS = 5;
+
+/** Extra destinations in the phone "More" sheet (on desktop they are in the account menu). */
+const MORE_ITEMS: readonly NavItem[] = [
+  { key: "people", href: "/people", label: "People", icon: "users" },
   { key: "settings", href: "/settings", label: "Settings", icon: "settings" },
 ];
 
@@ -136,6 +146,7 @@ const ICON_PATHS = {
   sync: '<path d="M19.5 12a7.5 7.5 0 0 1-13.3 4.7M4.5 12a7.5 7.5 0 0 1 13.3-4.7"/><path d="M18 3.5v4h-4M6 20.5v-4h4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4.5"/><path d="M12 17.3h.01"/>',
+  menu: '<path d="M4.5 7h15M4.5 12h15M4.5 17h15"/>',
   // --- Profiles & chat icons ---
   person: '<circle cx="12" cy="8.5" r="3.8"/><path d="M4.5 20c.9-3.7 3.8-5.8 7.5-5.8s6.6 2.1 7.5 5.8"/>',
   photo: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.8-4.8L7 19"/>',
@@ -474,6 +485,14 @@ a { color:var(--gc-accent); }
 .gc-nav-item:hover .gc-nav-pill { background:var(--gc-hover); }
 .gc-nav-item[aria-current="page"] { color:var(--gc-text); font-weight:600; }
 .gc-nav-item[aria-current="page"] .gc-nav-pill { background:var(--gc-accent-soft); color:var(--gc-on-accent-soft); }
+button.gc-nav-item { border:0; background:transparent; font-family:inherit; cursor:pointer; }
+.gc-nav-more { display:none !important; }
+.gc-more { display:grid; gap:2px; padding-bottom:var(--gc-space-2); }
+.gc-more-item { display:flex; align-items:center; gap:var(--gc-space-4); min-height:48px; padding:0 var(--gc-space-3); border-radius:var(--gc-radius-md); color:var(--gc-text); text-decoration:none; font-weight:500; }
+.gc-more-item .gc-icon { color:var(--gc-text-2); }
+.gc-more-item:hover { background:var(--gc-hover); }
+.gc-more-item[aria-current="page"] { background:var(--gc-accent-soft); color:var(--gc-on-accent-soft); }
+.gc-more-item[aria-current="page"] .gc-icon { color:inherit; }
 .gc-main { flex:1; min-width:0; padding:var(--gc-space-5) var(--gc-space-5) var(--gc-space-6) var(--gc-space-2); }
 .gc-content { max-width:var(--gc-content-max); margin:0 auto; }
 
@@ -604,6 +623,8 @@ a { color:var(--gc-accent); }
   .gc-nav-item { width:auto; flex:1; min-width:0; font-size:11px; }
   .gc-nav-item > span:last-child { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .gc-nav-pill { width:48px; height:30px; }
+  .gc-nav-extra { display:none !important; }
+  .gc-nav-more { display:flex !important; }
   .gc-dialog { width:100%; max-width:100%; margin:auto 0 0; border-radius:var(--gc-radius-lg) var(--gc-radius-lg) 0 0; padding-bottom:env(safe-area-inset-bottom); }
   .gc-main { padding:var(--gc-space-4) var(--gc-space-4) calc(var(--gc-bottomnav-h) + var(--gc-space-6)); }
   .gc-grid { grid-template-columns:minmax(0,1fr); }
@@ -708,12 +729,29 @@ export type PageOptions = {
 };
 
 function renderNav(active: NavKey): string {
-  return NAV_ITEMS.map((item) => {
+  const items = NAV_ITEMS.map((item, index) => {
     const current = item.key === active ? ' aria-current="page"' : "";
+    const phoneClass = index < PHONE_BAR_ITEMS ? "" : " gc-nav-extra";
     // [themes] skin wording for the label; the title keeps the plain name as a hint.
     const label = flavored(`nav.${item.key}`, item.label);
-    return `<a class="gc-nav-item" href="${item.href}" title="${escapeHtml(item.label)}"${current}><span class="gc-nav-pill">${icon(item.icon, { size: 22 })}</span><span${label.attrs}>${label.html}</span></a>`;
+    return `<a class="gc-nav-item${phoneClass}" href="${item.href}" title="${escapeHtml(item.label)}"${current}><span class="gc-nav-pill">${icon(item.icon, { size: 22 })}</span><span${label.attrs}>${label.html}</span></a>`;
   }).join("");
+  // Phones only: "More" opens a sheet with the sections that don't fit the bottom bar.
+  const inMore = moreSheetItems().some((item) => item.key === active);
+  const more = flavored("nav.more", "More");
+  return `${items}<button type="button" class="gc-nav-item gc-nav-more" data-gc-open="gcMoreSheet"${inMore ? ' aria-current="page"' : ""}><span class="gc-nav-pill">${icon("menu", { size: 22 })}</span><span${more.attrs}>${more.html}</span></button>`;
+}
+
+function moreSheetItems(): NavItem[] {
+  return [...NAV_ITEMS.slice(PHONE_BAR_ITEMS), ...MORE_ITEMS];
+}
+
+function renderMoreSheet(active: NavKey): string {
+  const rows = moreSheetItems().map((item) => {
+    const label = flavored(`nav.${item.key}`, item.label);
+    return `<a class="gc-more-item" href="${item.href}"${item.key === active ? ' aria-current="page"' : ""}>${icon(item.icon, { size: 22 })}<span${label.attrs}>${label.html}</span></a>`;
+  }).join("");
+  return dialog({ id: "gcMoreSheet", title: "More", body: `<nav class="gc-more" aria-label="More">${rows}</nav>` });
 }
 
 /** Full HTML document: app bar, navigation rail (bottom bar on phones), and the page body. */
@@ -721,7 +759,7 @@ export function renderPage(options: PageOptions): string {
   const title = escapeHtml(options.title);
   // [themes] request skin (cookie), flavored app-bar title when it is a nav page, subtitle slot.
   const skin = currentSkin();
-  const navItem = NAV_ITEMS.find((item) => item.key === options.active && item.label === options.title);
+  const navItem = [...NAV_ITEMS, ...MORE_ITEMS].find((item) => item.key === options.active && item.label === options.title);
   const appTitle = navItem ? flavored(`nav.${navItem.key}`, navItem.label, skin) : { attrs: "", html: title };
   const appSub = flavored("appbar.sub", "", skin);
   // [/themes]
@@ -749,6 +787,7 @@ ${options.styles ? `<style>${options.styles}</style>` : ""}
   <nav class="gc-rail" aria-label="Main">${renderNav(options.active)}</nav>
   <main class="gc-main" id="main"><div class="gc-content">${options.body}</div></main>
 </div>
+${renderMoreSheet(options.active)}
 <script>window.GC_AVATARS=${JSON.stringify(avatarLooks()).replace(/</g, "\\u003c")};</script>
 <script>${CLIENT_HELPERS}</script>
 <script>${ACCOUNT_MENU_SCRIPT}</script>

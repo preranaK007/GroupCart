@@ -55,7 +55,7 @@ const body = `
       <div class="cart-compose">
         <select class="gc-select" id="member" aria-label="Send as"></select>
         <div class="gc-field-row">
-          <input class="gc-input" id="request" placeholder="2 bananas, or start sharing with Maya" autocomplete="off" aria-label="Request" />
+          <input class="gc-input" id="request" placeholder="2 bananas, or start sharing with a roommate" autocomplete="off" aria-label="Request" />
           <button class="gc-btn" id="send" type="button">${icon("send", { size: 18 })}<span class="gc-hide-sm">Add</span><span class="gc-sr">Add request</span></button>
         </div>
       </div>
@@ -108,7 +108,7 @@ const body = `
       <summary>${icon("help", { size: 20 })}How it works${icon("chevronDown", { size: 20, className: "gc-chevron" })}</summary>
       <div class="gc-disclosure-body">
         <ol class="gc-steps">
-          <li><span class="gc-step-icon">${icon("message", { size: 16 })}</span><div><strong>Text the group</strong>“2 bananas”, or “start sharing with Maya” to split what you both add. Text “help” for more.</div></li>
+          <li><span class="gc-step-icon">${icon("message", { size: 16 })}</span><div><strong>Text the group</strong>“2 bananas”, or “start sharing with <span class="cart-share-name">a roommate</span>” to split what you both add. Text “help” for more.</div></li>
           <li><span class="gc-step-icon">${icon("users", { size: 16 })}</span><div><strong>Everyone approves</strong>Any change resets approvals.</div></li>
           <li><span class="gc-step-icon">${icon("store", { size: 16 })}</span><div><strong>Send to Kroger</strong>Items go to one member’s Kroger cart. They place the order on Kroger.</div></li>
         </ol>
@@ -243,6 +243,13 @@ function renderMemberSelect() {
   const selected = select.value;
   select.innerHTML = latest.members.map((member) => '<option value="' + esc(member.id) + '">' + esc(member.name) + '</option>').join("");
   if (latest.members.some((member) => member.id === selected)) select.value = selected;
+  // Example sharing partner: a real roommate other than the one sending (generic wording until loaded).
+  const partner = latest.members.find((member) => member.id !== select.value);
+  if (partner) {
+    const first = partner.name.split(" ")[0];
+    $("request").placeholder = "2 bananas, or start sharing with " + first;
+    document.querySelectorAll(".cart-share-name").forEach((node) => { node.textContent = first; });
+  }
 }
 
 async function refresh() {
@@ -354,5 +361,5 @@ import { withListsTabs } from "./listsPanel.js";
 import { withKitchenTabs } from "./mealsPanel.js"; // Kitchen: Pantry and Meals tabs
 
 export function renderCartPage(): string {
-  return renderPage(withKitchenTabs(withListsTabs({ title: "Groceries", active: "groceries", body, styles, actions, script })));
+  return renderPage(withKitchenTabs(withListsTabs({ title: "Kitchen", active: "groceries", body, styles, actions, script })));
 }

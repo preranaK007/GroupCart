@@ -628,5 +628,5 @@ ${POINTS_CLIENT_JS}
 
 export function renderBillsPage(options: { demoMode: boolean }): string {
   const actions = `<span id="mode">${options.demoMode ? chip("Demo", "neutral") : chip("Live", "accent", "lock")}</span><span class="gc-sync gc-hide-sm" id="sync"><span class="gc-dot"></span><span id="syncState">Connecting…</span></span>`;
-  return renderPage({ title: "Bills", active: "bills", body, styles: styles + PAY_CSS, script, actions }); // money & points: PAY_CSS
+  return renderPage({ title: "Money", active: "bills", body, styles: styles + PAY_CSS, script, actions }); // money & points: PAY_CSS
 }

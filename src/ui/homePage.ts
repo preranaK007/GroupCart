@@ -111,7 +111,7 @@ async function refresh() {
     leading: window.GCPoints ? window.GCPoints.badge(member.id, window.GC.avatar(member, allIds, 32)) : window.GC.avatar(member, allIds, 32), // money & points
     title: member.name,
     sub: cart.items.length ? (member.approved ? chip("Approved", "success", "check") : chip("Waiting", "neutral", "clock")) : "",
-    trailing: '<span class="gc-amount">' + dollars(member.shareCents) + '</span>',
+    trailing: cart.items.length ? '<span class="gc-amount">' + dollars(member.shareCents) + '</span>' : "", // no column of $0.00 when the cart is empty
   })).join("") || '<li class="gc-empty"><p class="gc-empty-text">No members yet.</p></li>';
 
   $("homeSummary").textContent = cart.items.length

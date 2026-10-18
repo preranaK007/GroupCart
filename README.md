@@ -1,17 +1,32 @@
 # GroupCart
 
-GroupCart turns messages in one shared iMessage group into a persistent household grocery cart. The Spectrum agent replies in that same group, attributes requests to configured members, tracks each person's estimated share, and requires household approval before checkout. Live checkout adds the approved items to a selected member's Kroger cart; local demo checkout is simulated.
+GroupCart is a shared home base for roommates. It lives in your household's iMessage group: people text the way they already do ("we're out of eggs", "done dishes", "can someone cover the internet bill?") and GroupCart keeps the cart, chores, bills and plans in order, then shows it all in a calm web app.
 
-## Local demo
+## What it does
 
-Without Spectrum credentials, the app starts with three demo members and a browser dashboard. Requests, prices, splits, approvals, and checkout are simulated locally.
+- **Kitchen:** one shared grocery cart with per-person shares and group approval, recurring and one-off lists, a pantry that notices what is running low, and meal plans with a cook rotation. Checkout can send approved items to a Kroger cart, and each checkout can be logged to Splitwise.
+- **Chores:** a fair rotation with nudges, away status, points and streaks.
+- **Money:** snap a bill, split it, see balances, and pay each other back through Venmo, Cash App or PayPal links.
+- **Calendar:** everyone's Google Calendar free/busy in a Week or Day view, the times everyone is free, and household events and polls ("we all want to watch a movie" finds slots and takes votes).
+- **House:** Wi-Fi and door codes, repairs, guest heads-ups, quiet hours and quick polls.
+- **Chat:** the group conversation on the web, plus a Sunday digest of the week.
+- **AI assistants:** connect Claude, ChatGPT or Grok so each roommate can ask their own assistant to add to the cart or check what's due.
+- **Skins:** Classic (light and dark) plus Elden Ring, Minecraft, Red Dead and Cyberpunk looks.
+
+## Try the demo
+
+No accounts or credentials are needed. The demo seeds sample roommates, schedules, chores and bills, and simulates every outside service.
 
 ```sh
 npm install
-npm run start
+GROUP_CART_MEMBERS="demo:william=William,demo:ashwin=Ashwin,demo:tanmay=Tanmay,demo:sami=Sami" node --import=tsx src/index.ts
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) has four tabs: Cart (the shared cart, with any active sharing session), Lists (the recurring weekly/biweekly/monthly lists, read-only, plus one-off lists like "Party run"), Pantry (`#pantry`), and Meals (`#meals`; see [Kitchen](#kitchen-pantry-and-meal-plans)), People (`/people`) shows everyone's profile, Settings (`/settings`) shows connections, and Chores (`/chores`), Bills (`/bills`), and Calendar (`/calendar`) are described below. Settings > Appearance (or the palette button in the app bar) switches the look between Classic and the Elden Ring, Minecraft, Red Dead Redemption, and Cyberpunk 2077 skins; the choice is saved in this browser (`gc-skin` cookie), and `?skin=elden` (or `minecraft`, `rdr`, `cyberpunk`) previews one. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
+On Windows PowerShell, set the variable first: `$env:GROUP_CART_MEMBERS="demo:william=William,demo:ashwin=Ashwin,demo:tanmay=Tanmay,demo:sami=Sami"; node --import=tsx src/index.ts`. Leave out `GROUP_CART_MEMBERS` for three default demo members. (`npm run start` does the same but loads `.env`, so it needs that file.)
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The left rail (a bottom bar with a "More" sheet on phones) has Home, Chat, Kitchen (`/groceries`), Chores, Money (`/bills`), Calendar and House; People (`/people`) and Settings (`/settings`) are in the avatar menu at the top right, which also switches which roommate you are acting as. Chat (`/chat`) is the easiest way to talk to the bot. The palette button in the app bar switches skins (`?skin=elden`, `minecraft`, `rdr` or `cyberpunk` previews one). Data is stored in `./data/groupcart.sqlite` (set `GROUP_CART_DB` to use another file); uploaded avatars and chat photos go next to it.
+
+The sections below cover live mode and each feature in detail.
 
 ## Connect your Spectrum dedicated line
 

@@ -10,7 +10,8 @@ import { digestHomeLine } from "./pointsUi.js"; // money & points: "Next digest"
  * strip, a Create button (app bar) with suggested everyone-free times, and the
  * event / poll dialogs. It draws after each calendar render: calendarPage.ts
  * dispatches `gc:calendar-rendered` with { data, startHour, endHour, ppm, view,
- * date, days }. Week view: one .cal-day[data-date] column per day. Day view: the
+ * date, days, place }; place(date, [{start, end}]) positions timed blocks beside the
+ * members' entries. Week view: one .cal-day[data-date] column per day. Day view: the
  * House lane is the only .cal-day, and the all-day row (only when there is an
  * all-day event that day) spans every column.
  *
@@ -79,13 +80,17 @@ const calendarStyles = `
 .hv-chip { min-width:0; margin:0 2px; padding:0 8px; border:0; border-radius:5px; background:var(--hv-house); color:var(--hv-house-on); font:500 11.5px/24px var(--gc-font); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; }
 .hv-chip.is-social, .hv-block.is-social { background:var(--hv-social); color:var(--hv-social-on); }
 .hv-chip:hover, .hv-block:hover { filter:brightness(1.08); }
-.hv-block { position:absolute; z-index:5; overflow:hidden; padding:3px 6px; border:0; border-radius:6px; background:var(--hv-house); color:var(--hv-house-on); font:500 11.5px/1.25 var(--gc-font); text-align:left; cursor:pointer; box-shadow:0 0 0 1.5px var(--gc-surface); }
+.hv-block { position:absolute; z-index:5; display:flex; flex-direction:column; justify-content:flex-start; align-items:stretch; overflow:hidden; padding:3px 6px; border:0; border-radius:6px; background:var(--hv-house); color:var(--hv-house-on); font:500 11.5px/1.25 var(--gc-font); text-align:left; cursor:pointer; box-shadow:0 0 0 1.5px var(--gc-surface); }
 .hv-block span { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .hv-block .hv-time { font-weight:400; opacity:.9; font-size:10.5px; }
+.hv-block .hv-emo { font-style:normal; }
+.hv-block.is-narrow { padding:2px 4px; }
+.hv-block.is-narrow .hv-emo { display:none; }
 .hv-block.is-past { opacity:.55; }
 .hv-block.is-tentative { background:color-mix(in srgb, var(--hv-social) 12%, var(--gc-surface)); color:var(--gc-text); border:1.5px dashed var(--hv-social); box-shadow:none; }
 .hv-block.is-tentative .hv-time { color:var(--gc-muted); opacity:1; }
 .cal-day { cursor:pointer; }
+@media (max-width: 760px) { #hvCreate { width:36px; padding:0; gap:0; font-size:0; } } /* icon-only Create, so the app-bar title fits */
 .hv-strip { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
 .hv-strip[hidden] { display:none; }
 .hv-strip-label { display:inline-flex; align-items:center; gap:6px; color:var(--gc-muted); font-size:var(--gc-fs-sm); font-weight:500; }
@@ -324,51 +329,40 @@ const calendarScript = String.raw`
     if (!dayView || row.childElementCount) lastHead.after(label, row);
 
     // Timed events and poll options as blocks in the day columns.
-    const ppm = view.ppm;
-    const startMin = view.startHour * 60, endMin = view.endHour * 60;
     const items = ev.occurrences.filter((o) => !o.allDay).map((o) => ({ kind: "event", o, start: o.start, end: o.end }));
     for (const poll of ev.polls) for (const option of poll.options) items.push({ kind: "poll", poll, option, start: option.start, end: option.end });
     const now = Date.now();
     days.forEach((day) => {
       const column = grid.querySelector('.cal-day[data-date="' + day.date + '"]');
       if (!column) return;
-      const inDay = items.filter((item) => item.end > day.start && item.start < day.end).sort((a, b) => a.start - b.start || (b.end - b.start) - (a.end - a.start));
-      // Side-by-side columns for overlapping blocks.
-      const cols = [];
-      const placed = inDay.map((item) => {
-        let col = cols.findIndex((end) => end <= item.start);
-        if (col < 0) { col = cols.length; cols.push(0); }
-        cols[col] = item.end;
-        return { item, col };
-      });
-      const width = 100 / Math.max(1, cols.length);
-      for (const { item, col } of placed) {
-        const a = Math.max(item.start <= day.start ? 0 : minutesOf(item.start, tz), startMin);
-        const b = Math.min(item.end >= day.end ? 1440 : minutesOf(item.end, tz) || 1440, endMin);
-        if (b <= a) continue;
+      const inDay = items.filter((item) => item.end > day.start && item.start < day.end);
+      // The calendar lays these out beside members' entries (side by side when they overlap).
+      const boxes = view.place(day.date, inDay.map((item) => ({ start: item.start, end: item.end })));
+      inDay.forEach((item, index) => {
+        const box = boxes[index];
+        if (!box) return;
         const block = document.createElement("button");
         block.type = "button";
-        const height = Math.max(18, (b - a) * ppm - 2);
-        block.style.top = ((a - startMin) * ppm + 1).toFixed(1) + "px";
-        block.style.height = height.toFixed(1) + "px";
-        block.style.left = "calc(" + (col * width) + "% + 2px)";
-        block.style.width = "calc(" + width + "% - 4px)";
+        const height = parseFloat(box.height);
+        Object.assign(block.style, box);
         const time = clock(item.start, tz) + "–" + clock(item.end, tz);
         if (item.kind === "event") {
           const o = item.o;
           block.className = "hv-block" + (o.kind !== "house" ? " is-social" : "") + (o.end < now ? " is-past" : "");
           block.dataset.hvEvent = o.eventId;
           block.title = o.emoji + " " + o.title + " · " + time;
-          block.innerHTML = '<span>' + esc(o.emoji + " " + o.title) + '</span>' + (height > 30 ? '<span class="hv-time">' + esc(time) + '</span>' : "");
+          block.innerHTML = '<span class="hv-title"><i class="hv-emo">' + esc(o.emoji) + ' </i>' + esc(o.title) + '</span>' + (height > 30 ? '<span class="hv-time">' + esc(time) + '</span>' : "");
         } else {
           const votes = item.option.yes.length;
           block.className = "hv-block is-tentative";
           block.dataset.hvPoll = item.poll.id;
           block.title = item.poll.title + " option " + item.option.index + " · " + votes + " yes";
-          block.innerHTML = '<span>' + esc(item.poll.emoji + " Option " + item.option.index) + '</span>' + (height > 30 ? '<span class="hv-time">' + esc(votes + (votes === 1 ? " vote" : " votes")) + '</span>' : "");
+          block.innerHTML = '<span class="hv-title"><i class="hv-emo">' + esc(item.poll.emoji) + ' </i>Option ' + item.option.index + '</span>' + (height > 30 ? '<span class="hv-time">' + esc(votes + (votes === 1 ? " vote" : " votes")) + '</span>' : "");
         }
         column.appendChild(block);
-      }
+        // Narrow (side by side with members' entries): drop the emoji and padding so the title fits.
+        block.classList.toggle("is-narrow", block.offsetWidth < 72);
+      });
     });
   }
 

@@ -25,7 +25,7 @@ registerFlavor({
 
 export const POINTS_CSS = `
 .gp-av { position:relative; display:inline-flex; flex:none; }
-.gp-badge { position:absolute; right:-6px; bottom:-3px; min-width:18px; height:18px; padding:0 5px; display:inline-grid; place-items:center; border-radius:var(--gc-radius-pill); background:var(--gc-surface); color:var(--gc-text-2); border:1px solid var(--gc-border); font:600 10px/1 var(--gc-font); font-variant-numeric:tabular-nums; white-space:nowrap; pointer-events:auto; }
+.gp-badge { position:absolute; right:-10px; bottom:-6px; min-width:18px; height:16px; padding:0 4px; display:inline-grid; place-items:center; border-radius:var(--gc-radius-pill); background:var(--gc-surface); color:var(--gc-text-2); border:1px solid var(--gc-border); font:600 10px/1 var(--gc-font); font-variant-numeric:tabular-nums; white-space:nowrap; pointer-events:auto; }
 .pp-card .gp-av { margin-bottom:var(--gc-space-2); }
 .pp-card .gp-av .gc-avatar { margin-bottom:0; }
 .pp-card .gp-badge { right:0; bottom:2px; min-width:24px; height:22px; font-size:11px; }
