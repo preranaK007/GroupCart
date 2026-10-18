@@ -37,6 +37,8 @@ export type ChatMessage = {
   text: string;
   attachments: ChatAttachmentView[];
   source: ChatSource;
+  /** The AI assistant that sent a connector message for the member ("Claude", "Grok", …), else null. */
+  via: string | null;
   at: string;
 };
 
@@ -65,7 +67,7 @@ export class ChatError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-type Row = { id: number; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; created_at: string };
+type Row = { id: number; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string };
 
 function memoize(read: () => Promise<Buffer>): () => Promise<Buffer> {
   let pending: Promise<Buffer> | null = null;
@@ -114,6 +116,8 @@ export class ChatService {
         created_at TEXT NOT NULL
       );
     `);
+    const columns = this.#db.prepare("PRAGMA table_info(chat_messages)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "via")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN via TEXT");
   }
 
   get liveMode(): boolean {
@@ -143,11 +147,11 @@ export class ChatService {
   // Recording
   // ---------------------------------------------------------------------------
 
-  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; at?: Date }): ChatMessage | null {
+  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; via?: string; at?: Date }): ChatMessage | null {
     const at = input.at && !Number.isNaN(input.at.getTime()) ? input.at : new Date();
     const result = this.#db.prepare(
-      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, at.toISOString());
+      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, via, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, input.via ?? null, at.toISOString());
     if (!Number(result.changes)) return null;
     return this.get(Number(result.lastInsertRowid));
   }
@@ -251,6 +255,7 @@ export class ChatService {
       text,
       attachments: stored ? [{ name: imageName, mimeType: stored.mimeType, size: input.image!.length, file: stored.file }] : [],
       source: options.source,
+      via: options.source === "connector" ? options.via ?? "AI assistant" : undefined,
     })!;
 
     const job = async (): Promise<string | null> => {
@@ -320,6 +325,7 @@ export class ChatService {
       text: row.text,
       attachments,
       source: row.source as ChatSource,
+      via: row.via ?? null,
       at: row.created_at,
     };
   }

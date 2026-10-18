@@ -158,7 +158,8 @@ function avatarFor(message) {
   const member = memberLook(message.memberId) || { id: message.memberId || message.name, name: message.name };
   return GC.avatar(member, allIds(), 32);
 }
-const authorKey = (message) => message.kind === "bot" ? "bot" : (message.memberId || message.name);
+// A member's messages sent through an AI assistant group apart from their own, so each run is labeled.
+const authorKey = (message) => message.kind === "bot" ? "bot" : (message.memberId || message.name) + (message.via ? "|" + message.via : "");
 const isMine = (message) => message.kind === "member" && state.me && message.memberId === state.me.id;
 
 function attachmentHtml(item) {
@@ -188,7 +189,7 @@ function render() {
     const kind = message.kind === "bot" ? "is-bot" : mine ? "is-mine" : "is-other";
     const classes = ["ch-row", kind, first ? "is-first" : "", last ? "is-last" : "", message.pending ? "is-pending" : ""].filter(Boolean).join(" ");
     let col = "";
-    if (!mine && first) col += '<div class="ch-name">' + GC.esc(message.name) + '</div>';
+    if (first && (!mine || message.via)) col += '<div class="ch-name">' + GC.esc(mine ? "via " + message.via : message.name + (message.via ? " · via " + message.via : "")) + '</div>';
     for (const item of message.attachments || []) col += attachmentHtml(item);
     if (message.text) col += emojiOnly(message.text) ? '<div class="ch-emoji" title="' + GC.esc(fullTime(at)) + '">' + GC.esc(message.text) + '</div>' : '<div class="ch-bubble" title="' + GC.esc(fullTime(at)) + '">' + linkify(message.text) + '</div>';
     if (message === lastMine) {
