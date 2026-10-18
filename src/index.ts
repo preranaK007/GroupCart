@@ -6,6 +6,8 @@ import { startDashboard } from "./dashboard.js";
 import { config, validateSpectrumConfig } from "./config.js";
 import { KrogerClient } from "./kroger.js";
 import { CartStore } from "./store.js";
+import { splitwiseConfig } from "./config.js";
+import { SplitwiseService } from "./splitwise.js";
 
 validateSpectrumConfig();
 const liveMode = Boolean(config.spectrumProjectId && config.spectrumProjectSecret);
@@ -28,6 +30,17 @@ const store = new CartStore(
   liveMode && Boolean(config.krogerClientId && config.krogerClientSecret),
 );
 store.registerMembers(members);
+
+// --- Splitwise: log each completed checkout as one expense (simulated in demo mode) ---
+const splitwise = new SplitwiseService(store, splitwiseConfig);
+store.setCheckoutHooks(splitwise);
+for (const warning of splitwise.warnings) console.warn(warning);
+if (liveMode && splitwise.configured) {
+  void splitwise.checkConnection().then((result) => (result.ok ? console.log : console.warn)(result.message));
+} else {
+  console.log("Splitwise logging is simulated (demo mode or not configured); nothing is sent to Splitwise.");
+}
+// --- end Splitwise ---
 const krogerClient = config.krogerClientId && config.krogerClientSecret
   ? new KrogerClient(config.krogerClientId, config.krogerClientSecret, config.krogerLocationId, config.krogerRedirectUri, config.krogerCartModality)
   : undefined;

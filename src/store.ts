@@ -28,6 +28,13 @@ type ItemRow = {
   upc: string | null;
 };
 
+type SplitwiseExpenseRow = {
+  checkout_key: string; revision: number; source: string; payer_member_id: string | null; payer_name: string | null;
+  total_cents: number; currency: string; description: string; shares_json: string; request_json: string | null;
+  status: string; mode: string; note: string | null; expense_id: string | null; expense_url: string | null;
+  error: string | null; attempts: number; created_at: string; updated_at: string;
+};
+
 type PendingRetailerChoice = {
   query: string;
   quantity: number;
@@ -67,11 +74,63 @@ export type CartSnapshot = {
   checkedOutRevision: number | null;
 };
 
+// --- Splitwise expense log (types) ---------------------------------------
+// A completed checkout handed to the checkout hooks (src/splitwise.ts). Shares
+// come from the same deterministic split as snapshot(), so they sum to totalCents.
+export type CompletedCheckout = {
+  checkoutKey: string;
+  householdId: string;
+  revision: number;
+  source: "mock" | "kroger";
+  payer: { id: string; name: string } | null;
+  totalCents: number;
+  items: Array<{ name: string; quantity: number; totalCents: number }>;
+  shares: Array<{ memberId: string; name: string; shareCents: number }>;
+  completedAt: string;
+};
+
+export type SplitwiseExpenseStatus = "pending" | "sending" | "logged" | "simulated" | "failed";
+
+export type SplitwiseExpenseRecord = {
+  checkoutKey: string;
+  revision: number;
+  source: "mock" | "kroger";
+  payerMemberId: string | null;
+  payerName: string | null;
+  totalCents: number;
+  currency: string;
+  description: string;
+  shares: Array<{ memberId: string; name: string; paidCents: number; owedCents: number; splitwiseUser: string | null }>;
+  request: Record<string, string> | null;
+  status: SplitwiseExpenseStatus;
+  mode: "live" | "simulated";
+  note: string | null;
+  expenseId: string | null;
+  expenseUrl: string | null;
+  error: string | null;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+// Implemented by SplitwiseService. record() runs inside the checkout transaction
+// (isolated by a savepoint so it can never roll the checkout back); finish()
+// runs after commit and may call the network; neither may break checkout.
+export type CheckoutHooks = {
+  record(checkout: CompletedCheckout): void;
+  summary(checkoutKey: string): string | undefined;
+  finish(checkoutKey: string): Promise<string | undefined>;
+  status(): string;
+  retry(): Promise<string>;
+};
+// --- end Splitwise expense log (types) -----------------------------------
+
 export class CartStore {
   readonly #db: DatabaseSync;
   readonly #householdId: string;
   readonly #dashboardUrl: string;
   readonly #krogerCartEnabled: boolean;
+  #checkoutHooks: CheckoutHooks | undefined;
 
   constructor(databasePath: string, householdId: string, budgetCents: number, dashboardUrl = "http://127.0.0.1:3000", krogerCartEnabled = false) {
     const absolutePath = resolve(databasePath);
@@ -179,6 +238,7 @@ export class CartStore {
         created_at TEXT NOT NULL
       );
     `);
+    this.#ensureSplitwiseTable();
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -234,7 +294,10 @@ export class CartStore {
       } else if (/^(approve|approve cart|confirm cart)$/i.test(normalized)) {
         reply = this.#approveCurrentRevision(memberId);
       } else if (/^(checkout|finish checkout)$/i.test(normalized)) {
-        reply = this.#completeMockCheckout();
+        reply = this.#completeMockCheckout(memberId);
+      } else if (CartStore.#splitwiseCommand.test(normalized)) {
+        // Splitwise status (retry needs the network, so only the async live path runs it).
+        reply = this.#checkoutHooks?.status() ?? "Splitwise logging isn’t set up in this GroupCart.";
       } else {
         const pending = this.#db.prepare(
           "SELECT kind, original_text FROM pending_clarifications WHERE member_id = ?",
@@ -309,7 +372,15 @@ export class CartStore {
     const normalized = text.trim();
     const isCommand = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i.test(normalized)
       || this.#isHelpRequest(normalized)
+      || CartStore.#splitwiseCommand.test(normalized)
       || (/^yes$/i.test(normalized) && this.#hasPendingClearAll(memberId));
+    if (/^splitwise retry$/i.test(normalized) && this.#checkoutHooks) {
+      let reply: string;
+      try { reply = await this.#checkoutHooks.retry(); } catch (error) {
+        reply = `Splitwise retry failed (${error instanceof Error ? error.message : "unknown error"}). The checkout itself is unaffected.`;
+      }
+      return this.#saveAndReturnReply(messageId, reply);
+    }
     if (/^(checkout|finish checkout)$/i.test(normalized)) {
       if (!allowKrogerCartCheckout) return this.processIncomingText(messageId, memberId, normalized);
       return this.#startKrogerCheckout(messageId, memberId, locationId, checkCartAvailability);
@@ -624,10 +695,10 @@ export class CartStore {
     }
   }
 
-  completeMockCheckout(): { ok: boolean; message: string } {
+  completeMockCheckout(payerMemberId?: string): { ok: boolean; message: string } {
     this.#db.exec("BEGIN IMMEDIATE");
     try {
-      const result = this.#completeMockCheckout();
+      const result = this.#completeMockCheckout(payerMemberId);
       const ok = result.startsWith("Mock checkout complete");
       this.#db.exec("COMMIT");
       return { ok, message: result };
@@ -701,8 +772,11 @@ export class CartStore {
       this.#db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.#householdId);
       this.#db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.#householdId);
       const message = `Added ${snapshot.items.length} item${snapshot.items.length === 1 ? "" : "s"} to ${accountName}’s Kroger cart. No order was placed or payment charged. Open Kroger to review the cart and finish checkout there.`;
+      // Splitwise: Kroger confirmed, so log the checkout (savepoint-isolated).
+      const checkoutKey = this.#recordCheckout(snapshot, memberId, "kroger");
       this.#db.exec("COMMIT");
-      return { ok: true, message };
+      const splitwiseNote = await this.#finishCheckoutLog(checkoutKey);
+      return { ok: true, message: splitwiseNote ? `${message}\n\n${splitwiseNote}` : message };
     } catch (error) {
       this.#db.exec("ROLLBACK");
       throw error;
@@ -1127,6 +1201,7 @@ export class CartStore {
       this.#krogerCartEnabled
         ? "Approve/Kroger cart: everyone texts “approve,” then “checkout” checks availability at the configured store before asking whose Kroger account to use. If something appears unavailable, GroupCart suggests alternatives but never substitutes automatically; choose one with “replace 1 with 2.” Any changed list needs everyone’s approval again. After sign-in, available UPC items are added to Kroger; you finish ordering there. No order or payment is placed by GroupCart."
         : "Approve/checkout: in the local demo, checkout is simulated. Live Kroger cart transfer requires configured Kroger app credentials and Cart API access. GroupCart never places an order or charges anyone.",
+      "Splitwise: after checkout, GroupCart logs the total as one Splitwise expense paid by the shopper, with each person owing their share. Text “splitwise” (or “settle”) for the latest status, or “splitwise retry” if logging failed.",
       "Not sure what to say? Text “help” or “commands” anytime.",
     ].join("\n\n");
   }
@@ -1577,7 +1652,7 @@ export class CartStore {
         : `Everyone approved cart revision ${updated.revision}. Text “checkout” to finish a simulated checkout.`;
   }
 
-  #completeMockCheckout(): string {
+  #completeMockCheckout(payerMemberId?: string): string {
     const snapshot = this.snapshot();
     if (!snapshot.items.length) return "There isn’t a cart to check out yet.";
     const pending = snapshot.members.filter((member) => !member.approved).map((member) => member.name);
@@ -1590,7 +1665,11 @@ export class CartStore {
     this.#db.prepare(
       "UPDATE households SET revision = revision + 1, checked_out_revision = ? WHERE id = ?",
     ).run(snapshot.revision, this.#householdId);
-    return `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    const reply = `Mock checkout complete for ${money(snapshot.totalCents)}. No payment was charged. The cart is cleared for your next list.`;
+    // Splitwise: demo checkouts are always simulated (no network), so the summary is ready now.
+    const checkoutKey = this.#recordCheckout(snapshot, payerMemberId, "mock");
+    const splitwiseNote = checkoutKey ? this.#checkoutHooks?.summary(checkoutKey) : undefined;
+    return splitwiseNote ? `${reply}\n\n${splitwiseNote}` : reply;
   }
 
   #split(totalCents: number, participantIds: string[]): Map<string, number> {
@@ -1605,6 +1684,146 @@ export class CartStore {
     }
     return result;
   }
+
+  // --- Splitwise expense log (persistence + checkout hooks) ---------------
+  static readonly #splitwiseCommand = /^(splitwise|settle|settle up|splitwise status|splitwise retry)$/i;
+
+  setCheckoutHooks(hooks: CheckoutHooks | undefined): void {
+    this.#checkoutHooks = hooks;
+  }
+
+  /** Inserts the log row for a checkout; returns false if one already exists (idempotent). */
+  insertSplitwiseExpense(record: SplitwiseExpenseRecord): boolean {
+    const result = this.#db.prepare(
+      "INSERT OR IGNORE INTO splitwise_expenses (checkout_key, household_id, revision, source, payer_member_id, payer_name, total_cents, currency, description, shares_json, request_json, status, mode, note, expense_id, expense_url, error, attempts, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      record.checkoutKey, this.#householdId, record.revision, record.source, record.payerMemberId, record.payerName,
+      record.totalCents, record.currency, record.description, JSON.stringify(record.shares),
+      record.request ? JSON.stringify(record.request) : null, record.status, record.mode, record.note,
+      record.expenseId, record.expenseUrl, record.error, record.attempts, record.createdAt, record.updatedAt,
+    );
+    return Number(result.changes) > 0;
+  }
+
+  getSplitwiseExpense(checkoutKey: string): SplitwiseExpenseRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM splitwise_expenses WHERE checkout_key = ? AND household_id = ?")
+      .get(checkoutKey, this.#householdId) as SplitwiseExpenseRow | undefined;
+    return row ? CartStore.#splitwiseRecord(row) : undefined;
+  }
+
+  latestSplitwiseExpense(): SplitwiseExpenseRecord | undefined {
+    const row = this.#db.prepare("SELECT * FROM splitwise_expenses WHERE household_id = ? ORDER BY revision DESC LIMIT 1")
+      .get(this.#householdId) as SplitwiseExpenseRow | undefined;
+    return row ? CartStore.#splitwiseRecord(row) : undefined;
+  }
+
+  /** Atomically moves a row from one of `from` to 'sending'; only one caller can win. */
+  claimSplitwiseExpense(checkoutKey: string, from: SplitwiseExpenseStatus[]): boolean {
+    const placeholders = from.map(() => "?").join(", ");
+    const result = this.#db.prepare(
+      `UPDATE splitwise_expenses SET status = 'sending', attempts = attempts + 1, updated_at = ? WHERE checkout_key = ? AND household_id = ? AND status IN (${placeholders})`,
+    ).run(new Date().toISOString(), checkoutKey, this.#householdId, ...from);
+    return Number(result.changes) > 0;
+  }
+
+  updateSplitwiseExpense(
+    checkoutKey: string,
+    patch: { status: SplitwiseExpenseStatus; expenseId?: string | null; expenseUrl?: string | null; error?: string | null },
+  ): void {
+    this.#db.prepare(
+      "UPDATE splitwise_expenses SET status = ?, expense_id = COALESCE(?, expense_id), expense_url = COALESCE(?, expense_url), error = ?, updated_at = ? WHERE checkout_key = ? AND household_id = ?",
+    ).run(patch.status, patch.expenseId ?? null, patch.expenseUrl ?? null, patch.error ?? null, new Date().toISOString(), checkoutKey, this.#householdId);
+  }
+
+  #ensureSplitwiseTable(): void {
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS splitwise_expenses (
+        checkout_key TEXT PRIMARY KEY,
+        household_id TEXT NOT NULL REFERENCES households(id),
+        revision INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        payer_member_id TEXT,
+        payer_name TEXT,
+        total_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        description TEXT NOT NULL,
+        shares_json TEXT NOT NULL,
+        request_json TEXT,
+        status TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        note TEXT,
+        expense_id TEXT,
+        expense_url TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS splitwise_expenses_household_revision ON splitwise_expenses (household_id, revision);
+    `);
+  }
+
+  static #splitwiseRecord(row: SplitwiseExpenseRow): SplitwiseExpenseRecord {
+    return {
+      checkoutKey: row.checkout_key,
+      revision: row.revision,
+      source: row.source === "kroger" ? "kroger" : "mock",
+      payerMemberId: row.payer_member_id,
+      payerName: row.payer_name,
+      totalCents: row.total_cents,
+      currency: row.currency,
+      description: row.description,
+      shares: JSON.parse(row.shares_json) as SplitwiseExpenseRecord["shares"],
+      request: row.request_json ? JSON.parse(row.request_json) as Record<string, string> : null,
+      status: row.status as SplitwiseExpenseStatus,
+      mode: row.mode === "live" ? "live" : "simulated",
+      note: row.note,
+      expenseId: row.expense_id,
+      expenseUrl: row.expense_url,
+      error: row.error,
+      attempts: row.attempts,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /** Hands a completed checkout to the hooks inside the open transaction. Never throws. */
+  #recordCheckout(snapshot: CartSnapshot, payerMemberId: string | undefined, source: "mock" | "kroger"): string | undefined {
+    if (!this.#checkoutHooks) return undefined;
+    const checkoutKey = `${this.#householdId}:r${snapshot.revision}`;
+    const payer = snapshot.members.find((member) => member.id === payerMemberId);
+    this.#db.exec("SAVEPOINT splitwise_log");
+    try {
+      this.#checkoutHooks.record({
+        checkoutKey,
+        householdId: this.#householdId,
+        revision: snapshot.revision,
+        source,
+        payer: payer ? { id: payer.id, name: payer.name } : null,
+        totalCents: snapshot.totalCents,
+        items: snapshot.items.map((item) => ({ name: item.name, quantity: item.quantity, totalCents: item.totalCents })),
+        shares: snapshot.members.map((member) => ({ memberId: member.id, name: member.name, shareCents: member.shareCents })),
+        completedAt: new Date().toISOString(),
+      });
+      this.#db.exec("RELEASE splitwise_log");
+      return checkoutKey;
+    } catch (error) {
+      this.#db.exec("ROLLBACK TO splitwise_log");
+      this.#db.exec("RELEASE splitwise_log");
+      console.warn(`Splitwise log for checkout ${checkoutKey} was not recorded: ${error instanceof Error ? error.message : "unknown error"}`);
+      return undefined;
+    }
+  }
+
+  async #finishCheckoutLog(checkoutKey: string | undefined): Promise<string | undefined> {
+    if (!checkoutKey || !this.#checkoutHooks) return undefined;
+    try {
+      return await this.#checkoutHooks.finish(checkoutKey);
+    } catch (error) {
+      return `Splitwise: couldn’t log this checkout (${error instanceof Error ? error.message : "unknown error"}). The checkout itself is complete.`;
+    }
+  }
+  // --- end Splitwise expense log ------------------------------------------
 
   private formatSummary(memberId: string, addedNames: string[] = [], shared = false): string {
     const snapshot = this.snapshot();

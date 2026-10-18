@@ -41,8 +41,15 @@ Keep `.env` private; never commit it or paste its secrets into chat. Start the a
 - `undo` to restore the cart to the state before the most recent cart change. Undo is available for the latest 20 cart changes; each undo creates a new cart revision and resets approvals.
 - `approve` to approve the current cart revision.
 - In live mode, after every household member approves, `checkout` checks each selected UPC against the configured store and pickup/delivery mode. If Kroger reports unavailable products, GroupCart shows in-stock suggestions but does not substitute anything automatically. Choose a suggestion explicitly with `replace 1 with 2`; any changed cart requires everyone to approve again. Once the precheck passes, `checkout` asks whose Kroger account to use. The selected member opens Kroger sign-in and consents; GroupCart then adds the approved live Kroger UPCs to that account's cart and clears the GroupCart list only after Kroger confirms. Availability can change after the check, so verify the Kroger cart. The shopper reviews and places the order on Kroger; GroupCart never submits an order or payment. Local demo checkout remains simulated.
+- `splitwise` (or `settle`) shows the Splitwise status of the latest checkout: logged (with who owes whom), simulated, or failed. `splitwise retry` re-sends a failed one after checking that Splitwise doesn't already have it.
 
 Configure Kroger Production app credentials, Cart API access, and a `KROGER_LOCATION_ID` to use live product search and cart preparation; this must match the pickup/delivery store selected in the Kroger account. The precheck uses Kroger's Products API availability at that location and fulfillment mode, then searches that same location for suggestions. It is a point-in-time check and cannot guarantee stock at pickup. Add the exact `KROGER_REDIRECT_URI` to your Kroger app's allowed redirect URIs; for local testing it defaults to `http://127.0.0.1:3000/api/kroger/oauth/callback`. If you later deploy behind a protected public hostname, set both `GROUP_CART_PUBLIC_URL` and `KROGER_REDIRECT_URI` to matching URLs. `KROGER_CART_MODALITY` defaults to `PICKUP`; set it to `DELIVERY` if needed. The member selected in iMessage must sign in to their own Kroger account in the browser. GroupCart uses Kroger's user-authorized Cart API to add selected products by UPC and quantity; sample items without a Kroger UPC block the entire transfer. This adds items to the Kroger account but cannot read the resulting cart or place an order. Review the cart and finish checkout directly in Kroger. The dashboard reads the same SQLite cart and refreshes every 2.5 seconds. In Spectrum live mode it remains a read-only companion view; item changes, approvals, totals, and splits still come from the iMessage group. The dashboard is bound to `127.0.0.1`, so only the machine running GroupCart can open it unless you separately deploy it.
+
+## Splitwise
+
+After a successful checkout (in live mode, only after Kroger confirms the items were added), GroupCart logs one expense in the household's Splitwise group: the member whose Kroger account received the items paid the full total, and each member owes exactly the share GroupCart computed (shares always sum to the total to the cent). The checkout reply includes a short Splitwise summary, and the dashboard shows the latest status (`GET /api/splitwise` returns it as JSON). A Splitwise failure (bad key, rate limit, unmapped member) never undoes the checkout; it is reported and can be retried. Each checkout is logged at most once.
+
+Set `SPLITWISE_API_KEY` (a personal API key from [secure.splitwise.com/apps](https://secure.splitwise.com/apps)), `SPLITWISE_GROUP_ID`, and `SPLITWISE_MEMBERS` (e.g. `Alex=12345,Maya=maya@example.com`, mapping each GroupCart member name to a Splitwise user id or email). In the local demo, or while these are unset, checkouts are simulated: GroupCart records and shows the expense it would have sent, but makes no Splitwise request.
 
 ## Configuration
 
@@ -61,6 +68,9 @@ Configure Kroger Production app credentials, Cart API access, and a `KROGER_LOCA
 | `GROUP_CART_PUBLIC_URL` | Base URL in the Kroger sign-in link | `http://127.0.0.1:3000` |
 | `KROGER_REDIRECT_URI` | OAuth callback URL registered with Kroger | dashboard URL + `/api/kroger/oauth/callback` |
 | `KROGER_CART_MODALITY` | Fulfillment modality for added items (`PICKUP` or `DELIVERY`) | `PICKUP` |
+| `SPLITWISE_API_KEY` | Splitwise personal API key (sent as a bearer token) | unset (Splitwise simulated) |
+| `SPLITWISE_GROUP_ID` | Numeric id of the household's Splitwise group | unset (Splitwise simulated) |
+| `SPLITWISE_MEMBERS` | Comma-separated `memberName=splitwiseUserIdOrEmail` mapping | unset (Splitwise simulated) |
 
 ## Development
 

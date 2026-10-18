@@ -2,6 +2,56 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
 import { CartStore, type CartSnapshot } from "./store.js";
 import { KrogerClient } from "./kroger.js";
+import { splitwiseDashboardView } from "./splitwise.js";
+
+// --- Splitwise status panel (self-contained: styles, markup, script) -------
+// Reads GET /api/splitwise. Kept separate so it can move to another page as-is.
+const SPLITWISE_PANEL_STYLES = `
+    .sw-pill { display:inline-block; padding:3px 9px; border-radius:999px; font-size:12px; font-weight:650; background:#f0f2ee; color:var(--muted); }
+    .sw-pill.logged { background:var(--mint); color:var(--green); } .sw-pill.failed { background:#fff2e8; color:#865022; }
+    .sw-total { display:flex; justify-content:space-between; font-weight:650; margin-bottom:8px; }
+    .sw-debts { display:grid; gap:6px; font-size:13px; } .sw-debt { display:flex; justify-content:space-between; gap:8px; }
+    .sw-note { margin-top:10px; color:var(--muted); font-size:12px; } .sw-note.error { color:#865022; }
+    .sw-link { display:inline-block; margin-top:10px; color:var(--green); font-size:13px; font-weight:650; }`;
+
+const SPLITWISE_PANEL_HTML = `
+        <div class="card" id="splitwisePanel">
+          <div class="card-title"><h2>Splitwise</h2><span class="sw-pill" id="splitwiseState">Loading…</span></div>
+          <div id="splitwiseBody"><p class="empty">Checking the latest checkout…</p></div>
+        </div>`;
+
+const SPLITWISE_PANEL_SCRIPT = `
+  <script>
+    (() => {
+      const swEsc = (value) => String(value ?? "").replace(/[&<>\"']/g, (char) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+      const swDollars = (cents) => new Intl.NumberFormat("en-US", {style:"currency",currency:"USD"}).format(cents / 100);
+      const labels = { none:"No checkout yet", logged:"Logged", simulated:"Simulated", failed:"Failed", pending:"Sending…", sending:"Sending…" };
+      async function refreshSplitwise() {
+        const response = await fetch("/api/splitwise");
+        if (!response.ok) throw new Error("Could not load Splitwise status");
+        const data = await response.json();
+        const pill = document.getElementById("splitwiseState");
+        pill.textContent = labels[data.state] || data.state;
+        pill.className = "sw-pill " + data.state;
+        const body = document.getElementById("splitwiseBody");
+        if (data.state === "none") {
+          body.innerHTML = '<p class="empty">After checkout, the total is logged as one Splitwise expense paid by the shopper.</p>';
+          return;
+        }
+        const debts = (data.debts || []).map((debt) => '<div class="sw-debt"><span>' + swEsc(debt.name) + ' owes ' + swEsc(debt.owesTo) + '</span><strong>' + swDollars(debt.cents) + '</strong></div>').join("");
+        const link = data.expenseUrl && /^https:\/\/secure\.splitwise\.com\//.test(data.expenseUrl)
+          ? '<a class="sw-link" href="' + swEsc(data.expenseUrl) + '" target="_blank" rel="noopener noreferrer">View expense #' + swEsc(data.expenseId) + ' in Splitwise</a>' : "";
+        const note = data.state === "failed" ? '<p class="sw-note error">' + swEsc(data.error) + ' Text “splitwise retry” in the group to try again.</p>'
+          : data.note ? '<p class="sw-note">' + swEsc(data.note) + '</p>' : "";
+        body.innerHTML = '<div class="sw-total"><span>Revision ' + swEsc(data.revision) + ' · paid by ' + swEsc(data.payerName || "unknown") + '</span><span>' + swDollars(data.totalCents) + '</span></div>'
+          + '<div class="sw-debts">' + (debts || '<p class="muted">No one else owes anything.</p>') + '</div>' + link + note;
+      }
+      const fail = (error) => { document.getElementById("splitwiseState").textContent = "Unavailable"; };
+      refreshSplitwise().catch(fail);
+      setInterval(() => refreshSplitwise().catch(fail), 2500);
+    })();
+  </script>`;
+// --- end Splitwise status panel ---------------------------------------------
 
 const html = `<!doctype html>
 <html lang="en">
@@ -59,7 +109,7 @@ const html = `<!doctype html>
     .sync { color:var(--muted); font-size:12px; margin-top:4px; }
     .live-note { padding:14px 16px; border-radius:14px; background:#edf7f0; border:1px solid #d8ecdf; color:#355c46; font-size:13px; margin-bottom:16px; }
     .live-note strong { display:block; margin-bottom:3px; color:#234a35; }
-    [hidden] { display:none !important; }
+    [hidden] { display:none !important; }${SPLITWISE_PANEL_STYLES}
     @media(max-width:720px) { main{margin-top:18px}.layout{grid-template-columns:1fr}header{align-items:flex-start}.badge{max-width:150px;text-align:center} }
   </style>
 </head>
@@ -101,7 +151,7 @@ const html = `<!doctype html>
           <div class="actions"><button class="secondary" id="approve">Approve my share</button><button id="checkout">Mock checkout</button></div>
           <p class="status" id="approvalStatus" role="status" aria-live="polite"></p>
           <p class="footer" id="approvalFooter">Every cart edit creates a new revision and resets approvals. Checkout is simulated; no payment is taken.</p>
-        </div>
+        </div>${SPLITWISE_PANEL_HTML}
       </aside>
     </div>
   </main>
@@ -195,13 +245,13 @@ const html = `<!doctype html>
       catch (error) { document.getElementById("approvalStatus").textContent = error.message; }
     });
     document.getElementById("checkout").addEventListener("click", async () => {
-      try { const result = await post("/api/checkout", {}); document.getElementById("approvalStatus").textContent = result.message; await refresh(); }
+      try { const result = await post("/api/checkout", {memberId:document.getElementById("member").value}); document.getElementById("approvalStatus").textContent = result.message; await refresh(); }
       catch (error) { document.getElementById("approvalStatus").textContent = error.message; }
     });
     const showSyncError = (error) => { document.getElementById("syncState").textContent = "Sync paused · " + (error.message || "could not reach GroupCart"); };
     refresh().catch((error) => { document.getElementById("mode").textContent = error.message; showSyncError(error); });
     setInterval(() => refresh().catch(showSyncError), 2500);
-  </script>
+  </script>${SPLITWISE_PANEL_SCRIPT}
 </body>
 </html>`;
 
@@ -288,6 +338,10 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
       });
       return;
     }
+    if (request.method === "GET" && url.pathname === "/api/splitwise") {
+      // Splitwise status of the latest checkout (names and amounts only).
+      return sendJson(response, 200, splitwiseDashboardView(store.latestSplitwiseExpense()));
+    }
     if (request.method === "GET" && url.pathname === "/api/kroger/products") {
       if (!krogerClient) return sendJson(response, 503, { error: "Kroger API credentials are not configured in .env." });
       try {
@@ -331,7 +385,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
         return sendJson(response, result.ok ? 200 : 400, result);
       }
       if (url.pathname === "/api/checkout") {
-        const result = store.completeMockCheckout();
+        const result = store.completeMockCheckout(typeof body.memberId === "string" ? body.memberId : undefined);
         return sendJson(response, result.ok ? 200 : 400, result);
       }
       sendJson(response, 404, { error: "Not found." });

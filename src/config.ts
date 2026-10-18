@@ -38,6 +38,16 @@ export const config = {
   krogerCartModality: configuredCartModality === "DELIVERY" ? "DELIVERY" as const : "PICKUP" as const,
 };
 
+// --- Splitwise ------------------------------------------------------------
+// All three must be set to log real expenses; otherwise checkouts are simulated.
+// Parsing/validation lives in src/splitwise.ts (SplitwiseService).
+export const splitwiseConfig = {
+  apiKey: process.env.SPLITWISE_API_KEY?.trim() || undefined,
+  groupId: process.env.SPLITWISE_GROUP_ID?.trim() || undefined,
+  members: process.env.SPLITWISE_MEMBERS?.trim() || undefined,
+};
+// --- end Splitwise --------------------------------------------------------
+
 export function validateSpectrumConfig(): void {
   const hasProjectId = Boolean(config.spectrumProjectId);
   const hasProjectSecret = Boolean(config.spectrumProjectSecret);
