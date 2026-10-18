@@ -6,6 +6,18 @@ import type { BatchRequest, Member } from "./types.js";
 
 /** Exact cart commands; anything matching is never treated as a product search. */
 export const CART_COMMAND_PATTERN = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i;
+/**
+ * Checkout-review removals: “remove 1”, “remove 1, 3”, “drop 2 and 3”, or
+ * “remove unavailable” / “remove all unavailable items”.
+ */
+export function parseUnavailableRemoval(text: string): number[] | "all" | undefined {
+  const normalized = text.trim().replace(/[.!?]+$/, "").trim();
+  if (/^(?:remove|drop|delete|skip)\s+(?:all\s+)?(?:the\s+)?unavailable(?:\s+(?:items?|ones?))?$/i.test(normalized)) return "all";
+  const match = normalized.match(/^(?:remove|drop|delete|skip)\s+(?:#|items?\s+|number\s+)?(\d{1,2}(?:\s*(?:,|&|and)\s*#?\d{1,2})*)$/i);
+  if (!match) return undefined;
+  return match[1]!.split(/\s*(?:,|&|and)\s*/i).map((part) => Number(part.replace("#", "")));
+}
+
 export const PRICE_LIMIT_PATTERN = /\b(?:under|below|less than|at most|no more than|up to)\s+\$?\s*\d+(?:\.\d{1,2})?\s*(?:dollars?)?\b/gi;
 
 export function retailerQuery(members: Member[], text: string): string {

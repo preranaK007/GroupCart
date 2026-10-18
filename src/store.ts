@@ -9,7 +9,7 @@ import { KrogerCheckout } from "./store/krogerCheckout.js";
 import { ListCommands } from "./store/listCommands.js";
 import { ListText } from "./store/listText.js";
 import { dashboardMessage, helpMessage } from "./store/messages.js";
-import { CART_COMMAND_PATTERN, cancellationQuery, isHelpRequest, parseSharingCommand } from "./store/parsing.js";
+import { CART_COMMAND_PATTERN, cancellationQuery, isHelpRequest, parseSharingCommand, parseUnavailableRemoval } from "./store/parsing.js";
 import { ProductSearch } from "./store/productSearch.js";
 import { RecurringLists } from "./store/recurringLists.js";
 import { initializeSchema } from "./store/schema.js";
@@ -353,8 +353,15 @@ export class CartStore {
     if (pending.status === "replacement_review") {
       const selection = normalized.match(/^replace\s+(\d{1,2})\s+with\s+(\d{1,2})$/i);
       if (selection) return checkout.handleKrogerReplacementChoice(messageId, memberId, Number(selection[1]), Number(selection[2]));
+      const removal = parseUnavailableRemoval(normalized);
+      if (removal) return checkout.removeUnavailableItems(messageId, memberId, removal);
+      // “remove the hooks” / “I don't want the hooks” naming an unavailable item drops it.
+      const removalQuery = cancellationQuery(this.#ctx.getMembers(), normalized);
+      const named = removalQuery ? checkout.unavailableIssueNumbersMatching(removalQuery) : [];
+      if (named.length) return checkout.removeUnavailableItems(messageId, memberId, named);
+      if (CANCEL_PATTERN.test(normalized)) return checkout.cancelKrogerCheckout(messageId, memberId);
       if (!READ_ONLY_COMMAND_PATTERN.test(normalized) && !listOnlyCommand) {
-        return this.#ctx.saveAndReturnReply(messageId, "Kroger’s precheck found unavailable items. Choose a suggested option with “replace 1 with 2”, or text “cancel checkout” to leave GroupCart unchanged and manage the item yourself. No replacement is made unless you choose one.");
+        return this.#ctx.saveAndReturnReply(messageId, `Checkout is paused on unavailable items. ${checkout.krogerReplacementPrompt()}`);
       }
     }
     if (pending.requesterId !== memberId && /^(\d+|cancel)$/i.test(normalized)) {

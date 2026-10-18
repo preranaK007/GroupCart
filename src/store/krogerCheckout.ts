@@ -4,6 +4,9 @@ import type { StoreContext, StoreModules } from "./context.js";
 import { currentPriceCents } from "./pricing.js";
 import type { CartSnapshot, PendingKrogerCheckout } from "./types.js";
 
+/** An unavailable item in a checkout review, and how a member resolved it. */
+type ReviewIssue = KrogerCartAvailabilityIssue & { resolved?: boolean; resolution?: "replaced" | "removed" };
+
 /**
  * Sending an approved cart to a member's Kroger cart: availability precheck,
  * explicit replacements, account choice, OAuth, and the final add. Never places an order.
@@ -136,55 +139,113 @@ export class KrogerCheckout {
   cancelKrogerCheckout(messageId: string, memberId: string): string {
     const pending = this.getPendingKrogerCheckout();
     if (!pending) return this.ctx.saveAndReturnReply(messageId, "There isn’t a pending Kroger checkout to cancel.");
-    if (pending.requesterId !== memberId) return this.ctx.saveAndReturnReply(messageId, "Only the member who started this checkout can cancel it.");
+    // The availability review is about the shared cart, so anyone can back out of it.
+    // Account choice and sign-in belong to the requester's Kroger account.
+    if (pending.requesterId !== memberId && pending.status !== "replacement_review") {
+      return this.ctx.saveAndReturnReply(messageId, "Only the member who started this checkout can cancel it.");
+    }
     this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ? AND status <> 'adding'").run(this.ctx.householdId);
     this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
     return this.ctx.saveAndReturnReply(messageId, "Cancelled Kroger cart setup. GroupCart and Kroger carts were left unchanged.");
   }
 
-  formatKrogerReplacementSuggestions(
-    issues: Array<KrogerCartAvailabilityIssue & { resolved?: boolean }>,
-    locationId?: string,
-  ): string {
+  formatKrogerReplacementSuggestions(issues: ReviewIssue[], locationId?: string): string {
     const lines = issues.map((issue, index) => {
+      const number = index + 1;
       const suggestions = issue.alternatives.length
         ? issue.alternatives.map((product, optionIndex) => {
           const price = currentPriceCents(product);
           return `   ${optionIndex + 1}) ${product.description}${product.size ? ` · ${product.size}` : ""}${price === null ? "" : ` — ${money(price)}`}`;
         }).join("\n")
-        : "   No in-stock alternatives were returned. Cancel checkout, then remove or search for another product.";
-      return `${index + 1}) ${issue.resolved ? "Resolved" : "Unavailable"}: ${issue.name}${locationId ? ` at store ${locationId}` : " at the configured store"}\n${issue.resolved ? "   Replacement selected by a household member." : suggestions}`;
+        : `   No in-stock alternatives at this store. Text “remove ${number}” to drop it from GroupCart.`;
+      const resolvedNote = issue.resolution === "removed"
+        ? "   Removed from GroupCart by a household member."
+        : "   Replacement selected by a household member.";
+      return `${number}) ${issue.resolved ? "Resolved" : "Unavailable"}: ${issue.name}${locationId ? ` at store ${locationId}` : " at the configured store"}\n${issue.resolved ? resolvedNote : suggestions}`;
     });
+    const open = issues.filter((issue) => !issue.resolved).length;
+    const hasAlternatives = issues.some((issue) => !issue.resolved && issue.alternatives.length);
     const storeDescription = locationId ? `store ${locationId}` : "the configured store";
-    return `Before checkout, Kroger’s availability check found ${issues.length} unavailable item${issues.length === 1 ? "" : "s"}. Suggested alternatives are not added automatically:\n${lines.join("\n")}\nTo choose one, text “replace 1 with 2” (unavailable-item number, then suggestion number). I’ll update GroupCart only after that explicit choice, and everyone must approve the changed cart again. Confirm the Kroger account uses the same store as GroupCart (${storeDescription}). Nothing has been sent to Kroger. Text “cancel checkout” to leave the cart unchanged.`;
+    const choices = [
+      hasAlternatives ? "“replace 1 with 2” to swap in a suggestion (unavailable-item number, then suggestion number)" : "",
+      `“remove 1” to drop an unavailable item for everyone${open > 1 ? " (or “remove unavailable” for all of them)" : ""}`,
+      "“cancel checkout” to stop and leave the cart unchanged",
+    ].filter(Boolean);
+    return `Before checkout, Kroger’s availability check found ${issues.length} unavailable item${issues.length === 1 ? "" : "s"}. Nothing is swapped or dropped automatically:\n${lines.join("\n")}\nAnyone in the group can text ${choices.join("; ")}. Replacing or removing changes the cart, so everyone approves again before checkout. Confirm the Kroger account uses the same store as GroupCart (${storeDescription}). Nothing has been sent to Kroger.`;
   }
 
   krogerReplacementPrompt(): string {
     const row = this.ctx.db.prepare("SELECT issues_json FROM pending_kroger_replacements WHERE household_id = ?")
       .get(this.ctx.householdId) as { issues_json: string } | undefined;
     if (!row) return "Kroger replacement suggestions expired. Text “checkout” to run the availability check again.";
-    const issues = JSON.parse(row.issues_json) as Array<KrogerCartAvailabilityIssue & { resolved?: boolean }>;
+    const issues = JSON.parse(row.issues_json) as ReviewIssue[];
     return this.formatKrogerReplacementSuggestions(issues);
   }
 
-  handleKrogerReplacementChoice(messageId: string, memberId: string, itemNumber: number, optionNumber: number): string {
-    const pending = this.getPendingKrogerCheckout();
+  /** Numbers (1-based) of unresolved unavailable items whose name contains every word of `query`. */
+  unavailableIssueNumbersMatching(query: string): number[] {
     const row = this.ctx.db.prepare("SELECT issues_json FROM pending_kroger_replacements WHERE household_id = ?")
       .get(this.ctx.householdId) as { issues_json: string } | undefined;
-    if (!pending || pending.status !== "replacement_review" || !row) {
-      return this.ctx.saveAndReturnReply(messageId, "There isn’t an active Kroger replacement review. Text “checkout” to check the current cart.");
+    if (!row) return [];
+    const tokens = query.toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    const issues = JSON.parse(row.issues_json) as ReviewIssue[];
+    return issues.flatMap((issue, index) => {
+      const name = issue.name.toLocaleLowerCase();
+      return !issue.resolved && tokens.length && tokens.every((token) => name.includes(token)) ? [index + 1] : [];
+    });
+  }
+
+  /**
+   * Drop unavailable items from GroupCart for everyone (they can't be bought at
+   * this store anyway), as one undoable cart change.
+   */
+  removeUnavailableItems(messageId: string, memberId: string, which: number[] | "all"): string {
+    const review = this.#activeReview(messageId);
+    if (typeof review === "string") return review;
+    const { issues } = review;
+    const numbers = which === "all"
+      ? issues.flatMap((issue, index) => issue.resolved ? [] : [index + 1])
+      : [...new Set(which)];
+    const invalid = numbers.filter((number) => !issues[number - 1] || issues[number - 1]!.resolved);
+    if (!numbers.length || invalid.length) {
+      const open = issues.flatMap((issue, index) => issue.resolved ? [] : [`${index + 1}) ${issue.name}`]);
+      return this.ctx.saveAndReturnReply(messageId, `${invalid.length ? `${invalid.join(", ")} ${invalid.length === 1 ? "isn’t" : "aren’t"} an unresolved unavailable item. ` : ""}Still unavailable: ${open.join("; ")}. Text “remove” plus the number, or “cancel checkout”. Nothing was removed.`);
     }
-    const current = this.m.cart.snapshot();
-    if (current.revision !== pending.revision) {
-      this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
-      this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
-      return this.ctx.saveAndReturnReply(messageId, "The cart changed during the availability review. I discarded those suggestions and left the cart as-is; everyone must approve the current cart before a fresh checkout check.");
-    }
-    const issues = JSON.parse(row.issues_json) as Array<KrogerCartAvailabilityIssue & { resolved?: boolean }>;
+    this.ctx.db.exec("BEGIN IMMEDIATE");
+    try {
+      const undoSnapshot = this.m.cart.captureCartItems();
+      const removed: string[] = [];
+      for (const number of numbers) {
+        const issue = issues[number - 1]!;
+        this.ctx.db.prepare("DELETE FROM cart_items WHERE id = ? AND household_id = ?").run(issue.itemId, this.ctx.householdId);
+        issue.resolved = true;
+        issue.resolution = "removed";
+        removed.push(issue.name);
+      }
+      this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?").run(this.ctx.householdId);
+      this.m.cart.recordUndo(memberId, `remove unavailable ${removed.join(", ")}`, undoSnapshot);
+      const { revision, allResolved } = this.#saveReviewProgress(issues);
+      const empty = !this.m.cart.snapshot().items.length;
+      const reply = allResolved
+        ? `Removed ${removed.join(", ")} from GroupCart for everyone (“undo” brings ${removed.length === 1 ? "it" : "them"} back). ${empty ? "The cart is now empty, so there’s nothing to check out." : `The cart changed, so everyone must approve revision ${revision}, then text “checkout” again.`}\n${this.m.cart.formatSummary(memberId)}`
+        : `Removed ${removed.join(", ")} from GroupCart for everyone. Resolve the rest:\n${this.formatKrogerReplacementSuggestions(issues)}`;
+      this.ctx.recordReply(messageId, reply);
+      this.ctx.db.exec("COMMIT");
+      return reply;
+    } catch (error) { this.ctx.db.exec("ROLLBACK"); throw error; }
+  }
+
+  handleKrogerReplacementChoice(messageId: string, memberId: string, itemNumber: number, optionNumber: number): string {
+    const review = this.#activeReview(messageId);
+    if (typeof review === "string") return review;
+    const { issues } = review;
     const issue = issues[itemNumber - 1];
+    if (issue && !issue.resolved && !issue.alternatives.length) {
+      return this.ctx.saveAndReturnReply(messageId, `Kroger didn’t suggest any in-stock alternatives for ${issue.name}. Text “remove ${itemNumber}” to drop it from GroupCart, or “cancel checkout”.`);
+    }
     const product = issue?.alternatives[optionNumber - 1];
     if (!issue || issue.resolved || !product) {
-      return this.ctx.saveAndReturnReply(messageId, `That choice doesn’t match an unresolved item and its suggestions. Use “replace item-number with option-number” (for example “replace 1 with 2”).`);
+      return this.ctx.saveAndReturnReply(messageId, `That choice doesn’t match an unresolved item and its suggestions. Use “replace item-number with option-number” (for example “replace 1 with 2”), or “remove 1” to drop an unavailable item.`);
     }
     const price = currentPriceCents(product);
     if (price === null || !product.upc) {
@@ -204,16 +265,8 @@ export class KrogerCheckout {
       this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?").run(this.ctx.householdId);
       this.m.cart.recordUndo(memberId, `replace unavailable ${issue.name} with ${product.description}`, undoSnapshot);
       issue.resolved = true;
-      this.ctx.db.prepare("UPDATE pending_kroger_replacements SET issues_json = ? WHERE household_id = ?")
-        .run(JSON.stringify(issues), this.ctx.householdId);
-      const revision = this.m.cart.snapshot().revision;
-      this.ctx.db.prepare("UPDATE pending_kroger_checkouts SET revision = ? WHERE household_id = ?")
-        .run(revision, this.ctx.householdId);
-      const allResolved = issues.every((entry) => entry.resolved);
-      if (allResolved) {
-        this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
-        this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
-      }
+      issue.resolution = "replaced";
+      const { revision, allResolved } = this.#saveReviewProgress(issues);
       const reply = allResolved
         ? `You chose ${product.description}${product.size ? ` · ${product.size}` : ""} at ${money(price)}. I updated GroupCart only because you explicitly selected it. The cart changed, so everyone must approve revision ${revision} before checkout.\n${this.m.cart.formatSummary(memberId)}`
         : `You chose ${product.description}${product.size ? ` · ${product.size}` : ""} at ${money(price)}. I updated GroupCart only because you explicitly selected it. Choose the remaining suggested replacements:\n${this.formatKrogerReplacementSuggestions(issues)}`;
@@ -221,6 +274,37 @@ export class KrogerCheckout {
       this.ctx.db.exec("COMMIT");
       return reply;
     } catch (error) { this.ctx.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** The open availability review, or a recorded reply explaining why there isn't a usable one. */
+  #activeReview(messageId: string): { issues: ReviewIssue[] } | string {
+    const pending = this.getPendingKrogerCheckout();
+    const row = this.ctx.db.prepare("SELECT issues_json FROM pending_kroger_replacements WHERE household_id = ?")
+      .get(this.ctx.householdId) as { issues_json: string } | undefined;
+    if (!pending || pending.status !== "replacement_review" || !row) {
+      return this.ctx.saveAndReturnReply(messageId, "There isn’t an active Kroger replacement review. Text “checkout” to check the current cart.");
+    }
+    if (this.m.cart.snapshot().revision !== pending.revision) {
+      this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
+      this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
+      return this.ctx.saveAndReturnReply(messageId, "The cart changed during the availability review. I discarded those suggestions and left the cart as-is; everyone must approve the current cart before a fresh checkout check.");
+    }
+    return { issues: JSON.parse(row.issues_json) as ReviewIssue[] };
+  }
+
+  /** Persist resolved issues; once every issue is resolved the review ends. Caller holds the transaction. */
+  #saveReviewProgress(issues: ReviewIssue[]): { revision: number; allResolved: boolean } {
+    this.ctx.db.prepare("UPDATE pending_kroger_replacements SET issues_json = ? WHERE household_id = ?")
+      .run(JSON.stringify(issues), this.ctx.householdId);
+    const revision = this.m.cart.snapshot().revision;
+    this.ctx.db.prepare("UPDATE pending_kroger_checkouts SET revision = ? WHERE household_id = ?")
+      .run(revision, this.ctx.householdId);
+    const allResolved = issues.every((entry) => entry.resolved);
+    if (allResolved) {
+      this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
+      this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
+    }
+    return { revision, allResolved };
   }
 
   krogerSignInUrl(memberId: string): string {
