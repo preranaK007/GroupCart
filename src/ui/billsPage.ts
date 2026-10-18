@@ -57,8 +57,14 @@ const styles = `
 .bl-bal-name { flex:1; min-width:0; font-weight:500; }
 .bl-amt { font-variant-numeric:tabular-nums; font-weight:500; white-space:nowrap; }
 .bl-pos { color:var(--gc-success); } .bl-neg { color:var(--gc-danger); } .bl-zero { color:var(--gc-muted); font-weight:400; font-size:var(--gc-fs-sm); }
-.bl-transfer { display:flex; align-items:center; gap:8px; }
-.bl-transfer .bl-amt { margin-left:auto; }
+.bl-transfer { display:grid; grid-template-columns:auto minmax(0,1fr) auto auto; align-items:center; gap:4px 12px; }
+.bl-pair { display:inline-flex; align-items:center; gap:2px; }
+.bl-tr-main { min-width:0; display:grid; gap:2px; }
+.bl-tr-who { font-weight:500; }
+.bl-tr-why { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
+.bl-tr-act { display:flex; justify-content:flex-end; }
+.bl-tr-act .gp-actions { flex-wrap:nowrap; }
+.bl-bal-what { color:var(--gc-muted); font-size:var(--gc-fs-xs); font-weight:400; margin-right:6px; }
 .bl-even { display:flex; align-items:center; gap:var(--gc-space-2); color:var(--gc-success); font-weight:500; padding:var(--gc-space-2) 0; }
 .bl-conn { display:grid; grid-template-columns:minmax(0,1fr); gap:var(--gc-space-3); }
 .bl-conn-row { display:flex; align-items:center; gap:var(--gc-space-3); min-width:0; }
@@ -125,11 +131,15 @@ const styles = `
 .bl-section:first-child { margin-top:0; }
 .bl-owes .bl-transfer { padding:10px 0; border-top:1px solid var(--gc-border); }
 .bl-owes .bl-transfer:first-child { border-top:0; }
-.bl-owes .bl-transfer .gc-meta { color:var(--gc-text); font-size:var(--gc-fs-md); }
+.bl-transfer.is-mine .bl-tr-who { color:var(--gc-accent); }
 .bl-hist-day { color:var(--gc-muted); font-size:var(--gc-fs-xs); }
 .bl-toast { position:fixed; left:50%; bottom:calc(var(--gc-space-5) + env(safe-area-inset-bottom)); transform:translateX(-50%) translateY(20px); opacity:0; z-index:40; max-width:min(560px, calc(100vw - 32px)); padding:12px 16px; border-radius:var(--gc-radius-md); background:var(--gc-tooltip-bg); color:var(--gc-tooltip-text); font-size:var(--gc-fs-sm); box-shadow:0 4px 12px rgba(0,0,0,.2); transition:opacity .2s ease, transform .2s ease; pointer-events:none; }
 .bl-toast.is-on { opacity:1; transform:translateX(-50%) translateY(0); }
 @media (max-width: 760px) {
+  .bl-transfer { grid-template-columns:auto minmax(0,1fr) auto; }
+  .bl-tr-act { grid-column:2 / -1; }
+  .bl-tr-act .gp-actions { flex-wrap:wrap; }
+  #blMoney .gc-card-head { flex-wrap:wrap; row-gap:var(--gc-space-2); }
   #blBill.gc-dialog { width:100%; }
   .bl-fields { grid-template-columns:1fr 1fr; }
   .bl-split .bl-in { width:84px; }
@@ -266,9 +276,9 @@ ${POINTS_CLIENT_JS}
     var payer = bill.payerId ? GC.avatar(member(bill.payerId), all, 20) : "";
     return payer + (owing.length ? '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span><span class="gc-avatars">' + owing.map(function (m) { return GC.avatar(m, all, 20); }).join("") + '</span>' : "");
   }
-  function billRow(bill, withDate, chip) {
+  function billRow(bill, withDate, chip, subHtml) {
     var title = '<span class="bl-title">' + (withDate && bill.dueDate ? '<span class="bl-mini" aria-hidden="true">' + GC.esc(bill.emoji) + '</span>' : "") + '<span>' + GC.esc(bill.vendor || "Bill") + '</span></span>';
-    var sub = '<div class="bl-sub">' + people(bill) + (bill.recurring ? '<span title="Repeats monthly">' + GC.icon("sync") + '</span>' : "") + '</div>';
+    var sub = '<div class="bl-sub">' + (subHtml || people(bill)) + (bill.recurring ? '<span title="Repeats monthly">' + GC.icon("sync") + '</span>' : "") + '</div>';
     return '<li class="gc-list-item bl-row" tabindex="0" role="button" data-bill="' + GC.esc(bill.id) + '">' + (withDate ? dateBadge(bill) : '<span class="bl-emoji bl-cat-' + bill.category + '" aria-hidden="true">' + GC.esc(bill.emoji) + '</span>')
       + '<div class="gc-list-main">' + title + sub + '</div><div class="bl-trail"><span class="gc-amount">' + (bill.totalCents ? money(bill.totalCents, bill.currency) : "–") + '</span>' + (chip === undefined ? statusChip(bill) : chip) + '</div></li>';
   }
@@ -286,11 +296,11 @@ ${POINTS_CLIENT_JS}
     $("blReviewMeta").textContent = review.length ? String(review.length) : "";
     $("blReviewList").innerHTML = review.map(reviewRow).join("");
     // Outstanding: bills still to be paid to the company. What roommates owe each other is in renderBalances.
-    var upcoming = bills.filter(function (b) { return b.state === "saved" && !b.paidAt; }).sort(function (a, b) { return (a.dueDate || "9999").localeCompare(b.dueDate || "9999"); });
+    var upcoming = bills.filter(function (b) { return b.state === "saved" && !b.paidAt && (b.dueDate || b.category === "rent" || b.category === "utilities" || b.category === "internet"); }).sort(function (a, b) { return (a.dueDate || "9999").localeCompare(b.dueDate || "9999"); });
     var total = upcoming.reduce(function (t, b) { return t + (b.currency === "USD" ? b.totalCents || 0 : 0); }, 0);
     $("blDue").hidden = !upcoming.length;
     $("blUpcomingMeta").textContent = upcoming.length ? GC.dollars(total) : "";
-    $("blUpcomingList").innerHTML = upcoming.map(function (b) { return billRow(b, true); }).join("");
+    $("blUpcomingList").innerHTML = upcoming.map(function (b) { return billRow(b, true, undefined, GC.esc(whoPays(b))); }).join("");
     var open = upcoming.length + state.data.balances.transfers.length;
     $("blOutCount").textContent = open ? String(open) : "";
     // History: every saved bill or shared expense and every payment back, newest first.
@@ -299,6 +309,16 @@ ${POINTS_CLIENT_JS}
       .sort(function (a, b) { return String(b.at).localeCompare(String(a.at)); });
     $("blHistList").innerHTML = events.length ? events.map(function (e) { return e.html; }).join("")
       : '<li class="gc-empty">' + GC.icon("receipt") + '<p class="gc-empty-title">Nothing yet</p><p class="gc-empty-text">Bills, shared expenses, and payments back show up here.</p></li>';
+  }
+  /** "You pay it · $20.00 each" / "Sami pays it · your share $20.00". */
+  function whoPays(bill) {
+    var me = state.data.viewerId;
+    var payer = bill.payerId === me ? "You pay it" : bill.payerId ? first(member(bill.payerId).name) + " pays it" : "Nobody’s picked to pay it";
+    var owing = bill.shares.filter(function (s) { return s.cents > 0 && s.memberId !== bill.payerId; });
+    var mine = owing.find(function (s) { return s.memberId === me; });
+    var same = owing.length > 1 && owing.every(function (s) { return s.cents === owing[0].cents; });
+    var shares = mine ? "your share " + GC.dollars(mine.cents) : same ? GC.dollars(owing[0].cents) + " each from the others" : owing.length ? owing.map(function (s) { return first(member(s.memberId).name) + " " + GC.dollars(s.cents); }).join(", ") : "";
+    return payer + (shares ? " · " + shares : "");
   }
   function shortDay(iso) { return iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : ""; }
   function historyBillRow(bill) {
@@ -329,16 +349,22 @@ ${POINTS_CLIENT_JS}
   }
   function renderBalances() {
     var b = state.data.balances, all = ids();
+    var me = state.data.viewerId;
     var rows = b.net.slice().sort(function (x, y) { return y.cents - x.cents; }).map(function (e) {
       var m = state.data.members.find(function (x) { return x.id === e.memberId; }) || { id: e.memberId, name: e.name };
-      var amt = e.cents > 0 ? '<span class="bl-amt bl-pos">+' + GC.dollars(e.cents) + '</span>' : e.cents < 0 ? '<span class="bl-amt bl-neg">−' + GC.dollars(-e.cents) + '</span>' : '<span class="bl-amt bl-zero">Even</span>';
-      return '<li>' + GC.avatar(m, all, 32) + '<span class="bl-bal-name">' + GC.esc(m.name) + '</span>' + amt + '</li>';
+      var amt = e.cents > 0 ? '<span class="bl-amt bl-pos"><span class="bl-bal-what">gets back</span>' + GC.dollars(e.cents) + '</span>' : e.cents < 0 ? '<span class="bl-amt bl-neg"><span class="bl-bal-what">owes</span>' + GC.dollars(-e.cents) + '</span>' : '<span class="bl-amt bl-zero">Even</span>';
+      return '<li>' + GC.avatar(m, all, 32) + '<span class="bl-bal-name">' + GC.esc(m.id === me ? m.name + " (you)" : m.name) + '</span>' + amt + '</li>';
     }).join("");
     var settle = b.transfers.length
       ? '<div class="bl-owes">' + b.transfers.map(function (t, i) {
-        var pay = window.GCPay ? window.GCPay.actions(t) : ""; // money & points: your own debts get Pay + Mark paid
-        return '<div class="bl-transfer">' + GC.avatar({ id: t.fromId, name: t.fromName }, all, 24) + '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span>' + GC.avatar({ id: t.toId, name: t.toName }, all, 24)
-          + '<span class="gc-meta">' + GC.esc(first(t.fromName)) + ' pays ' + GC.esc(first(t.toName)) + '</span><span class="bl-amt">' + GC.dollars(t.cents) + '</span>' + (pay ? "" : '<button type="button" class="gc-btn gc-btn-text gc-btn-sm" data-settle="' + i + '">Record</button>') + '</div>' + pay;
+        var mine = t.fromId === me, toMe = t.toId === me;
+        var who = mine ? "You owe " + first(t.toName) : toMe ? first(t.fromName) + " owes you" : first(t.fromName) + " owes " + first(t.toName);
+        var why = (t.items || []).map(function (item) { return (item.cents < 0 ? "less " : "") + item.label + " " + GC.dollars(Math.abs(item.cents)); }).join(" · ");
+        var pay = mine && window.GCPay ? window.GCPay.actions(t) : ""; // money & points: your own debts get Pay + Mark paid
+        var act = pay || '<button type="button" class="gc-btn gc-btn-text gc-btn-sm" data-settle="' + i + '">' + (toMe ? "Got paid" : "Record") + '</button>';
+        return '<div class="bl-transfer' + (mine ? " is-mine" : "") + '"><span class="bl-pair">' + GC.avatar({ id: t.fromId, name: t.fromName }, all, 24) + '<span class="bl-arrow">' + GC.icon("chevronRight") + '</span>' + GC.avatar({ id: t.toId, name: t.toName }, all, 24) + '</span>'
+          + '<div class="bl-tr-main"><span class="bl-tr-who">' + GC.esc(who) + '</span>' + (why ? '<span class="bl-tr-why">For ' + GC.esc(why) + '</span>' : "") + '</div>'
+          + '<span class="bl-amt">' + GC.dollars(t.cents) + '</span><div class="bl-tr-act">' + act + '</div></div>';
       }).join("") + '</div>'
       : '<div class="bl-even">' + GC.icon("checkCircle") + 'Everyone’s even</div>';
     $("blBalancesBody").innerHTML = '<ul class="bl-bal">' + rows + '</ul>';
@@ -346,8 +372,10 @@ ${POINTS_CLIENT_JS}
   }
   function renderConnections() {
     var i = state.data.integrations, sw = i.splitwise, an = i.anthropic;
-    var swChip = sw.live ? GC.chip("Connected", "success", "check") : GC.chip("Simulated", "neutral");
-    var swSub = sw.lastBill ? "Last: " + sw.lastBill.vendor + " · " + sw.lastBill.status : sw.live ? "Logs each saved bill" : "Nothing is sent";
+    // Live mode without Splitwise credentials: it's simply not connected (only the local demo simulates it).
+    var swOff = sw.liveMode && !sw.live;
+    var swChip = sw.live ? GC.chip("Connected", "success", "check") : swOff ? GC.chip("Not connected", "neutral") : GC.chip("Simulated", "neutral");
+    var swSub = swOff ? "Optional · set up in .env" : sw.lastBill ? "Last: " + sw.lastBill.vendor + " · " + sw.lastBill.status : sw.live ? "Logs each saved bill" : "Nothing is sent";
     var anChip = an.configured ? GC.chip("Claude", "success", "check") : GC.chip("Your Claude", "accent", "spark");
     var anSub = an.configured ? an.model : "Ask your Claude to read images";
     $("blConn").innerHTML = '<div class="bl-conn-row"><span class="gc-card-icon">' + GC.icon("receipt") + '</span><span class="bl-conn-name">Splitwise<span class="gc-meta">' + GC.esc(swSub) + '</span></span>' + swChip + '</div>'
@@ -488,7 +516,8 @@ ${POINTS_CLIENT_JS}
     if (e.reading && e.reading.label && e.reading.method !== "manual") chips.push(GC.chip(e.reading.label, e.reading.confidence === "low" ? "warning" : "accent", "spark"));
     if (e.reading && e.reading.error) chips.push(GC.chip(e.reading.error, "warning", "alert"));
     if (e.status === "paid") chips.push(GC.chip("Paid", "success", "check"));
-    if (e.splitwise) chips.push(GC.chip(e.splitwise.status === "logged" ? "In Splitwise" : e.splitwise.status === "simulated" ? "Splitwise: simulated" : "Splitwise: " + e.splitwise.status, e.splitwise.status === "failed" ? "danger" : "neutral", "receipt"));
+    // A "simulated" log means nothing was sent; say so only in the demo.
+    if (e.splitwise && (state.data.demoMode || e.splitwise.status !== "simulated")) chips.push(GC.chip(e.splitwise.status === "logged" ? "In Splitwise" : e.splitwise.status === "simulated" ? "Splitwise: simulated" : "Splitwise: " + e.splitwise.status, e.splitwise.status === "failed" ? "danger" : "neutral", "receipt"));
     if (chips.length) html += '<div class="bl-reading">' + chips.join("") + '</div>';
     html += '<div class="bl-fields">'
       + '<label class="bl-field" style="grid-column:1 / -1"><span class="bl-label">Vendor</span><input class="gc-input" id="beVendor" maxlength="48" placeholder="e.g. Xfinity" value="' + GC.esc(e.vendor) + '" /></label>'

@@ -13,6 +13,8 @@ export type BillsIntegrationStatus = {
   splitwise: {
     configured: boolean;
     live: boolean;
+    /** Spectrum is connected (not the local demo): without Splitwise credentials nothing is simulated, it's just off. */
+    liveMode: boolean;
     warnings: string[];
     lastBill: { vendor: string; status: string; at: string } | null;
     lastCheckout: Record<string, unknown>;
@@ -129,6 +131,8 @@ export function billsSplitwiseCard(): IntegrationCard {
   const status = currentStatus();
   const sw = status?.splitwise;
   const lastCheckout = sw?.lastCheckout as { state?: string; totalCents?: number } | undefined;
+  const off = Boolean(sw?.liveMode && !sw.live); // live mode without Splitwise credentials
+  const setup = sw?.warnings.length ? [{ label: "Setup", html: chip(`${sw.warnings.length} warning${sw.warnings.length === 1 ? "" : "s"}`, "warning", "alert") }] : [];
   return {
     id: "splitwise",
     name: "Splitwise",
@@ -136,19 +140,23 @@ export function billsSplitwiseCard(): IntegrationCard {
     summary: "Logs saved bills and grocery checkouts",
     status: !sw ? { label: "Not configured", tone: "neutral" }
       : sw.live ? { label: "Connected", tone: "success" }
+      : off ? { label: "Not connected", tone: "neutral" }
       : sw.configured ? { label: "Simulated (demo)", tone: "neutral" }
       : { label: "Simulated", tone: "neutral" },
-    facts: sw ? [
+    // Live mode without Splitwise has no log to show: only setup warnings, if any.
+    facts: off ? (setup.length ? setup : undefined) : sw ? [
       { label: "Mode", html: sw.live ? chip("Live", "accent", "lock") : chip("Nothing sent", "neutral") },
       { label: "Last bill", html: sw.lastBill ? `${escapeHtml(sw.lastBill.vendor || "Bill")} ${swStatusChip(sw.lastBill.status)}` : swStatusChip(undefined) },
       { label: "Last checkout", html: lastCheckout && lastCheckout.state && lastCheckout.state !== "none" ? `${typeof lastCheckout.totalCents === "number" ? escapeHtml(`$${(lastCheckout.totalCents / 100).toFixed(2)}`) : ""} ${swStatusChip(lastCheckout.state)}` : swStatusChip(undefined) },
-      ...(sw.warnings.length ? [{ label: "Setup", html: chip(`${sw.warnings.length} warning${sw.warnings.length === 1 ? "" : "s"}`, "warning", "alert") }] : []),
+      ...setup,
     ] : undefined,
     actions: button({ label: "Bills", variant: "outline", size: "sm", href: "/bills" })
       + (sw?.live ? button({ label: "Open Splitwise", variant: "text", size: "sm", href: "https://secure.splitwise.com", external: true }) : ""),
     tip: sw?.live
       ? "Each saved bill becomes one Splitwise expense paid by the payer, with everyone’s share."
-      : "Set SPLITWISE_API_KEY, SPLITWISE_GROUP_ID, and SPLITWISE_MEMBERS in .env and restart. Until then, logging is simulated.",
+      : off
+        ? "Optional. Set SPLITWISE_API_KEY, SPLITWISE_GROUP_ID, and SPLITWISE_MEMBERS in .env and restart to copy bills and grocery checkouts to Splitwise. Balances on Bills work without it."
+        : "Set SPLITWISE_API_KEY, SPLITWISE_GROUP_ID, and SPLITWISE_MEMBERS in .env and restart. Until then, logging is simulated.",
   };
 }
 

@@ -59,7 +59,7 @@ function checkoutLabel(context: SettingsContext): string {
       return chip(`Waiting for ${name ?? "sign-in"}`, "warning", "clock")
         + (pending.selectedMemberId ? button({ label: "Sign in", variant: "tonal", size: "sm", href: `/api/kroger/oauth/start?memberId=${encodeURIComponent(pending.selectedMemberId)}` }) : "");
     case "choosing_account": return chip("Choosing account", "warning", "clock");
-    case "replacement_review": return chip("Review swaps in chat", "warning", "alert");
+    case "replacement_review": return chip("Unavailable items to review", "warning", "alert") + button({ label: "Review", variant: "tonal", size: "sm", href: "/groceries" });
     case "adding": return chip("Sending to Kroger", "accent", "sync");
     default: return chip(pending.status.replace(/_/g, " "), "neutral");
   }
@@ -79,7 +79,7 @@ function krogerCard(context: SettingsContext): IntegrationCard {
       { label: "Store prices", html: configured && locationConfigured ? chip("On", "success", "check") : chip("Off", "neutral") },
       { label: "Checkout", html: checkoutLabel(context) },
     ],
-    actions: button({ label: "Open Kroger", variant: "outline", size: "sm", href: "https://www.kroger.com", external: true }),
+    actions: button({ label: "Open Kroger cart", variant: "outline", size: "sm", href: "https://www.kroger.com/cart", external: true }),
     tip: configured
       ? "Each shopper signs in to their own Kroger account at checkout. GroupCart adds items only; you place the order on Kroger."
       : "Add Kroger app credentials and a store ID to .env, then restart GroupCart.",

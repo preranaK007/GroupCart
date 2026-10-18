@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
-import { remoteAccessGuard } from "./auth.js";
+import { isLocalRequest, remoteAccessGuard, requestViewer } from "./auth.js";
 import { avatarFor } from "./profiles.js";
 import { CartStore, type CartSnapshot } from "./store.js";
 import { KrogerClient } from "./kroger.js";
@@ -13,7 +13,7 @@ import { renderHomePage } from "./ui/homePage.js";
 import { renderBillsPlaceholder, renderCalendarPlaceholder, renderChoresPlaceholder } from "./ui/placeholders.js";
 import { renderSettingsPage } from "./ui/settingsPage.js";
 import { renderNotice } from "./ui/shell.js";
-import { recentFeed, runCommands, runRoutes } from "./platform.js";
+import { notifyGroup, recentFeed, runCommands, runRoutes } from "./platform.js";
 import { runWithRequestSkin } from "./ui/themes.js";
 
 
@@ -40,6 +40,9 @@ function readJson(request: IncomingMessage): Promise<Record<string, unknown>> {
   });
 }
 
+/** Where a member finishes the order GroupCart filled: pick a pickup or delivery time and pay on Kroger. */
+const KROGER_CART_URL = "https://www.kroger.com/cart";
+
 function sendHtml(response: import("node:http").ServerResponse, status: number, html: string): void {
   response.writeHead(status, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
   response.end(html);
@@ -50,9 +53,9 @@ function sendJson(response: import("node:http").ServerResponse, status: number, 
   response.end(JSON.stringify(value));
 }
 
-function krogerCheckoutStatus(store: CartStore): { status: string; revision: number; selectedMemberId: string | null } | null {
+function krogerCheckoutStatus(store: CartStore): { status: string; revision: number; requesterId: string; selectedMemberId: string | null } | null {
   const pending = store.pendingKrogerCheckout();
-  return pending ? { status: pending.status, revision: pending.revision, selectedMemberId: pending.selectedMemberId } : null;
+  return pending ? { status: pending.status, revision: pending.revision, requesterId: pending.requesterId, selectedMemberId: pending.selectedMemberId } : null;
 }
 
 export function startDashboard(store: CartStore, port: number, demoMode: boolean, krogerClient?: KrogerClient, calendar?: CalendarService): Server {
@@ -72,7 +75,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
       const memberId = url.searchParams.get("memberId");
       const pending = store.pendingKrogerCheckout();
       if (!memberId || !pending || pending.status !== "awaiting_oauth" || pending.selectedMemberId !== memberId) {
-        return sendJson(response, 409, { error: "No matching approved Kroger checkout is waiting for sign-in. Start checkout in the iMessage group first." });
+        return sendJson(response, 409, { error: "No matching approved Kroger checkout is waiting for sign-in. Start one with Order with Kroger on Groceries, or text “checkout” in the group." });
       }
       const authorization = krogerClient.createUserAuthorization(memberId);
       response.writeHead(302, { location: authorization.url, "cache-control": "no-store" });
@@ -86,7 +89,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
       if (url.searchParams.has("error")) {
         sendHtml(response, 200, renderNotice({
           title: "Kroger sign-in cancelled",
-          message: "Kroger sign-in was cancelled. GroupCart was not changed. Return to the iMessage group to retry or text “cancel checkout”.",
+          message: "Kroger sign-in was cancelled. GroupCart was not changed. Sign in again from Groceries, or cancel the checkout there.",
           tone: "warning",
           links: [{ href: "/groceries", label: "Back to groceries" }],
         }));
@@ -99,17 +102,19 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
           authorization.memberId,
           (items) => krogerClient.addItemsToCart(authorization.accessToken, items),
         );
+        // The group was told the checkout is underway, so it hears how it ended.
+        await notifyGroup(result.message);
         sendHtml(response, result.ok ? 200 : 409, renderNotice({
           title: result.ok ? "Kroger cart ready" : "Checkout needs attention",
           message: result.message,
           tone: result.ok ? "success" : "warning",
-          links: [{ href: "https://www.kroger.com", label: "Open Kroger", external: true }, { href: "/groceries", label: "Back to groceries" }],
+          links: [{ href: KROGER_CART_URL, label: "Open Kroger cart", external: true }, { href: "/groceries", label: "Back to groceries" }],
         }));
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Kroger sign-in failed.";
         sendHtml(response, 400, renderNotice({
           title: "Kroger sign-in did not finish",
-          message: `${detail} Return to the iMessage group to try again. GroupCart has not cleared the approved list.`,
+          message: `${detail} Sign in again from Groceries. GroupCart has not cleared the approved list.`,
           tone: "danger",
           links: [{ href: "/groceries", label: "Back to groceries" }],
         }));
@@ -142,13 +147,21 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
       }));
     }
     if (request.method === "GET" && url.pathname === "/api/cart") {
+      const hostComputer = isLocalRequest(request);
       sendJson(response, 200, {
         ...safeSnapshot(store.snapshot()),
         lists: store.listsSnapshot(),
         demoMode,
+        // Who the page acts as (the Groceries buttons approve and order for this member only).
+        viewerId: requestViewer(request)?.member.id ?? null,
         krogerConfigured: Boolean(krogerClient),
         krogerLocationConfigured: Boolean(krogerClient?.hasLocation),
         krogerCheckout: krogerCheckoutStatus(store),
+        krogerReview: store.krogerReview(),
+        krogerLastCart: store.lastKrogerCart(),
+        hostComputer,
+        // Kroger returns from sign-in to 127.0.0.1, so a browser on another device can't finish it.
+        krogerSignInNeedsHost: Boolean(krogerClient?.signInReturnsToHost) && !hostComputer,
       });
       return;
     }
@@ -173,7 +186,8 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
     try {
       const body = await readJson(request);
       if (!demoMode && (url.pathname === "/api/approve" || url.pathname === "/api/checkout")) {
-        return sendJson(response, 403, { error: "In live mode, approve and checkout by messaging GroupCart from your configured Spectrum group." });
+        // These demo controls act for any member; live mode approves and orders as the signed-in member only.
+        return sendJson(response, 403, { error: "In live mode, use Approve and Order with Kroger on Groceries (as yourself), or text the group." });
       }
       if (url.pathname === "/api/demo-message") {
         if (!demoMode) return sendJson(response, 403, { error: "Demo messages are disabled while Spectrum is connected." });

@@ -383,12 +383,13 @@ export class ChatService {
   /**
    * Posts a member's message. Live mode relays it into the iMessage group as "Name: text" first. Then it is
    * processed exactly like a group message from that member, and GroupCart's reply is sent and recorded.
-   * Returns right after recording unless awaitReply is set.
+   * Returns right after recording unless awaitReply is set. `process` replaces the chat's processor for this one
+   * message (the Groceries page's buttons run GroupCart's built-in commands, never the coordinator).
    */
   async send(
     member: Member,
     input: { text: string; image?: Buffer; imageName?: string },
-    options: { source: "web" | "connector"; awaitReply?: boolean; /** Connector: which assistant ("Claude", "ChatGPT", "Grok"). */ via?: string } = { source: "web" },
+    options: { source: "web" | "connector"; awaitReply?: boolean; /** Connector: which assistant ("Claude", "ChatGPT", "Grok"). */ via?: string; process?: MemberMessageProcessor } = { source: "web" },
   ): Promise<{ message: ChatMessage; reply?: string | null }> {
     const text = input.text.replace(/\r\n/g, "\n").trim().slice(0, CHAT_TEXT_LIMIT);
     if (!text && !input.image) throw new ChatError(400, "Type a message first.");
@@ -432,7 +433,7 @@ export class ChatService {
         const attachments: CommandAttachment[] = stored
           ? [{ mimeType: stored.mimeType, name: imageName, read: memoize(() => readFile(join(this.#filesDir, stored!.file))) }]
           : [];
-        const reply = await this.#process({ messageId: `web:${message.id}`, memberId: member.id, memberName: member.name, text, attachments });
+        const reply = await (options.process ?? this.#process)({ messageId: `web:${message.id}`, memberId: member.id, memberName: member.name, text, attachments });
         if (reply) {
           if (group) {
             try { await group.respond(reply); } catch (error) {

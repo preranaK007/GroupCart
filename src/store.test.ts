@@ -99,11 +99,11 @@ test("member handles are normalized, aliases map to one member, and old rows kee
   second.close();
 });
 
-test("help keeps upstream's text and adds the calendar, Splitwise, and registered lines", () => {
+test("help keeps upstream's text and adds the calendar, splits/Splitwise, and registered lines", () => {
   const { store, alex } = newStore("help");
   registerHelp("Test feature: “ping” answers “pong”.");
   const help = store.processIncomingText(id(), alex.id, "help") ?? "";
-  for (const expected of [/start sharing with Maya and Jordan/, /Recurring lists:/, /Calendar: “calendar”/, /Splitwise: after checkout/, /Test feature: “ping”/]) {
+  for (const expected of [/start sharing with Maya and Jordan/, /Recurring lists:/, /Calendar: “calendar”/, /Splits: after checkout .* Splitwise/, /Test feature: “ping”/]) {
     assert.match(help, expected);
   }
   store.close();

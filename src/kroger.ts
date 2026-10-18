@@ -172,6 +172,15 @@ export class KrogerClient {
     return Boolean(this.locationId);
   }
 
+  /** True when Kroger returns from sign-in to this computer (a loopback redirect), so sign-in finishes only here. */
+  get signInReturnsToHost(): boolean {
+    try {
+      return ["127.0.0.1", "localhost", "[::1]"].includes(new URL(this.redirectUri).hostname);
+    } catch {
+      return false;
+    }
+  }
+
   get selectedLocationId(): string | undefined {
     return this.locationId;
   }

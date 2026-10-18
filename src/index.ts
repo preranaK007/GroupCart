@@ -19,7 +19,8 @@ import { setupChores } from "./chores.js";
 import { setupListsAndEvents } from "./listsEvents.js";
 import { setupKitchen } from "./kitchen.js"; // Kitchen: pantry and meal plans
 import { setupHouse } from "./house.js";
-import { recordGroupMessage, registerCommand, runCommands, setGroupPollSender, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
+import { recordGroupMessage, registerCommand, runCommands, setBuiltInCommands, setGroupPollSender, setGroupSender, stopSchedules, type CommandContext } from "./platform.js";
+import { setupGroceryActions } from "./groceryActions.js";
 import type { HouseholdCoordinator } from "./agent/coordinator.js";
 import { setupCoordinator } from "./agent/setup.js";
 import { setupProfilesAndChat } from "./profilesAndChat.js";
@@ -61,14 +62,14 @@ if (liveMode && splitwise.configured) {
 const krogerClient = config.krogerClientId && config.krogerClientSecret
   ? new KrogerClient(config.krogerClientId, config.krogerClientSecret, config.krogerLocationId, config.krogerRedirectUri, config.krogerCartModality)
   : undefined;
-// --- Google Calendar (sample schedules when GOOGLE_CLIENT_ID/SECRET are unset) ---
+// --- Calendar: Google sign-in when GOOGLE_CLIENT_ID/SECRET are set, calendar links always; samples only in demo mode ---
 const calendar = new CalendarService(
   store,
   config.dashboardPublicUrl,
   googleCalendarConfig.clientId && googleCalendarConfig.clientSecret
     ? new GoogleCalendarClient(googleCalendarConfig.clientId, googleCalendarConfig.clientSecret, googleCalendarConfig.redirectUri)
     : undefined,
-  { demoCalendarFile: googleCalendarConfig.demoCalendarFile }, // GROUP_CART_DEMO_CALENDAR
+  { demoMode: !liveMode, demoCalendarFile: googleCalendarConfig.demoCalendarFile }, // GROUP_CART_DEMO_CALENDAR
 );
 // Group-chat commands registered by feature modules run before cart processing (see src/platform.ts).
 registerCommand("calendar", ({ messageId, text }) => (text ? calendar.replyToCommand(messageId, text) : null));
@@ -131,6 +132,8 @@ async function runGroupCartCommand(message: CommandContext): Promise<string | nu
   }
   return store.processIncomingText(message.messageId, message.memberId, text);
 }
+// The Groceries page's buttons run a click through this directly, so they never go to the coordinator.
+setBuiltInCommands(runGroupCartCommand);
 // --- end shared member-message processing ---
 
 // --- Recurring-list check-ins in the local demo (upstream behavior): nothing is sent; a due check-in is shown
@@ -159,6 +162,10 @@ const social = setupProfilesAndChat({
 // --- Household coordinator: one Claude for the apartment, on the connecting roommate's account (src/agent/) ---
 coordinator = setupCoordinator({ store, chat: social.chat, kroger: krogerClient ?? null, port: config.port, runCommand: runGroupCartCommand });
 // --- end household coordinator ---
+// --- Groceries page buttons for the signed-in member (add, remove, approve, order with Kroger), posted to the group as
+// --- their messages (src/groceryActions.ts). The local demo keeps its own demo controls.
+if (liveMode) setupGroceryActions({ store, chat: social.chat, kroger: krogerClient ?? null });
+// --- end groceries page buttons ---
 // --- Money & points: pay-back links, points/streaks/leaderboard, Sunday digest (src/moneyPoints.ts) ---
 setupMoneyPoints({ store, demoMode: !liveMode, checkoutHooks: splitwise, paymentHandle: (memberId) => social.profiles.get(memberId)?.paymentHandle ?? "" });
 // --- end money & points ---

@@ -10,6 +10,7 @@
 //   registerPendingQuestion(owner, source)  a feature's open questions, so a bare "ok"/number goes to the newest one
 //   registerCardHandler(owner, handler)     taps on web chat cards (polls, buttons) whose id starts with "<owner>:"
 //   postCard(text, card) / cardReply(text, card)  a bot message with a card (see "Chat cards" below)
+//   runBuiltInCommand(context) GroupCart's own command handling for a member's text (index.ts installs it), never the coordinator
 //   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
 // Live mode sends notifyGroup() messages to the household group that the store persists (upstream's
@@ -147,6 +148,21 @@ export async function runCommands(context: CommandContext): Promise<string | nul
   }
   return null;
 }
+
+// --- Built-in commands: GroupCart's own handling of a member's text (feature commands, then the cart) ---
+// index.ts installs it. Web buttons (src/groceryActions.ts) run a click through it as that member's typed command,
+// so a click never goes to the household coordinator, even while one is connected.
+let builtInCommands: ((context: CommandContext) => Promise<string | null>) | null = null;
+
+export function setBuiltInCommands(handler: ((context: CommandContext) => Promise<string | null>) | null): void {
+  builtInCommands = handler;
+}
+
+export function runBuiltInCommand(context: CommandContext): Promise<string | null> {
+  if (!builtInCommands) throw new Error("GroupCart’s command handling isn’t set up.");
+  return builtInCommands(context);
+}
+// --- end built-in commands ---
 
 // --- Pending questions: who answers a bare "yes"/"ok" or a bare number ---
 /** Bare replies that more than one feature might be waiting for: "ok" (yes/ok/no) or "number" (an option pick). */

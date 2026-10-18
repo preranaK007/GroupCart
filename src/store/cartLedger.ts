@@ -11,6 +11,9 @@ import {
 import type { StoreContext, StoreModules } from "./context.js";
 import type { CartSnapshot, ItemRow } from "./types.js";
 
+/** Removal leaves an item alone unless the member shares it; this is the answer when they don't. */
+export const NOT_YOUR_ITEM_REPLY = "That item is in the cart, but it isn’t assigned to you, so I left it unchanged. Ask the person who added it to remove it or change the share.";
+
 /** The shared cart: items, splits, undo history, clearing, removal, approvals, and demo catalog adds. */
 export class CartLedger {
   constructor(private readonly ctx: StoreContext, private readonly m: StoreModules) {}
@@ -292,7 +295,7 @@ export class CartLedger {
     const eligible = matching.filter((item) => item.participantIds.includes(memberId));
     if (!eligible.length) {
       const reply = matching.length
-        ? "That item is in the cart, but it isn’t assigned to you, so I left it unchanged. Ask the person who added it to remove it or change the share."
+        ? NOT_YOUR_ITEM_REPLY
         : `I couldn’t find “${query}” in the cart, so nothing was removed. Text “cart” to review the current items.`;
       this.ctx.saveMessageReply(messageId, reply);
       return reply;

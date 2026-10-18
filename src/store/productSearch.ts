@@ -224,26 +224,40 @@ export class ProductSearch {
     this.ctx.db.exec("BEGIN IMMEDIATE");
     try {
       this.ctx.db.prepare("DELETE FROM pending_product_choices WHERE member_id = ?").run(memberId);
-      const undoSnapshot = this.m.cart.captureCartItems();
-      const itemId = `kroger:${chosen.productId}`;
-      // Sharing is decided when the item is actually added: whatever session
-      // the sender is in at choice time, not at search time.
-      const participantIds = this.m.sharing.participantsFor(memberId);
-      this.ctx.db.prepare(
-        "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      ).run(
-        randomUUID(), this.ctx.householdId, itemId, pending.quantity, memberId,
-        JSON.stringify(participantIds), new Date().toISOString(), chosen.description,
-        priceCents, "kroger", chosen.upc,
-      );
-      this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?")
-        .run(this.ctx.householdId);
-      this.m.cart.recordUndo(memberId, `add ${chosen.description}`, undoSnapshot);
-      const reply = `Added ${chosen.description} ${this.m.sharing.assignmentPhrase(participantIds)} at ${money(priceCents)}${chosen.size ? ` (${chosen.size})` : ""}.\n${this.m.cart.formatSummary(memberId)}`;
+      const reply = this.#insertProduct(memberId, chosen, pending.quantity, priceCents);
       this.ctx.recordReply(messageId, reply);
       this.ctx.db.exec("COMMIT");
       return reply;
     } catch (error) { this.ctx.db.exec("ROLLBACK"); throw error; }
+  }
+
+  /** Adds one exact Kroger product a member picked outside the chat (the Groceries page's “Add”). */
+  addProduct(messageId: string, memberId: string, product: KrogerProduct, quantity: number): string {
+    const priceCents = currentPriceCents(product);
+    if (priceCents === null) {
+      return this.ctx.saveAndReturnReply(messageId, `Kroger didn’t return a price for ${product.description} at the configured store, so I didn’t add it.`);
+    }
+    const reply = this.ctx.transactReply(messageId, () => this.#insertProduct(memberId, product, quantity, priceCents));
+    return reply ?? "";
+  }
+
+  /** One undoable cart add of a chosen Kroger product at its current price. Caller holds the transaction. */
+  #insertProduct(memberId: string, product: KrogerProduct, quantity: number, priceCents: number): string {
+    const undoSnapshot = this.m.cart.captureCartItems();
+    // Sharing is decided when the item is actually added: whatever session
+    // the sender is in at choice time, not at search time.
+    const participantIds = this.m.sharing.participantsFor(memberId);
+    this.ctx.db.prepare(
+      "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      randomUUID(), this.ctx.householdId, `kroger:${product.productId}`, quantity, memberId,
+      JSON.stringify(participantIds), new Date().toISOString(), product.description,
+      priceCents, "kroger", product.upc,
+    );
+    this.ctx.db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?")
+      .run(this.ctx.householdId);
+    this.m.cart.recordUndo(memberId, `add ${product.description}`, undoSnapshot);
+    return `Added ${product.description} ${this.m.sharing.assignmentPhrase(participantIds)} at ${money(priceCents)}${product.size ? ` (${product.size})` : ""}.\n${this.m.cart.formatSummary(memberId)}`;
   }
 
   /**

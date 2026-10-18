@@ -19,7 +19,7 @@ import {
   inferCategory, isCategory, isoDate, mentionsBill, parseBillCommand, parseDateText, relativeDue, shortDate, titleCase, validIsoDate,
   type BillCategory, type BillCommand, type DraftEdit, type SplitInput,
 } from "./billParse.js";
-import { computeSplit, dollars, MAX_BILL_CENTS, simplifyDebts, type BillItem, type Share, type SplitMode, type SplitSpec } from "./billSplit.js";
+import { computeSplit, dollars, MAX_BILL_CENTS, type BillItem, type Share, type SplitMode, type SplitSpec } from "./billSplit.js";
 import {
   API_IMAGE_TYPES, DEFAULT_ANTHROPIC_MODEL, describeReading, extractWithClaude, MAX_API_IMAGE_BYTES,
   type AnthropicFetch, type BillExtraction, type Confidence, type ExtractionMethod,
@@ -27,7 +27,7 @@ import {
 import { demoExtractionFor, renderSampleBill, SAMPLE_KINDS, type SampleKind } from "./billSample.js";
 import { config, splitwiseConfig } from "./config.js";
 import {
-  cardReply, isRemoteAuthorized, notifyGroup, otherPendingQuestionAt, registerCardHandler, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, scheduleEvery,
+  cardReply, isRemoteAuthorized, notifyGroup, otherPendingQuestionAt, registerCardHandler, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery,
   type CardActionResult, type CommandAttachment, type CommandContext, type McpContent, type ToolCaller, type ToolSpec,
 } from "./platform.js";
 import type { ChatCard, ChatCardAction } from "./chat.js";
@@ -215,6 +215,14 @@ function firstName(name: string): string {
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** One roommate owing another: the amount, and what it's for (a negative item reduces it, like a payment back). */
+export type Transfer = { fromId: string; fromName: string; toId: string; toName: string; cents: number; items: Array<{ label: string; cents: number }> };
+
+/** Rent, utilities and internet are paid to the company later; other expenses were paid when they happened. */
+export function isBillToPay(category: BillCategory): boolean {
+  return category === "rent" || category === "utilities" || category === "internet";
 }
 
 export class BillsService {
@@ -908,10 +916,13 @@ export class BillsService {
     const wasSaved = bill.state === "saved";
     bill.state = "saved";
     bill.savedAt = bill.savedAt ?? this.#nowIso();
-    if (!bill.dueDate && bill.category === "groceries" && !bill.paidAt) bill.paidAt = this.#nowIso(); // receipts are already paid
+    // Receipts, IOUs and other one-off expenses with no due date were paid when they happened; only bills with a due
+    // date (or rent and utilities) wait to be paid to the company.
+    if (!bill.dueDate && !isBillToPay(bill.category) && !bill.paidAt) bill.paidAt = this.#nowIso();
     this.#updateBill(bill);
     this.#clearPendingFor(bill.id);
-    const splitwiseNote = wasSaved ? (bill.splitwise?.status === "logged" ? " Splitwise copy not changed." : "") : ` ${await this.#logToSplitwise(bill.id)}`;
+    const logged = wasSaved ? "" : await this.#logToSplitwise(bill.id);
+    const splitwiseNote = wasSaved ? (bill.splitwise?.status === "logged" ? " Splitwise copy not changed." : "") : logged ? ` ${logged}` : "";
     const saved = this.getBill(bill.id)!;
     const members = this.members();
     const due = saved.dueDate ? ` (due ${shortDate(saved.dueDate, this.#now())})` : "";
@@ -1056,19 +1067,34 @@ export class BillsService {
   // -------------------------------------------------------------------------
 
   /** Net balance per member (+ is owed money) from saved bills, grocery checkouts, and payments; plus simplified transfers. */
-  balances(): { net: Array<{ memberId: string; name: string; cents: number }>; transfers: Array<{ fromId: string; fromName: string; toId: string; toName: string; cents: number }>; counts: { bills: number; checkouts: number; payments: number } } {
+  /**
+   * Each member's net, and who owes whom one pair of roommates at a time. Each line lists what's behind it: the
+   * shares one still owes the other (payments back cover the oldest first), less what the other still owes them.
+   */
+  balances(): { net: Array<{ memberId: string; name: string; cents: number }>; transfers: Transfer[]; counts: { bills: number; checkouts: number; payments: number } } {
     const members = this.members();
     const net = new Map<string, number>(members.map((member) => [member.id, 0]));
     const names = new Map(members.map((member) => [member.id, member.name]));
     const add = (id: string, cents: number) => net.set(id, (net.get(id) ?? 0) + cents);
+    // owed["from>to"]: the shares "from" owes "to", oldest first once sorted.
+    const owed = new Map<string, Array<{ label: string; cents: number; at: string }>>();
+    const owe = (from: string, to: string, cents: number, label: string, at: string) => {
+      if (from === to || cents <= 0) return;
+      const list = owed.get(`${from}>${to}`) ?? [];
+      list.push({ label, cents, at });
+      owed.set(`${from}>${to}`, list);
+    };
     const bills = this.listBills(["saved"]).filter((bill) => bill.payerId && bill.totalCents && bill.currency === "USD");
     for (const bill of bills) {
       add(bill.payerId!, bill.totalCents!);
-      for (const share of bill.shares) add(share.memberId, -share.cents);
+      for (const share of bill.shares) {
+        add(share.memberId, -share.cents);
+        owe(share.memberId, bill.payerId!, share.cents, bill.vendor || CATEGORY_LABEL[bill.category], bill.savedAt ?? bill.createdAt);
+      }
     }
     let checkouts = 0;
     try {
-      const rows = this.#db.prepare("SELECT payer_member_id, total_cents, shares_json FROM splitwise_expenses WHERE household_id = ? AND payer_member_id IS NOT NULL").all(this.#household) as Array<{ payer_member_id: string; total_cents: number; shares_json: string }>;
+      const rows = this.#db.prepare("SELECT payer_member_id, total_cents, shares_json, created_at FROM splitwise_expenses WHERE household_id = ? AND payer_member_id IS NOT NULL").all(this.#household) as Array<{ payer_member_id: string; total_cents: number; shares_json: string; created_at: string }>;
       for (const row of rows) {
         const shares = jsonParse<Array<{ memberId: string; name: string; paidCents: number; owedCents: number }>>(row.shares_json, []);
         if (shares.reduce((sum, share) => sum + share.owedCents, 0) !== row.total_cents) continue;
@@ -1076,13 +1102,46 @@ export class BillsService {
         for (const share of shares) {
           if (!names.has(share.memberId)) names.set(share.memberId, share.name);
           add(share.memberId, share.paidCents - share.owedCents);
+          owe(share.memberId, row.payer_member_id, share.owedCents - share.paidCents, "Grocery run", row.created_at);
         }
       }
     } catch { /* no grocery checkout log yet */ }
-    const payments = this.#db.prepare("SELECT from_member_id, to_member_id, cents FROM bill_payments WHERE household_id = ?").all(this.#household) as Array<{ from_member_id: string; to_member_id: string; cents: number }>;
-    for (const payment of payments) { add(payment.from_member_id, payment.cents); add(payment.to_member_id, -payment.cents); }
+    for (const list of owed.values()) list.sort((x, y) => x.at.localeCompare(y.at));
+    const payments = this.#db.prepare("SELECT from_member_id, to_member_id, cents, created_at FROM bill_payments WHERE household_id = ? ORDER BY created_at").all(this.#household) as Array<{ from_member_id: string; to_member_id: string; cents: number; created_at: string }>;
+    for (const payment of payments) {
+      add(payment.from_member_id, payment.cents); add(payment.to_member_id, -payment.cents);
+      // A payment back settles the payer's oldest shares to that person; anything over that, the other now owes.
+      let left = payment.cents;
+      for (const item of owed.get(`${payment.from_member_id}>${payment.to_member_id}`) ?? []) {
+        const take = Math.min(item.cents, left);
+        item.cents -= take;
+        left -= take;
+        if (!left) break;
+      }
+      owe(payment.to_member_id, payment.from_member_id, left, "Overpaid", payment.created_at);
+    }
     const list = [...net.entries()].map(([memberId, cents]) => ({ memberId, name: names.get(memberId) ?? "Former member", cents }));
-    const transfers = simplifyDebts(list).map((transfer) => ({ fromId: transfer.from, fromName: names.get(transfer.from) ?? "Former member", toId: transfer.to, toName: names.get(transfer.to) ?? "Former member", cents: transfer.cents }));
+    /** What's still owed from→to, by label, signed. */
+    const items = (from: string, to: string, sign: number) => {
+      const byLabel = new Map<string, number>();
+      for (const item of owed.get(`${from}>${to}`) ?? []) if (item.cents) byLabel.set(item.label, (byLabel.get(item.label) ?? 0) + item.cents);
+      return [...byLabel].map(([label, cents]) => ({ label, cents: sign * cents }));
+    };
+    const ids = [...names.keys()];
+    const transfers: Transfer[] = [];
+    ids.forEach((a, index) => {
+      for (const b of ids.slice(index + 1)) {
+        const behind = [...items(a, b, 1), ...items(b, a, -1)];
+        const cents = behind.reduce((sum, item) => sum + item.cents, 0);
+        if (cents === 0) continue;
+        const [from, to, sign] = cents > 0 ? [a, b, 1] : [b, a, -1];
+        transfers.push({
+          fromId: from, fromName: names.get(from) ?? "Former member", toId: to, toName: names.get(to) ?? "Former member", cents: Math.abs(cents),
+          items: behind.map((item) => ({ label: item.label, cents: sign * item.cents })).sort((x, y) => y.cents - x.cents),
+        });
+      }
+    });
+    transfers.sort((x, y) => y.cents - x.cents);
     return { net: list, transfers, counts: { bills: bills.length, checkouts, payments: payments.length } };
   }
 
@@ -1194,6 +1253,8 @@ export class BillsService {
       this.#db.prepare("UPDATE bill_bills SET sw_status = ?, sw_mode = ?, sw_expense_id = COALESCE(?, sw_expense_id), sw_url = COALESCE(?, sw_url), sw_error = ?, sw_attempts = sw_attempts + ? WHERE id = ? AND household_id = ?")
         .run(status, mode, patch.expenseId ?? null, patch.url ?? null, patch.error ?? null, patch.attempt ? 1 : 0, bill.id, this.#household);
     };
+    // Live mode without Splitwise credentials: nothing to log and nothing to claim.
+    if (this.#liveMode && !this.#sw.live) return "";
     if (!this.#sw.live || !this.#sw.client || this.#sw.groupId === undefined) {
       setStatus("simulated", "simulated", { error: null });
       return this.#splitwiseLine(this.getBill(bill.id)!);
@@ -1231,7 +1292,7 @@ export class BillsService {
   #splitwiseLine(bill: Bill): string {
     switch (bill.splitwise?.status) {
       case "logged": return "Logged to Splitwise.";
-      case "simulated": return this.#sw.configured ? "Splitwise: simulated in demo mode." : "Splitwise: simulated (not connected).";
+      case "simulated": return this.#liveMode ? "" : this.#sw.configured ? "Splitwise: simulated in demo mode." : "Splitwise: simulated (not connected).";
       case "failed": return `Splitwise: not logged yet (${(bill.splitwise.error ?? "error").replace(/\.$/, "")}); I’ll retry.`;
       case "sending":
       case "pending": return "Splitwise: logging…";
@@ -1321,12 +1382,13 @@ export class BillsService {
     };
   }
 
-  integrationStatus(): { splitwise: { configured: boolean; live: boolean; warnings: string[]; lastBill: { vendor: string; status: string; at: string } | null; lastCheckout: Record<string, unknown> }; anthropic: { configured: boolean; model: string } } {
+  integrationStatus(): { splitwise: { configured: boolean; live: boolean; liveMode: boolean; warnings: string[]; lastBill: { vendor: string; status: string; at: string } | null; lastCheckout: Record<string, unknown> }; anthropic: { configured: boolean; model: string } } {
     const row = this.#db.prepare("SELECT vendor, sw_status, saved_at FROM bill_bills WHERE household_id = ? AND state = 'saved' AND sw_status IS NOT NULL ORDER BY saved_at DESC LIMIT 1").get(this.#household) as { vendor: string; sw_status: string; saved_at: string } | undefined;
     return {
       splitwise: {
         configured: this.#sw.configured,
         live: this.#sw.live,
+        liveMode: this.#liveMode,
         warnings: this.#sw.warnings,
         lastBill: row ? { vendor: row.vendor, status: row.sw_status, at: row.saved_at } : null,
         lastCheckout: splitwiseDashboardView(this.#store.latestSplitwiseExpense()),
@@ -1383,7 +1445,7 @@ export class BillsService {
         response.end(renderBillsPage({ demoMode: this.demoMode }));
         return true;
       }
-      if (path === "/api/bills") { sendJson(response, 200, this.dashboardState()); return true; }
+      if (path === "/api/bills") { sendJson(response, 200, { ...this.dashboardState(), viewerId: requestMember(request)?.memberId ?? null }); return true; }
       if (path === "/api/bills/summary") { sendJson(response, 200, this.summary()); return true; }
       const fileMatch = /^\/api\/bills\/files\/([0-9a-f-]{36})$/.exec(path);
       if (fileMatch) { this.#serveFile(response, fileMatch[1]!, url.searchParams.get("preview") === "1"); return true; }

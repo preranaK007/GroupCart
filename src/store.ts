@@ -3,10 +3,10 @@ import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { maskHandle, normalizeHandle } from "./config.js";
-import type { KrogerCartAvailabilityIssue } from "./kroger.js";
+import type { KrogerCartAvailabilityIssue, KrogerProduct } from "./kroger.js";
 import { parseListCommand } from "./lists.js";
 import { registerPendingQuestion } from "./platform.js";
-import { CartLedger } from "./store/cartLedger.js";
+import { CartLedger, NOT_YOUR_ITEM_REPLY } from "./store/cartLedger.js";
 import { StoreContext, type StoreModules } from "./store/context.js";
 import { GoogleCalendarAccounts } from "./store/googleCalendarAccounts.js";
 import { KrogerCheckout } from "./store/krogerCheckout.js";
@@ -24,6 +24,8 @@ import type {
   CartStoreOptions,
   CheckoutHooks,
   GoogleCalendarAccount,
+  KrogerCartSent,
+  KrogerReviewItem,
   ListReminderClaim,
   Member,
   MemberConfig,
@@ -41,6 +43,8 @@ export type {
   CheckoutHooks,
   CompletedCheckout,
   GoogleCalendarAccount,
+  KrogerCartSent,
+  KrogerReviewItem,
   ListReminderClaim,
   Member,
   MemberConfig,
@@ -59,6 +63,8 @@ export function isStoreCommand(text: string): boolean {
   return CART_COMMAND_PATTERN.test(normalized) || Boolean(parseSharingCommand(normalized)) || Boolean(parseListCommand(normalized));
 }
 
+/** Groceries-page adds and removals wait while a Kroger checkout is open, like the kitchen's cart adds. */
+const CART_LOCKED_REPLY = "The cart is locked while a Kroger checkout is in progress. Finish or cancel it first.";
 const CANCEL_CHECKOUT_PATTERN = /^(?:please\s+)?cancel\s+(?:the\s+)?(?:kroger\s+)?checkout(?:\s+please)?[.!]*$/i;
 const APPROVE_PATTERN = /^(approve|approve cart|confirm cart)$/i;
 /** Commands that stay available while a Kroger checkout is mid-flight. */
@@ -426,8 +432,46 @@ export class CartStore {
     }
   }
 
+  /**
+   * Adds one exact Kroger product for a member (the Groceries page's “Add”), the same cart add as picking it by
+   * number in the chat. Idempotent by message ID. Like the kitchen's adds, it waits while a Kroger checkout is open.
+   */
+  addKrogerProduct(messageId: string, memberId: string, product: KrogerProduct, quantity = 1): string {
+    const existing = this.#ctx.existingReply(messageId);
+    if (existing !== undefined) return existing ?? "";
+    if (this.pendingKrogerCheckout()) return this.#ctx.saveAndReturnReply(messageId, CART_LOCKED_REPLY);
+    return this.#m.search.addProduct(messageId, memberId, product, quantity);
+  }
+
+  /**
+   * Takes a member off one cart item (the Groceries page's “Remove”), the same change as the chat's “remove …”: an
+   * item only they have is deleted, a shared one loses just their share, and an item that isn't theirs is left
+   * alone. Idempotent by message ID; waits while a Kroger checkout is open.
+   */
+  removeItemForMember(messageId: string, memberId: string, itemId: string): string {
+    const existing = this.#ctx.existingReply(messageId);
+    if (existing !== undefined) return existing ?? "";
+    if (this.pendingKrogerCheckout()) return this.#ctx.saveAndReturnReply(messageId, CART_LOCKED_REPLY);
+    const { cart } = this.#m;
+    return this.#ctx.transactReply(messageId, () => {
+      const item = cart.snapshot().items.find((candidate) => candidate.id === itemId);
+      if (item && !item.participantIds.includes(memberId)) return NOT_YOUR_ITEM_REPLY;
+      return `${cart.removeParticipant(itemId, memberId)}\n${cart.formatSummary(memberId)}`;
+    }) ?? "";
+  }
+
   pendingKrogerCheckout(): PendingKrogerCheckout | undefined {
     return this.#m.checkout.getPendingKrogerCheckout();
+  }
+
+  /** The open availability review (unavailable items and Kroger's suggestions), or null when none is open. */
+  krogerReview(): KrogerReviewItem[] | null {
+    return this.#m.checkout.reviewItems();
+  }
+
+  /** The last approved list GroupCart added to a member's Kroger cart, or null before the first one. */
+  lastKrogerCart(): KrogerCartSent | null {
+    return this.#m.checkout.lastSentCart();
   }
 
   completeKrogerCartCheckout(

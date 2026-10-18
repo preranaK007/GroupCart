@@ -120,6 +120,19 @@ export type CartSnapshot = {
 };
 
 export type PendingKrogerCheckout = { requesterId: string; revision: number; selectedMemberId: string | null; status: string };
+/**
+ * One unavailable item in the open checkout review, numbered as the group answers it (“replace 1 with 2”,
+ * “remove 1”). `choice` is what the group picked so far; “settled” items were applied by an older version.
+ */
+export type KrogerReviewItem = {
+  number: number;
+  name: string;
+  quantity: number;
+  choice: { kind: "replace"; option: number } | { kind: "remove" } | { kind: "settled" } | null;
+  alternatives: Array<{ option: number; description: string; size: string | null; priceCents: number | null }>;
+};
+/** The last approved list GroupCart added to a member's Kroger cart (they finish the order on Kroger). */
+export type KrogerCartSent = { memberId: string; memberName: string; revision: number; itemCount: number; at: string };
 export type ProductSearchFn = (query: string) => Promise<{ total: number; products: KrogerProduct[] }>;
 
 // --- Google Calendar (per-member free/busy connection; src/store/googleCalendarAccounts.ts) ---

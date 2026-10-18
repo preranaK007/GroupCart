@@ -3,7 +3,7 @@ import { money } from "../cart.js";
 import type { StoreContext, StoreModules } from "./context.js";
 import type { ReviewCommand } from "./parsing.js";
 import { currentPriceCents } from "./pricing.js";
-import type { CartSnapshot, PendingKrogerCheckout } from "./types.js";
+import type { CartSnapshot, KrogerCartSent, KrogerReviewItem, PendingKrogerCheckout } from "./types.js";
 
 /** What the group chose for one unavailable item. Nothing is applied until every item has a choice. */
 type ReviewChoice = { kind: "replace"; option: number } | { kind: "remove" };
@@ -285,6 +285,37 @@ export class KrogerCheckout {
     return this.#formatReview(review);
   }
 
+  /** The open review's items for the Groceries page, numbered as the group's review commands use them. */
+  reviewItems(): KrogerReviewItem[] | null {
+    const review = this.#loadReview();
+    if (!review) return null;
+    return review.issues.map((issue, index) => ({
+      number: index + 1,
+      name: issue.name,
+      quantity: issue.quantity,
+      choice: issue.resolved ? { kind: "settled" } : issue.choice ?? null,
+      alternatives: issue.alternatives.map((product, optionIndex) => ({
+        option: optionIndex + 1,
+        description: product.description,
+        size: product.size,
+        priceCents: currentPriceCents(product),
+      })),
+    }));
+  }
+
+  /** The last list added to a member's Kroger cart (recorded by completeKrogerCartCheckout), or null. */
+  lastSentCart(): KrogerCartSent | null {
+    const row = this.ctx.db.prepare("SELECT value FROM app_state WHERE key = ?").get(this.#sentCartKey()) as { value: string } | undefined;
+    if (!row) return null;
+    const sent = JSON.parse(row.value) as Omit<KrogerCartSent, "memberName">;
+    const memberName = this.ctx.getMembers().find((member) => member.id === sent.memberId)?.name ?? "a former member";
+    return { ...sent, memberName };
+  }
+
+  #sentCartKey(): string {
+    return `kroger_cart_sent:${this.ctx.householdId}`;
+  }
+
   #loadReview(): Review | undefined {
     const pending = this.getPendingKrogerCheckout();
     if (pending?.status !== "replacement_review") return undefined;
@@ -465,6 +496,9 @@ export class KrogerCheckout {
         .run(snapshot.revision, this.ctx.householdId);
       this.ctx.db.prepare("DELETE FROM pending_kroger_checkouts WHERE household_id = ?").run(this.ctx.householdId);
       this.ctx.db.prepare("DELETE FROM pending_kroger_replacements WHERE household_id = ?").run(this.ctx.householdId);
+      const sent: Omit<KrogerCartSent, "memberName"> = { memberId, revision: snapshot.revision, itemCount: snapshot.items.length, at: this.ctx.now().toISOString() };
+      this.ctx.db.prepare("INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .run(this.#sentCartKey(), JSON.stringify(sent));
       const message = `Added ${snapshot.items.length} item${snapshot.items.length === 1 ? "" : "s"} to ${accountName}’s Kroger cart. No order was placed or payment charged. Open Kroger to review the cart and finish checkout there.`;
       // Splitwise: Kroger confirmed, so log the checkout (savepoint-isolated), then send it after commit.
       const checkoutKey = this.m.splitwise.recordCheckout(snapshot, memberId, "kroger");

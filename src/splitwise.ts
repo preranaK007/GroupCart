@@ -2,7 +2,9 @@
 // Splitwise group. The shopper (payer) paid the full total and each member owes
 // the share GroupCart already computed. Demo checkouts, and checkouts while
 // Splitwise is not configured, are simulated: the would-be request is recorded
-// and shown, but nothing is sent. A Splitwise failure never affects checkout.
+// (the split still counts in Bills balances), but nothing is sent. Only demo
+// replies call that "simulated"; a live Kroger checkout just reports the split.
+// A Splitwise failure never affects checkout.
 
 import { money } from "./cart.js";
 import type {
@@ -374,7 +376,7 @@ export class SplitwiseService implements CheckoutHooks {
     if (!record) {
       return this.configured
         ? "No checkout has been logged to Splitwise yet. After the next checkout, GroupCart will add it to your Splitwise group."
-        : "No checkout has been logged yet. Splitwise isn’t connected, so checkouts are simulated (nothing is sent).";
+        : "Splitwise isn’t connected, so nothing is sent there. Grocery checkouts still count in the Bills balances.";
     }
     const when = new Date(record.updatedAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" });
     return `Latest checkout (revision ${record.revision}, ${when}):\n${formatSplitwiseSummary(record)}`;
@@ -384,7 +386,9 @@ export class SplitwiseService implements CheckoutHooks {
     const record = this.#store.latestSplitwiseExpense();
     if (!record) return "There isn’t a checkout to log to Splitwise yet.";
     if (record.status === "logged") return `Already logged; nothing to retry.\n${formatSplitwiseSummary(record)}`;
-    if (record.status === "simulated") return `That checkout was simulated, so there’s nothing to retry.\n${formatSplitwiseSummary(record)}`;
+    if (record.status === "simulated") {
+      return `${record.source === "kroger" ? "Splitwise isn’t connected" : "That checkout was simulated"}, so there’s nothing to retry.\n${formatSplitwiseSummary(record)}`;
+    }
     if (!this.#client || this.groupId === undefined || record.mode !== "live" || !record.request) {
       return `Splitwise can’t retry this checkout: ${record.error ?? "Splitwise is not configured."}`;
     }
@@ -463,6 +467,9 @@ export function formatSplitwiseSummary(record: SplitwiseExpenseRecord): string {
     case "logged":
       return `Splitwise: logged ${total} paid by ${payer}${record.expenseId ? ` (expense #${record.expenseId})` : ""}. ${owesLine(record)}.`;
     case "simulated":
+      // A Kroger checkout is live: without Splitwise credentials it isn't simulated, just not copied there. The split
+      // still counts in the Bills balances (src/bills.ts reads this log).
+      if (record.source === "kroger") return `Split: ${owesLine(record)} (in Bills balances).`;
       return `Splitwise (simulated): would log ${total} paid by ${payer}. ${owesLine(record)}. ${record.note ?? "Nothing was sent."}`;
     case "pending":
     case "sending":
