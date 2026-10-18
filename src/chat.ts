@@ -37,10 +37,15 @@ export type ChatCardItem = { id: string; label: string; detail?: string; price?:
 export type ChatCardAction = { id: string; label: string; style?: "primary" | "secondary"; url?: string };
 export type ChatCard =
   /** votes maps optionId → memberIds. */
-  | { kind: "poll"; id: string; question: string; options: ChatCardOption[]; multi: boolean; votes: Record<string, string[]>; closed?: boolean; result?: string }
+  | { kind: "poll"; id: string; question: string; options: ChatCardOption[]; multi: boolean; votes: Record<string, string[]>; closed?: boolean; result?: string; /** iMessage's id for the native poll GroupCart sent (live mode). */ nativePollId?: string }
   | { kind: "choices"; id: string; title: string; items: ChatCardItem[]; actions: ChatCardAction[]; resolved?: string }
   | { kind: "actions"; id: string; title?: string; actions: ChatCardAction[]; resolved?: string };
 export type PollCard = Extract<ChatCard, { kind: "poll" }>;
+
+/** Option text as iMessage may echo it back: same characters, spacing and dashes aside. */
+function sameText(value: string): string {
+  return value.normalize("NFKC").replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\s+/g, " ").trim().toLowerCase();
+}
 
 /**
  * The default poll behavior: toggles the member's vote on each tapped option. A single-choice poll keeps at most one
@@ -322,11 +327,17 @@ export class ChatService {
    * Live loop: a vote on one of GroupCart's native iMessage polls (selected or unselected). It applies to the newest
    * open poll card with that question and option, the same way a tap in the web chat does. False when none matches.
    */
-  async voteFromGroup(member: Member, question: string, optionLabel: string, selected: boolean): Promise<boolean> {
-    const message = this.list({ limit: 100 }).messages.reverse().find((entry) => entry.card?.kind === "poll" && !entry.card.closed && entry.card.question === question && entry.card.options.some((option) => option.label === optionLabel));
+  async voteFromGroup(member: Member, vote: { nativePollId?: string; optionLabel: string; selected: boolean }): Promise<boolean> {
+    const label = sameText(vote.optionLabel);
+    const open = this.list({ limit: 100 }).messages.reverse().filter((entry) => entry.card?.kind === "poll" && !entry.card.closed);
+    // By iMessage's poll id when GroupCart recorded it; otherwise the newest open poll with that option.
+    const message = (vote.nativePollId ? open.find((entry) => entry.card?.kind === "poll" && entry.card.nativePollId === vote.nativePollId) : undefined)
+      ?? open.find((entry) => entry.card?.kind === "poll" && entry.card.options.some((option) => sameText(option.label) === label));
     const card = message?.card;
     if (!message || card?.kind !== "poll") return false;
-    const option = card.options.find((candidate) => candidate.label === optionLabel)!;
+    const option = card.options.find((candidate) => sameText(candidate.label) === label);
+    if (!option) return false;
+    const selected = vote.selected;
     if ((card.votes[option.id] ?? []).includes(member.id) === selected) return true;
     await this.actOnCard(member, message.id, { optionIds: [option.id] });
     return true;

@@ -10,7 +10,7 @@ import { after, test } from "node:test";
 import { ChatError, ChatService, type ChatCard, type PollCard } from "./chat.js";
 import { EventsService } from "./events.js";
 import { NamedListsService } from "./namedLists.js";
-import { cardHandler, cardReply, cardText, postCard, postMessage, registerCardHandler, setGroupPollSender, setGroupSender } from "./platform.js";
+import { cardHandler, cardReply, cardText, postCard, postMessage, registerCardHandler, setCardSink, setGroupPollSender, setGroupSender } from "./platform.js";
 import { CartStore, type Member } from "./store.js";
 
 const directory = mkdtempSync(join(tmpdir(), "groupcart-chat-"));
@@ -154,22 +154,36 @@ test("iMessage polls: an open poll card goes out as a native poll, and votes fro
   const sent: string[] = [];
   const polls: Array<{ title: string; options: string[] }> = [];
   setGroupSender(async (text) => { sent.push(text); });
-  setGroupPollSender(async (title, options) => { polls.push({ title, options }); });
+  setGroupPollSender(async (title, options) => { polls.push({ title, options }); return "imsg-guid-1"; });
+  // Like setupProfilesAndChat: postCard records into this chat.
+  setCardSink({
+    record: (text, card, author) => chat.recordBot(text, "notify", undefined, card, { author }),
+    recordText: (text, author) => chat.recordBot(text, "notify", undefined, undefined, { author }),
+    refresh: (card) => { const found = chat.findByCardId(card.id); return found ? chat.updateCard(found.id, card) : null; },
+  });
   try {
     await postCard("Movie night this week?", poll("imsg:1", true), { author: "Claude" });
   } finally {
     setGroupSender(null);
     setGroupPollSender(null);
+    setCardSink(null);
   }
   assert.deepEqual(sent, ["Claude: Movie night this week?"], "the line above the poll, without the numbered text version");
   assert.deepEqual(polls, [{ title: "Movie night?", options: ["Fri 8 PM", "Sat 7 PM"] }]);
 
   const message = chat.recordBot("Movie night this week?", "notify", undefined, poll("imsg:2", true))!;
-  assert.equal(await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", true), true);
-  assert.equal(await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", true), true, "a repeated selection changes nothing");
+  // iMessage votes carry the poll's id and the option text, but not the poll's title.
+  assert.equal(await chat.voteFromGroup(sami, { optionLabel: "Sat  7 PM", selected: true }), true, "matched by option text");
+  assert.equal(await chat.voteFromGroup(sami, { optionLabel: "Sat 7 PM", selected: true }), true, "a repeated selection changes nothing");
   const votes = () => (chat.get(message.id)!.card as PollCard).votes;
   assert.deepEqual(votes(), { fri: [], sat: ["m-sami"] });
-  await chat.voteFromGroup(sami, "Movie night?", "Sat 7 PM", false);
+  await chat.voteFromGroup(sami, { optionLabel: "Sat 7 PM", selected: false });
   assert.deepEqual(votes(), { fri: [], sat: [] });
-  assert.equal(await chat.voteFromGroup(sami, "Some other poll", "Sat 7 PM", true), false);
+  assert.equal(await chat.voteFromGroup(sami, { optionLabel: "Sun brunch", selected: true }), false);
+  // The poll postCard sent carries iMessage's id, so a vote with that id lands there even if labels repeat.
+  const sentCard = chat.findByCardId("imsg:1")!.card as PollCard;
+  assert.equal(sentCard.nativePollId, "imsg-guid-1");
+  assert.equal(await chat.voteFromGroup(maya, { nativePollId: "imsg-guid-1", optionLabel: "Fri 8 PM", selected: true }), true);
+  assert.deepEqual((chat.findByCardId("imsg:1")!.card as PollCard).votes.fri, ["m-maya"]);
+  assert.deepEqual(votes().fri, [], "the newer poll with the same options is untouched");
 });

@@ -320,7 +320,9 @@ export async function postCard(text: string, card: ChatCard, options: { author?:
   if (groupSender && groupPollSender && card.kind === "poll" && !card.closed) {
     try {
       if (text.trim()) await groupSender(signed(text.trim(), options.author));
-      await groupPollSender(card.question, card.options.map((option) => option.label));
+      const nativePollId = await groupPollSender(card.question, card.options.map((option) => option.label));
+      // Remember iMessage's id for the poll so its votes find this card.
+      if (nativePollId && message) return cardSink?.refresh({ ...card, nativePollId }) ?? message;
       return message;
     } catch (error) {
       console.warn("Could not send a native poll to the group; sending it as text:", error instanceof Error ? error.message : error);
@@ -358,10 +360,12 @@ export async function postMessage(text: string, options: { author: string }): Pr
   return message;
 }
 
-let groupPollSender: ((title: string, options: string[]) => Promise<void>) | null = null;
+/** Sends a native iMessage poll and returns iMessage's id for it (null when unknown). */
+type GroupPollSender = (title: string, options: string[]) => Promise<string | null>;
+let groupPollSender: GroupPollSender | null = null;
 
 /** Live mode: index.ts installs this so poll cards become native iMessage polls. */
-export function setGroupPollSender(sender: ((title: string, options: string[]) => Promise<void>) | null): void {
+export function setGroupPollSender(sender: GroupPollSender | null): void {
   groupPollSender = sender;
 }
 

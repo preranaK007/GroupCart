@@ -64,9 +64,13 @@ export class HouseholdGroup {
     await space.send(text);
   }
 
-  /** Posts a native iMessage poll into the household group (votes come back as poll_option messages). */
-  async sendPoll(title: string, options: string[]): Promise<void> {
-    await (await this.#require()).send(poll(title, options));
+  /**
+   * Posts a native iMessage poll into the household group and returns iMessage's id for it. Votes come back as
+   * poll_option messages carrying that id (and the option text, but not the poll's title).
+   */
+  async sendPoll(title: string, options: string[]): Promise<string | null> {
+    const sent = await (await this.#require()).send(poll(title, options));
+    return sent?.id ?? null;
   }
 
   /**
