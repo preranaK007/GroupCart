@@ -12,7 +12,7 @@ GroupCart is a shared home base for roommates. It lives in your household's iMes
 - **Chat:** the group conversation on the web, plus a Sunday digest of the week.
 - **Claude coordinator:** one roommate connects Claude for the whole apartment (Settings). It answers the group chat, plans things with tappable polls across everyone's calendars, logs expenses and bill photos, proposes groceries to confirm with a tap, and follows up on its own. It runs on that roommate's own Claude account through Claude Code on the computer hosting GroupCart, so no API key is needed.
 - **AI assistants:** connect Claude, ChatGPT or Grok so each roommate can ask their own assistant to add to the cart or check what's due.
-- **Skins:** Classic (light and dark) plus Elden Ring, Minecraft, Red Dead and Cyberpunk looks.
+- **Skins:** Classic (light and dark) plus Minecraft and Cyberpunk looks.
 
 ## Try the demo
 
@@ -25,7 +25,7 @@ GROUP_CART_MEMBERS="demo:william=William,demo:ashwin=Ashwin,demo:tanmay=Tanmay,d
 
 On Windows PowerShell, set the variable first: `$env:GROUP_CART_MEMBERS="demo:william=William,demo:ashwin=Ashwin,demo:tanmay=Tanmay,demo:sami=Sami"; node --import=tsx src/index.ts`. Leave out `GROUP_CART_MEMBERS` for three default demo members. (`npm run start` does the same but loads `.env`, so it needs that file.)
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The left rail (a bottom bar with a "More" sheet on phones) has Home, Chat, Kitchen (`/groceries`), Chores, Money (`/bills`), Calendar and House; People (`/people`) and Settings (`/settings`) are in the avatar menu at the top right, which also switches which roommate you are acting as. Chat (`/chat`) is the easiest way to talk to the bot. The palette button in the app bar switches skins (`?skin=elden`, `minecraft`, `rdr` or `cyberpunk` previews one). Data is stored in `./data/groupcart.sqlite` (set `GROUP_CART_DB` to use another file); uploaded avatars and chat photos go next to it.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The left rail (a bottom bar with a "More" sheet on phones) has Home, Chat, Kitchen (`/groceries`), Chores, Money (`/bills`), Calendar and House; People (`/people`) and Settings (`/settings`) are in the avatar menu at the top right, which also switches which roommate you are acting as. Chat (`/chat`) is the easiest way to talk to the bot. The palette button in the app bar switches skins (`?skin=minecraft` or `?skin=cyberpunk` previews one). Data is stored in `./data/groupcart.sqlite` (set `GROUP_CART_DB` to use another file); uploaded avatars and chat photos go next to it.
 
 The sections below cover live mode and each feature in detail.
 

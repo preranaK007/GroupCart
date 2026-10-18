@@ -10,11 +10,11 @@ import { registerFlavor } from "./themes.js";
  */
 
 registerFlavor({
-  "groceries.tab.pantry": { classic: "Pantry", elden: "Provisions", minecraft: "Barrel", rdr: "Larder", cyberpunk: "Fridge.exe" },
-  "kitchen.out": { classic: "Out", elden: "Depleted", minecraft: "Empty", rdr: "Plumb out", cyberpunk: "Depleted" },
-  "kitchen.low": { classic: "Low", elden: "Dwindling", minecraft: "Running low", rdr: "Runnin' low", cyberpunk: "Low charge" },
-  "kitchen.stock": { classic: "In stock", elden: "Stockpiled", minecraft: "Stacked", rdr: "Stocked", cyberpunk: "Cached" },
-  "empty.pantry.title": { classic: "Pantry is empty", elden: "No provisions", minecraft: "Barrel is empty", rdr: "Larder's bare", cyberpunk: "Fridge.exe: no data" },
+  "groceries.tab.pantry": { classic: "Pantry", minecraft: "Barrel", cyberpunk: "Fridge.exe" },
+  "kitchen.out": { classic: "Out", minecraft: "Empty", cyberpunk: "Depleted" },
+  "kitchen.low": { classic: "Low", minecraft: "Running low", cyberpunk: "Low charge" },
+  "kitchen.stock": { classic: "In stock", minecraft: "Stacked", cyberpunk: "Cached" },
+  "empty.pantry.title": { classic: "Pantry is empty", minecraft: "Barrel is empty", cyberpunk: "Fridge.exe: no data" },
 });
 
 /** Inline SVG (24px grid, stroke) used for the tab icon. */

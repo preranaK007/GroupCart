@@ -17,7 +17,7 @@ PR #2 (`roommate-app-wave2`) is an earlier subset (waves 1–2). This branch sup
   - House: board, repairs, guests, quiet hours and polls.
 - **People and chat:** profiles, web sign-in by iMessage code, and an iMessage-style web chat (`/chat`). The Photon fix welcomes new group members and normalizes handles.
 - **AI connector:** MCP at `/mcp` for Claude, ChatGPT/dots and Grok, with per-member tokens and OAuth 2.1 using pairing codes.
-- **Themes:** Elden Ring, Minecraft, Red Dead and Cyberpunk.
+- **Themes:** Minecraft and Cyberpunk.
 - **Status:** `npm run typecheck` is clean and `node --import=tsx --test src/*.test.ts` passes 101/101.
 
 ## Left to do

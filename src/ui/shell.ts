@@ -60,7 +60,7 @@
  *   --gc-fs-xs|sm|md|lg|xl|2xl, --gc-font, --gc-font-display (headings).
  *
  * ── Themes / skins (src/ui/themes.ts) ───────────────────────────────────────
- *   <html data-skin="classic|elden|minecraft|rdr|cyberpunk">; users pick one in
+ *   <html data-skin="classic|minecraft|cyberpunk">; users pick one in
  *   Settings > Appearance or the app-bar palette menu. Every skin restyles the
  *   tokens and the .gc-* components above, so a page themes itself for free if
  *   it: uses only --gc-* tokens for color/radius/font (no hex colors, no fixed
@@ -72,7 +72,7 @@
  *                                         use keys "<flavor>.title|.meta|.text" / "<flavor>"
  *     GC.t(key, fallback)                 same lookup in client code; GC.skin(), GC.setSkin(id)
  *     GC.celebrate("Trash taken out")     call after marking something done (no-op in Classic)
- *     <ul class="gc-list gc-people">      people rows; wanted posters in the Red Dead skin
+ *     <ul class="gc-list gc-people">      people rows
  *     document "gc:skinchange" event      re-render anything drawn with canvas/inline colors
  *   Add flavor keys with registerFlavor({...}) from ./themes.js (see FLAVOR there).
  */

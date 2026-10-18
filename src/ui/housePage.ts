@@ -17,10 +17,10 @@ import { registerFlavor } from "./themes.js";
 
 // [themes] skin wording for the nav item and the section titles.
 registerFlavor({
-  "nav.house": { classic: "House", elden: "Keep", minecraft: "Base", rdr: "Homestead", cyberpunk: "Safehouse" },
-  "house.repairs.title": { classic: "Repairs", elden: "Ruins to mend", minecraft: "Anvil", rdr: "Fixin’s", cyberpunk: "Maintenance" },
-  "house.guests.title": { classic: "Guests & quiet hours", elden: "Visitors & silence", minecraft: "Visitors & bedtime", rdr: "Company & quiet", cyberpunk: "Guests & quiet mode" },
-  "house.polls.title": { classic: "Polls", elden: "Council", minecraft: "Votes", rdr: "Show of hands", cyberpunk: "Netpolls" },
+  "nav.house": { classic: "House", minecraft: "Base", cyberpunk: "Safehouse" },
+  "house.repairs.title": { classic: "Repairs", minecraft: "Anvil", cyberpunk: "Maintenance" },
+  "house.guests.title": { classic: "Guests & quiet hours", minecraft: "Visitors & bedtime", cyberpunk: "Guests & quiet mode" },
+  "house.polls.title": { classic: "Polls", minecraft: "Votes", cyberpunk: "Netpolls" },
 });
 
 const svg = (paths: string, size = 18) => `<svg class="gc-icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`;

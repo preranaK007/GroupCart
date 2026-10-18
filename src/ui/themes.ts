@@ -4,7 +4,7 @@
  * artwork, textures, or fonts. Theme names appear only as picker labels.
  *
  * How a skin is applied
- *   <html data-skin="classic|elden|minecraft|rdr|cyberpunk"> is set before
+ *   <html data-skin="classic|minecraft|cyberpunk"> is set before
  *   first paint: the server renders it from the `gc-skin` cookie (see
  *   runWithRequestSkin in src/dashboard.ts) and a tiny inline <head> script
  *   corrects it from localStorage (or a `?skin=` preview param). Google Fonts
@@ -22,8 +22,6 @@
  *      own with registerFlavor({...}). Classic text is never changed.
  *   4. GC.celebrate("Trash taken out") after marking something done shows the
  *      skin's completion flourish (no-op in Classic).
- *   5. Lists of people: add class "gc-people" to a .gc-list of avatar rows to get
- *      wanted posters in the Red Dead skin (a normal list elsewhere).
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
@@ -34,7 +32,7 @@ import { registerRoute } from "../platform.js";
 // Skin registry
 // ---------------------------------------------------------------------------
 
-export type SkinId = "classic" | "elden" | "minecraft" | "rdr" | "cyberpunk";
+export type SkinId = "classic" | "minecraft" | "cyberpunk";
 
 export type SkinInfo = {
   id: SkinId;
@@ -52,9 +50,7 @@ const GOOGLE_FONTS = "https://fonts.googleapis.com/css2?";
 
 export const SKINS: readonly SkinInfo[] = [
   { id: "classic", name: "Classic", blurb: "Clean and calm", scheme: "light dark", fonts: "" },
-  { id: "elden", name: "Elden Ring", blurb: "Tarnished gold and grace", scheme: "dark", fonts: `${GOOGLE_FONTS}family=Cinzel:wght@500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400&display=swap` },
   { id: "minecraft", name: "Minecraft", blurb: "Blocks, slots, and XP", scheme: "light", fonts: `${GOOGLE_FONTS}family=Press+Start+2P&family=VT323&display=swap` },
-  { id: "rdr", name: "Red Dead Redemption", blurb: "Parchment, ink, and bounties", scheme: "light", fonts: `${GOOGLE_FONTS}family=Rye&family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&display=swap` },
   { id: "cyberpunk", name: "Cyberpunk 2077", blurb: "Neon, chrome, and glitches", scheme: "dark", fonts: `${GOOGLE_FONTS}family=Rajdhani:wght@500;600;700&family=Chakra+Petch:ital,wght@0,400;0,500;0,600;1,400&display=swap` },
 ];
 
@@ -104,58 +100,56 @@ export type FlavorEntry = { classic?: string } & Partial<Record<GameSkin, string
 
 const FLAVOR: Record<string, FlavorEntry> = {
   // Navigation and app-bar titles (keys follow NavKey; extra keys are ready for upcoming pages).
-  "nav.home": { classic: "Home", elden: "Grace", minecraft: "Spawn", rdr: "Camp", cyberpunk: "Crib" },
-  "nav.groceries": { classic: "Kitchen", elden: "Hearth", minecraft: "Furnace", rdr: "Chuckwagon", cyberpunk: "Rations" },
-  "nav.chores": { classic: "Chores", elden: "Trials", minecraft: "Quests", rdr: "Odd Jobs", cyberpunk: "Gigs" },
-  "nav.bills": { classic: "Money", elden: "Runes", minecraft: "Emeralds", rdr: "Bounties", cyberpunk: "Eddies" },
-  "nav.more": { classic: "More", elden: "Items", minecraft: "More", rdr: "Saddlebag", cyberpunk: "More" },
-  "nav.calendar": { classic: "Calendar", elden: "Omens", minecraft: "Clock", rdr: "Almanac", cyberpunk: "Schedule" },
-  "nav.settings": { classic: "Settings", elden: "System", minecraft: "Options", rdr: "Satchel", cyberpunk: "Cyberdeck" },
-  "nav.chat": { classic: "Chat", elden: "Whispers", minecraft: "Chat", rdr: "Telegraph", cyberpunk: "Holocall" },
-  "nav.lists": { classic: "Lists", elden: "Scrolls", minecraft: "Chests", rdr: "Journal", cyberpunk: "Shards" },
-  "nav.events": { classic: "Events", elden: "Summons", minecraft: "Raids", rdr: "Shindigs", cyberpunk: "Ops" },
-  "nav.people": { classic: "People", elden: "Tarnished", minecraft: "Players", rdr: "Posse", cyberpunk: "Crew" },
-  "nav.profiles": { classic: "Profiles", elden: "Tarnished", minecraft: "Players", rdr: "Posse", cyberpunk: "Crew" },
+  "nav.home": { classic: "Home", minecraft: "Spawn", cyberpunk: "Crib" },
+  "nav.groceries": { classic: "Kitchen", minecraft: "Furnace", cyberpunk: "Rations" },
+  "nav.chores": { classic: "Chores", minecraft: "Quests", cyberpunk: "Gigs" },
+  "nav.bills": { classic: "Money", minecraft: "Emeralds", cyberpunk: "Eddies" },
+  "nav.more": { classic: "More", minecraft: "More", cyberpunk: "More" },
+  "nav.calendar": { classic: "Calendar", minecraft: "Clock", cyberpunk: "Schedule" },
+  "nav.settings": { classic: "Settings", minecraft: "Options", cyberpunk: "Cyberdeck" },
+  "nav.chat": { classic: "Chat", minecraft: "Chat", cyberpunk: "Holocall" },
+  "nav.lists": { classic: "Lists", minecraft: "Chests", cyberpunk: "Shards" },
+  "nav.events": { classic: "Events", minecraft: "Raids", cyberpunk: "Ops" },
+  "nav.people": { classic: "People", minecraft: "Players", cyberpunk: "Crew" },
+  "nav.profiles": { classic: "Profiles", minecraft: "Players", cyberpunk: "Crew" },
   "appbar.sub": {
     classic: "",
-    elden: "Grace found",
     minecraft: ["Now with chores!", "Split it fairly!", "Don't forget the eggs!", "Shared carts!", "Also try dishes!", "Roommate-approved!", "Contains bread!", "Respawn at the fridge!", "Bring snacks!"],
-    rdr: "Est. 1899",
     cyberpunk: "Link established",
   },
 
   // Empty states: emptyState({ flavor: "empty.chores" }) uses empty.chores.title / .text
-  "empty.chores.title": { classic: "Nothing due", elden: "No trials remain", minecraft: "No quests", rdr: "Quiet day at camp", cyberpunk: "No gigs" },
-  "empty.chores.text": { classic: "Chores will show up here.", elden: "No chores. Rest at the site of grace.", minecraft: "Go punch some trees.", rdr: "Wanted: someone to take out the trash.", cyberpunk: "Gig board's empty. Go touch grass, choom." },
-  "empty.events.title": { classic: "No events", elden: "No omens", minecraft: "Nothing scheduled", rdr: "No shindigs", cyberpunk: "No ops" },
-  "empty.events.text": { classic: "Household events will show up here.", elden: "The stars are quiet tonight.", minecraft: "Sleep through the night.", rdr: "Nothing in the almanac, partner.", cyberpunk: "Calendar feed is clean." },
-  "empty.bills.title": { classic: "No bills yet", elden: "No runes owed", minecraft: "No trades yet", rdr: "No bounties", cyberpunk: "No eddies owed" },
-  "empty.bills.text": { classic: "Bill splits will show up here.", elden: "Your debts are settled, Tarnished.", minecraft: "No emeralds changing hands.", rdr: "Nobody owes nobody nothin'.", cyberpunk: "Ledger's clean. Nobody flatlined." },
-  "empty.cart.title": { classic: "Cart is empty", elden: "Nothing to carry", minecraft: "Inventory empty", rdr: "Satchel's empty", cyberpunk: "No rations queued" },
-  "empty.chat.title": { classic: "No messages", elden: "No whispers yet", minecraft: "Chat is quiet", rdr: "No telegrams", cyberpunk: "No incoming holocalls" },
-  "soon.chores.title": { classic: "Chores are coming", elden: "Trials draw near", minecraft: "Quests coming soon", rdr: "Odd jobs comin'", cyberpunk: "Gigs incoming" },
-  "soon.bills.title": { classic: "Bills are coming", elden: "Runes draw near", minecraft: "Trading coming soon", rdr: "Bounties comin'", cyberpunk: "Eddies incoming" },
-  "soon.calendar.title": { classic: "Calendar is coming", elden: "Omens draw near", minecraft: "Clock coming soon", rdr: "Almanac comin'", cyberpunk: "Schedule incoming" },
+  "empty.chores.title": { classic: "Nothing due", minecraft: "No quests", cyberpunk: "No gigs" },
+  "empty.chores.text": { classic: "Chores will show up here.", minecraft: "Go punch some trees.", cyberpunk: "Gig board's empty. Go touch grass, choom." },
+  "empty.events.title": { classic: "No events", minecraft: "Nothing scheduled", cyberpunk: "No ops" },
+  "empty.events.text": { classic: "Household events will show up here.", minecraft: "Sleep through the night.", cyberpunk: "Calendar feed is clean." },
+  "empty.bills.title": { classic: "No bills yet", minecraft: "No trades yet", cyberpunk: "No eddies owed" },
+  "empty.bills.text": { classic: "Bill splits will show up here.", minecraft: "No emeralds changing hands.", cyberpunk: "Ledger's clean. Nobody flatlined." },
+  "empty.cart.title": { classic: "Cart is empty", minecraft: "Inventory empty", cyberpunk: "No rations queued" },
+  "empty.chat.title": { classic: "No messages", minecraft: "Chat is quiet", cyberpunk: "No incoming holocalls" },
+  "soon.chores.title": { classic: "Chores are coming", minecraft: "Quests coming soon", cyberpunk: "Gigs incoming" },
+  "soon.bills.title": { classic: "Bills are coming", minecraft: "Trading coming soon", cyberpunk: "Eddies incoming" },
+  "soon.calendar.title": { classic: "Calendar is coming", minecraft: "Clock coming soon", cyberpunk: "Schedule incoming" },
 
   // Card and section titles: card({ flavor: "home.people" }) uses .title / .meta
-  "home.groceries.title": { classic: "Groceries", elden: "Provisions", minecraft: "Inventory", rdr: "Supplies", cyberpunk: "Rations" },
-  "home.people.title": { classic: "People", elden: "Tarnished", minecraft: "Players", rdr: "Wanted", cyberpunk: "Crew" },
-  "home.people.meta": { classic: "Grocery shares", elden: "Runes owed", minecraft: "Emerald shares", rdr: "Bounties", cyberpunk: "Eddies owed" },
-  "home.chores.title": { classic: "Chores due", elden: "Trials", minecraft: "Quests", rdr: "Odd jobs", cyberpunk: "Gigs" },
-  "home.upcoming.title": { classic: "Upcoming", elden: "Omens", minecraft: "Coming up", rdr: "Almanac", cyberpunk: "Upcoming ops" },
-  "home.balances.title": { classic: "Balances", elden: "Runes", minecraft: "Emeralds", rdr: "Bounties", cyberpunk: "Eddies" },
-  "cart.items.title": { classic: "Items", elden: "Provisions", minecraft: "Items", rdr: "Supplies", cyberpunk: "Loadout" },
-  "cart.split.title": { classic: "Split", elden: "Runes owed", minecraft: "Trades", rdr: "Bounty", cyberpunk: "Eddies" },
-  "settings.appearance.title": { classic: "Appearance", elden: "Garments", minecraft: "Resource Packs", rdr: "Wardrobe", cyberpunk: "Chrome" },
-  "settings.connections": { classic: "Connections", elden: "Pacts", minecraft: "Mods", rdr: "Telegraph lines", cyberpunk: "Netlinks" },
+  "home.groceries.title": { classic: "Groceries", minecraft: "Inventory", cyberpunk: "Rations" },
+  "home.people.title": { classic: "People", minecraft: "Players", cyberpunk: "Crew" },
+  "home.people.meta": { classic: "Grocery shares", minecraft: "Emerald shares", cyberpunk: "Eddies owed" },
+  "home.chores.title": { classic: "Chores due", minecraft: "Quests", cyberpunk: "Gigs" },
+  "home.upcoming.title": { classic: "Upcoming", minecraft: "Coming up", cyberpunk: "Upcoming ops" },
+  "home.balances.title": { classic: "Balances", minecraft: "Emeralds", cyberpunk: "Eddies" },
+  "cart.items.title": { classic: "Items", minecraft: "Items", cyberpunk: "Loadout" },
+  "cart.split.title": { classic: "Split", minecraft: "Trades", cyberpunk: "Eddies" },
+  "settings.appearance.title": { classic: "Appearance", minecraft: "Resource Packs", cyberpunk: "Chrome" },
+  "settings.connections": { classic: "Connections", minecraft: "Mods", cyberpunk: "Netlinks" },
 
   // Notices (renderNotice eyebrow, by tone) and the completion flourish.
-  "notice.success": { classic: "", elden: "Item acquired", minecraft: "Achievement get!", rdr: "Telegram", cyberpunk: "Upload complete" },
-  "notice.warning": { classic: "", elden: "Something stirs", minecraft: "Uh oh!", rdr: "Bad news, partner", cyberpunk: "Warning // ICE detected" },
-  "notice.danger": { classic: "", elden: "Thy path is barred", minecraft: "Something exploded", rdr: "Trouble on the trail", cyberpunk: "Flatlined" },
-  "notice.neutral": { classic: "", elden: "A message", minecraft: "Server message", rdr: "Telegram", cyberpunk: "Incoming message" },
-  "notice.accent": { classic: "", elden: "A message", minecraft: "Server message", rdr: "Telegram", cyberpunk: "Incoming message" },
-  "celebrate.title": { classic: "", elden: "Task completed", minecraft: "Achievement get!", rdr: "Job done", cyberpunk: "Gig complete" },
+  "notice.success": { classic: "", minecraft: "Achievement get!", cyberpunk: "Upload complete" },
+  "notice.warning": { classic: "", minecraft: "Uh oh!", cyberpunk: "Warning // ICE detected" },
+  "notice.danger": { classic: "", minecraft: "Something exploded", cyberpunk: "Flatlined" },
+  "notice.neutral": { classic: "", minecraft: "Server message", cyberpunk: "Incoming message" },
+  "notice.accent": { classic: "", minecraft: "Server message", cyberpunk: "Incoming message" },
+  "celebrate.title": { classic: "", minecraft: "Achievement get!", cyberpunk: "Gig complete" },
 };
 
 /** Add or override flavor keys (call at module load from a page module). */
@@ -326,7 +320,7 @@ export function skinClientScript(): string {
     }
     el.addEventListener("click", dismiss);
     document.addEventListener("keydown", onKey);
-    celebrateTimer = setTimeout(dismiss, reduceMotion && reduceMotion.matches ? 1800 : s === "elden" ? 2500 : 3600);
+    celebrateTimer = setTimeout(dismiss, reduceMotion && reduceMotion.matches ? 1800 : 3600);
   };
 
   var switcher = document.querySelector(".gc-skin-switch");
@@ -522,19 +516,10 @@ const MC_GEM = (() => {
   return pixelTile(map.map((line) => [...line].map((ch) => colors[ch] ?? null)), 3, null);
 })();
 
-function eldenCorner(rotate: number): string {
-  return svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='18' height='18' viewBox='0 0 18 18'><g transform='rotate(${rotate} 9 9)'><path d='M.5 13V.5H13' fill='none' stroke='#c9a961' stroke-opacity='.85'/><path d='M.5 .5l3 3' stroke='#c9a961' stroke-opacity='.5'/><rect x='3.6' y='3.6' width='3' height='3' fill='#e9cf8c' transform='rotate(45 5.1 5.1)'/></g></svg>`);
-}
 
-const ELDEN_CORNERS = "var(--gc-tx-er-tl) top 4px left 4px no-repeat, var(--gc-tx-er-tr) top 4px right 4px no-repeat, var(--gc-tx-er-br) bottom 4px right 4px no-repeat, var(--gc-tx-er-bl) bottom 4px left 4px no-repeat";
 
-const PAPER_NOISE = svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .32 0 0 0 0 .2 0 0 0 0 .08 0 0 0 .55 0'/></filter><rect width='240' height='240' filter='url(#n)' opacity='.3'/><filter id='s' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.016' numOctaves='2' seed='4' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .45 0 0 0 0 .3 0 0 0 0 .12 0 0 0 1.3 -.6'/></filter><rect width='240' height='240' filter='url(#s)' opacity='.28'/></svg>`);
 
-const WOOD_GRAIN_X = svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='480' height='120'><filter id='g' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.004 .16' numOctaves='3' seed='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.6 1'/></filter><rect width='480' height='120' filter='url(#g)' opacity='.55'/></svg>`);
-const WOOD_GRAIN_Y = svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='120' height='480'><filter id='g' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.16 .004' numOctaves='3' seed='9' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -1.6 1'/></filter><rect width='120' height='480' filter='url(#g)' opacity='.55'/></svg>`);
 
-/** Hand-inked double rule, displaced with turbulence; used as a 9-slice border-image. */
-const RDR_FRAME = svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='60' height='60' viewBox='0 0 60 60'><filter id='r' x='-10%' y='-10%' width='120%' height='120%'><feTurbulence type='fractalNoise' baseFrequency='.12' numOctaves='2' seed='7'/><feDisplacementMap in='SourceGraphic' scale='2.4' xChannelSelector='R' yChannelSelector='G'/></filter><g fill='none' stroke='#3b2a1a' filter='url(#r)'><rect x='2' y='2' width='56' height='56' stroke-width='2.2'/><rect x='6' y='6' width='48' height='48' stroke-width='1' stroke-opacity='.7'/></g></svg>`);
 
 /** Alpha speckle that makes rubber stamps look worn. */
 const STAMP_MASK = svgUrl(`<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='m' x='0' y='0' width='100%' height='100%'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='11' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 -2.6 0 0 0 2.15'/></filter><rect width='120' height='120' filter='url(#m)'/></svg>`);
@@ -567,14 +552,9 @@ const TEXTURES_CSS = `:root {
   --gc-tx-mc-stone:${MC_STONE};
   --gc-tx-mc-wool:${MC_WOOL};
   --gc-tx-mc-gem:${MC_GEM};
-  --gc-tx-paper:${PAPER_NOISE};
-  --gc-tx-grain-x:${WOOD_GRAIN_X};
-  --gc-tx-grain-y:${WOOD_GRAIN_Y};
-  --gc-tx-ink-frame:${RDR_FRAME};
   --gc-tx-stamp:${STAMP_MASK};
   --gc-tx-cp-panel:${CP_PANEL};
   --gc-tx-cp-panel-hot:${CP_PANEL_HOT};
-  --gc-tx-er-tl:${eldenCorner(0)}; --gc-tx-er-tr:${eldenCorner(90)}; --gc-tx-er-br:${eldenCorner(180)}; --gc-tx-er-bl:${eldenCorner(270)};
 }`;
 
 const SHARED_CSS = TEXTURES_CSS + `
@@ -593,9 +573,7 @@ const SHARED_CSS = TEXTURES_CSS + `
 .gc-skin-item[aria-checked="true"]::after { content:""; flex:none; margin-left:auto; width:6px; height:11px; border:solid currentColor; border-width:0 2px 2px 0; transform:translateY(-2px) rotate(45deg); }
 .gc-skin-swatch { width:34px; height:24px; flex:none; border-radius:4px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.28); }
 .gc-sw-classic { background:radial-gradient(circle at 74% 70%, #0b57d0 0 3.5px, transparent 4px), linear-gradient(#ffffff 0 7px, #e0e3e7 7px 8px, #f8fafd 8px); }
-.gc-sw-elden { background:radial-gradient(circle at 50% 62%, #fff1c4 0 1.5px, rgba(240,212,138,.55) 2.5px, rgba(240,212,138,.12) 7px, transparent 11px), #14120e; box-shadow:inset 0 0 0 1px #9c8150, inset 0 0 0 3px #14120e, inset 0 0 0 4px rgba(201,169,97,.4); }
 .gc-sw-minecraft { background:linear-gradient(#6aad3f 0 6px, transparent 6px), var(--gc-tx-mc-dirt) 0 0/16px 16px, #866043; border-radius:0; box-shadow:inset 0 0 0 1px #1b120b; }
-.gc-sw-rdr { background:radial-gradient(circle at 70% 56%, transparent 4px, #8b1c1c 4.5px 6px, transparent 6.5px), var(--gc-tx-paper) 0 0/120px 120px, #e8d8b3; border-radius:2px; box-shadow:inset 0 0 0 1px #3b2a1a, inset 0 0 0 3px #e8d8b3, inset 0 0 0 4px rgba(59,42,26,.6); }
 .gc-sw-cyberpunk { background:linear-gradient(90deg, #fcee0a 0 9px, transparent 9px), linear-gradient(180deg, transparent 15px, #ff2a6d 15px 17px, transparent 17px), #0e0f15; border-radius:0; box-shadow:inset 0 0 0 1px #00f0ff; clip-path:${CUT("6px")}; }
 
 /* Settings: Appearance picker */
@@ -622,24 +600,12 @@ const SHARED_CSS = TEXTURES_CSS + `
 .gc-pv-classic .gc-pv-title { color:#1f1f1f; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-weight:500; }
 .gc-pv-classic .gc-pv-line { background:#e0e3e7; border-radius:2px; }
 .gc-pv-classic .gc-pv-btn { background:#0b57d0; border-radius:99px; }
-.gc-pv-elden { background:radial-gradient(ellipse 80% 70% at 50% 0%, rgba(214,180,106,.24), transparent 70%), #0d0c0a; }
-.gc-pv-elden .gc-pv-bar { background:#14120e; border-bottom:1px solid rgba(212,180,106,.6); }
-.gc-pv-elden .gc-pv-card { background:${ELDEN_CORNERS}, #171510; border:1px solid #6d5a35; }
-.gc-pv-elden .gc-pv-title { font-family:"Cinzel",Georgia,serif; color:#e3c77f; letter-spacing:.06em; padding-left:10px; }
-.gc-pv-elden .gc-pv-line { height:1px; margin-left:10px; background:linear-gradient(90deg, #c9a961, transparent); }
-.gc-pv-elden .gc-pv-btn { background:linear-gradient(#3b3223, #1b1711); border:1px solid #c9a961; box-shadow:0 0 8px rgba(240,212,138,.45); right:14px; bottom:12px; }
 .gc-pv-minecraft { background:var(--gc-tx-mc-planks) 0 0/32px 32px, #d3b07c; border-radius:0; }
 .gc-pv-minecraft .gc-pv-bar { height:18px; background:var(--gc-tx-mc-grass) 0 0/32px 32px repeat-x, #866043; }
 .gc-pv-minecraft .gc-pv-card { background:#c6c6c6; border:2px solid #000; box-shadow:inset 2px 2px 0 #fff, inset -2px -2px 0 #555; }
 .gc-pv-minecraft .gc-pv-title { font-family:"Press Start 2P",ui-monospace,monospace; font-size:11px; color:#3f3f3f; font-weight:400; }
 .gc-pv-minecraft .gc-pv-line { background:#8b8b8b; }
 .gc-pv-minecraft .gc-pv-btn { height:13px; background:var(--gc-tx-mc-stone) 0 0/16px 16px, #666; border:2px solid #000; }
-.gc-pv-rdr { background:var(--gc-tx-paper) 0 0/240px 240px, #e8d8b3; border-radius:2px; }
-.gc-pv-rdr .gc-pv-bar { background:linear-gradient(180deg, #3b2615, #24160b); border-bottom:2px solid #120a04; }
-.gc-pv-rdr .gc-pv-card { background:#f3e8cf; border:1px solid transparent; border-image:var(--gc-tx-ink-frame) 10 / 8px / 0 round; }
-.gc-pv-rdr .gc-pv-title { font-family:"Rye",Georgia,serif; color:#2a1c10; font-weight:400; }
-.gc-pv-rdr .gc-pv-line { height:0; border-top:1px dashed rgba(59,42,26,.7); }
-.gc-pv-rdr .gc-pv-btn { background:#8b1c1c; border:1px solid #5e1010; box-shadow:inset 0 0 0 1px #8b1c1c, inset 0 0 0 2px rgba(251,241,220,.6); }
 .gc-pv-cyberpunk { background:linear-gradient(rgba(0,240,255,.08) 1px, transparent 1px) 0 0/10px 10px, linear-gradient(90deg, rgba(0,240,255,.08) 1px, transparent 1px) 0 0/10px 10px, #07070b; border-radius:0; }
 .gc-pv-cyberpunk .gc-pv-bar { background:#0e0f15; border-bottom:1px solid #fcee0a; }
 .gc-pv-cyberpunk .gc-pv-card { border:1px solid transparent; border-image:var(--gc-tx-cp-panel) 24 fill / 14px / 3px stretch; }
@@ -660,167 +626,6 @@ const SHARED_CSS = TEXTURES_CSS + `
   .gc-celebrate *, .gc-appbar-sub, .gc-appbar-sub::after, .gc-btn { animation:none !important; }
 }
 `;
-
-// ── Elden Ring–inspired: umber darkness, tarnished gold, engraved plates ──
-const ELDEN_CSS = scoped("elden", `
-@R { color-scheme:dark;
-  --gc-bg:#0d0c0a; --gc-surface:#171510; --gc-surface-2:#1f1c16; --gc-hover:#28241b;
-  --gc-border:#4a3f29; --gc-border-strong:#7d6a43;
-  --gc-text:#e8dfc8; --gc-text-2:#cfc4a8; --gc-muted:#a69a7c;
-  --gc-accent:#d4b46a; --gc-accent-hover:#e9cf8c; --gc-accent-soft:#3a3020; --gc-on-accent:#15110a; --gc-on-accent-soft:#f0deaa;
-  --gc-success:#a9cf8f; --gc-success-soft:#1f2b1a; --gc-warning:#e8bd62; --gc-warning-soft:#35290f; --gc-danger:#ec9282; --gc-danger-soft:#3d1a15;
-  --gc-track:#2a251b; --gc-focus:#f3d78f; --gc-tooltip-bg:#0b0a08; --gc-tooltip-text:#e8dfc8;
-  --gc-font:"EB Garamond","Cormorant Garamond",Garamond,Georgia,serif; --gc-font-display:"Cinzel","Trajan Pro",Georgia,serif;
-  --gc-fs-xs:13px; --gc-fs-sm:14.5px; --gc-fs-md:16px; --gc-fs-lg:18px; --gc-fs-xl:24px; --gc-fs-2xl:32px;
-  --gc-radius-sm:2px; --gc-radius-md:2px; --gc-radius-lg:3px; --gc-radius-pill:2px;
-  scrollbar-color:#5a4a2e #0d0c0a; }
-@R body { background:#0d0c0a; }
-@S body::before { content:""; position:fixed; inset:0; z-index:-1; pointer-events:none;
-  background:radial-gradient(ellipse 70% 45% at 50% 0%, rgba(214,180,106,.14), transparent 70%), radial-gradient(ellipse at 50% 45%, transparent 40%, rgba(0,0,0,.66) 100%); }
-@S ::selection { background:rgba(212,180,106,.38); color:#fff8e6; }
-@S :where(h1,h2,h3) { font-family:var(--gc-font-display); }
-@S a { text-decoration-color:rgba(212,180,106,.45); text-underline-offset:3px; }
-
-@S .gc-appbar { background:linear-gradient(180deg, #1a1711, #0f0e0b); border-bottom:1px solid transparent; border-image:linear-gradient(90deg, transparent, rgba(212,180,106,.7) 18%, rgba(212,180,106,.7) 82%, transparent) 1; box-shadow:0 8px 24px rgba(0,0,0,.5); }
-@S .gc-logo { width:28px; height:28px; margin:0 6px; border-radius:0; transform:rotate(45deg); background:radial-gradient(circle, #3a3020, #15120c 75%); border:1px solid #c9a961; color:#f3d78f; box-shadow:0 0 14px rgba(240,212,138,.35), inset 0 0 0 2px #15120c, inset 0 0 0 3px rgba(201,169,97,.45); }
-@S .gc-logo > .gc-icon { transform:rotate(-45deg); width:17px; height:17px; }
-@S .gc-brand-name { font-family:var(--gc-font-display); font-weight:600; font-size:20px; letter-spacing:.08em; color:#e9d39a; text-shadow:0 0 16px rgba(240,212,138,.3); }
-@S .gc-appbar-title { font-family:var(--gc-font-display); font-weight:500; letter-spacing:.06em; color:var(--gc-text); border-left-color:rgba(212,180,106,.35); }
-@S .gc-appbar-sub { display:inline-flex; align-items:center; gap:9px; font-style:italic; font-size:15px; color:#c4ad72; }
-@S .gc-appbar-sub::before { content:""; width:6px; height:6px; transform:rotate(45deg); background:#f3d78f; box-shadow:0 0 8px #f3d78f, 0 0 16px rgba(243,215,143,.6); }
-
-@S .gc-rail { background:linear-gradient(90deg, rgba(10,9,7,.7), rgba(23,21,16,.55)); border-right:1px solid transparent; border-image:linear-gradient(180deg, transparent, rgba(212,180,106,.38) 12%, rgba(212,180,106,.38) 88%, transparent) 1; }
-@S .gc-nav-item { font-family:var(--gc-font-display); font-size:10.5px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; color:#a69a7c; }
-@S .gc-nav-pill { position:relative; border-radius:2px; }
-@S .gc-nav-item:hover { color:#e9d39a; }
-@S .gc-nav-item:hover .gc-nav-pill { background:radial-gradient(closest-side, rgba(240,212,138,.18), transparent); }
-@S .gc-nav-item[aria-current="page"] { color:#f3e2b2; font-weight:700; }
-@S .gc-nav-item[aria-current="page"] .gc-nav-pill { background:radial-gradient(closest-side, rgba(240,212,138,.42), rgba(240,212,138,.1) 65%, transparent); color:#fff6d8; }
-@S .gc-nav-item[aria-current="page"] .gc-icon { filter:drop-shadow(0 0 4px rgba(240,212,138,.9)); }
-@S .gc-nav-item[aria-current="page"] .gc-nav-pill::after { content:""; position:absolute; left:50%; bottom:-4px; width:5px; height:5px; margin-left:-2.5px; transform:rotate(45deg); background:#f3d78f; box-shadow:0 0 6px #f3d78f; }
-
-@S :is(.gc-card, .gc-stat, .gc-disclosure) { background:${ELDEN_CORNERS}, linear-gradient(180deg, rgba(255,236,190,.04), rgba(255,236,190,0) 160px), var(--gc-surface); border:1px solid #3f3524; box-shadow:inset 0 1px 0 rgba(255,236,190,.05), 0 14px 34px rgba(0,0,0,.38); }
-@S .gc-card-head { padding-bottom:10px; border-bottom:1px solid transparent; border-image:linear-gradient(90deg, rgba(212,180,106,.6), rgba(212,180,106,.14) 70%, transparent) 1; }
-@S .gc-card-title { font-family:var(--gc-font-display); font-weight:600; font-size:16.5px; letter-spacing:.07em; color:#e3c77f; }
-@S .gc-card-icon { width:24px; height:24px; margin:0 8px 0 4px; border-radius:0; transform:rotate(45deg); background:#120f0a; border-color:#6d5a35; color:#d4b46a; }
-@S .gc-card-icon > .gc-icon { transform:rotate(-45deg); width:15px; height:15px; }
-@S .gc-section-title { display:flex; align-items:center; gap:10px; font-family:var(--gc-font-display); font-size:13px; font-weight:600; letter-spacing:.16em; text-transform:uppercase; color:#c9b27a; }
-@S .gc-section-title::before { content:""; width:6px; height:6px; transform:rotate(45deg); border:1px solid #d4b46a; }
-@S .gc-meta { font-style:italic; }
-@S .gc-stat-label { font-family:var(--gc-font-display); font-size:11px; letter-spacing:.12em; text-transform:uppercase; color:#b9a678; }
-@S .gc-stat-value { font-family:var(--gc-font-display); font-weight:500; color:#f0e3bf; }
-
-@S .gc-track { height:6px; border-radius:0; background:#0f0d0a; box-shadow:inset 0 0 0 1px #3d3423; }
-@S .gc-fill { border-radius:0; background:linear-gradient(90deg, #8a6d36, #e3c77f); box-shadow:0 0 10px rgba(240,212,138,.45); }
-@S .gc-fill.is-over { background:linear-gradient(90deg, #7a2418, #e07a62); box-shadow:0 0 10px rgba(224,122,98,.45); }
-
-@S .gc-chip { height:22px; padding:0 8px; border-radius:1px; font-family:var(--gc-font-display); font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
-@S .gc-chip-neutral { border-color:#5a4a2e; color:#d6cbad; }
-@S .gc-chip-accent { border-color:rgba(212,180,106,.45); }
-@S .gc-chip-success { border-color:rgba(169,207,143,.35); }
-@S .gc-chip-warning { border-color:rgba(232,189,98,.35); }
-@S .gc-chip-danger { border-color:rgba(236,146,130,.35); }
-
-@S .gc-btn { height:38px; padding:0 20px; border-radius:1px; border:1px solid #9c8150; font:600 12.5px/1 var(--gc-font-display); letter-spacing:.12em; text-transform:uppercase; color:#f3e2b2; text-shadow:0 1px 0 #000;
-  background:linear-gradient(180deg, #3b3223 0%, #272118 49%, #1b1711 51%, #241e16 100%);
-  box-shadow:inset 0 0 0 1px rgba(0,0,0,.65), inset 0 0 0 2px rgba(240,212,138,.16), 0 2px 6px rgba(0,0,0,.5); transition:box-shadow .2s ease, border-color .2s ease, color .2s ease; }
-@S .gc-btn:not(:disabled):hover { background:linear-gradient(180deg, #463b29 0%, #2e271c 49%, #211c15 51%, #2a241a 100%); border-color:#e3c77f; color:#fff4d1;
-  box-shadow:inset 0 0 0 1px rgba(0,0,0,.65), inset 0 0 0 2px rgba(240,212,138,.28), 0 0 18px rgba(240,212,138,.35); }
-@S .gc-btn-tonal { background:linear-gradient(180deg, #2a251b, #1c1913); border-color:#6d5a35; color:#e3c77f; }
-@S .gc-btn-tonal:not(:disabled):hover { filter:none; }
-@S .gc-btn-outline { background:transparent; border-color:#6d5a35; color:#e3c77f; box-shadow:none; }
-@S .gc-btn-outline:not(:disabled):hover { background:rgba(240,212,138,.06); border-color:#e3c77f; box-shadow:0 0 14px rgba(240,212,138,.25); }
-@S .gc-btn-text { background:transparent; border-color:transparent; box-shadow:none; color:#e3c77f; padding:0 10px; }
-@S .gc-btn-text:not(:disabled):hover { background:radial-gradient(closest-side, rgba(240,212,138,.14), transparent); border-color:transparent; box-shadow:none; text-shadow:0 0 10px rgba(240,212,138,.6); }
-@S .gc-btn-sm { height:32px; padding:0 14px; font-size:11px; }
-@S .gc-icon-btn { border-radius:2px; color:#cfc4a8; }
-@S .gc-icon-btn:hover { background:radial-gradient(closest-side, rgba(240,212,138,.2), transparent); color:#f3e2b2; }
-
-@S :is(.gc-input, .gc-select) { border-radius:1px; background:#0f0d0a; border-color:#5a4a2e; color:var(--gc-text); font-size:16px; }
-@S :is(.gc-input, .gc-select):focus { outline:1px solid var(--gc-focus); outline-offset:-1px; border-color:transparent; box-shadow:0 0 14px rgba(240,212,138,.32); }
-@S .gc-input::placeholder { color:#8a7f63; font-style:italic; }
-
-@S .gc-avatar { font-family:var(--gc-font-display); font-weight:700; box-shadow:0 0 0 1px #0d0c0a, 0 0 0 2px #9c8150; filter:saturate(.6) brightness(.9); }
-@S .gc-avatars .gc-avatar { box-shadow:0 0 0 1px #0d0c0a, 0 0 0 2px #9c8150; }
-@S .gc-avatars .gc-avatar + .gc-avatar { margin-left:-4px; }
-
-@S .gc-list-item { border-top:1px solid transparent; border-image:linear-gradient(90deg, transparent, rgba(212,180,106,.3) 12%, rgba(212,180,106,.3) 88%, transparent) 1; }
-@S .gc-list-title { font-size:16.5px; }
-@S .gc-amount { font-family:var(--gc-font-display); font-weight:600; color:#ead7a4; }
-
-@S .gc-empty > .gc-icon { color:#a8894f; filter:drop-shadow(0 0 8px rgba(240,212,138,.4)); }
-@S .gc-empty-title { font-family:var(--gc-font-display); font-weight:600; letter-spacing:.06em; color:#e3c77f; }
-@S .gc-empty-title::after { content:""; display:block; width:96px; height:1px; margin:8px auto 2px; background:linear-gradient(90deg, transparent, #c9a961, transparent); }
-@S .gc-empty-text { font-style:italic; font-size:15.5px; color:#b9ac8b; }
-
-@S .gc-tip::after { border:1px solid #6d5a35; border-radius:1px; font:400 14.5px/1.4 var(--gc-font); box-shadow:0 10px 24px rgba(0,0,0,.6); }
-@S .gc-disclosure > summary { margin:3px; font-family:var(--gc-font-display); font-size:14px; letter-spacing:.06em; color:#e3c77f; }
-@S .gc-disclosure > summary:hover { background:radial-gradient(ellipse at 30% 50%, rgba(240,212,138,.09), transparent 70%); }
-@S .gc-steps .gc-step-icon { width:24px; height:24px; margin:4px; border-radius:0; transform:rotate(45deg); border-color:#6d5a35; background:#120f0a; color:#d4b46a; }
-@S .gc-steps .gc-step-icon > .gc-icon { transform:rotate(-45deg); }
-@S .gc-steps strong { font-family:var(--gc-font-display); letter-spacing:.04em; color:#e3c77f; font-size:14.5px; }
-@S .gc-dot { background:#f3d78f; box-shadow:0 0 8px rgba(240,212,138,.9); }
-@S .gc-sync.is-paused .gc-dot { background:#7a6a48; box-shadow:none; }
-
-@S .gc-dialog { border:1px solid #9c8150; background:${ELDEN_CORNERS}, linear-gradient(180deg, #1d1a14, #131109); box-shadow:0 0 0 1px #000, 0 24px 60px rgba(0,0,0,.7), 0 0 40px rgba(240,212,138,.08); }
-@S .gc-dialog::backdrop { background:radial-gradient(ellipse at center, rgba(0,0,0,.55), rgba(0,0,0,.86)); }
-@S .gc-dialog-title { font-family:var(--gc-font-display); font-weight:600; letter-spacing:.06em; color:#e3c77f; }
-@S .gc-skin-menu { border-color:#6d5a35; background:${ELDEN_CORNERS}, #15130f; box-shadow:0 16px 40px rgba(0,0,0,.6); }
-@S .gc-skin-item:hover, @S .gc-skin-item:focus-visible { background:radial-gradient(ellipse at 30% 50%, rgba(240,212,138,.16), transparent 75%); }
-@S .gc-notice-eyebrow { font-family:var(--gc-font-display); font-size:12px; letter-spacing:.26em; color:#e3c77f; }
-@R .gc-notice-icon { border-radius:0; transform:rotate(45deg) scale(.82); background:#120f0a; border:1px solid #c9a961; color:#f3d78f; box-shadow:0 0 18px rgba(240,212,138,.3); }
-@R .gc-notice-icon > .gc-icon { transform:rotate(-45deg); }
-
-/* Known pages */
-@R .home-date { font-family:var(--gc-font-display); font-weight:500; letter-spacing:.04em; color:#efe1bb; }
-@R .home-big { font-family:var(--gc-font-display); color:#f0e3bf; }
-@R .cart-banner { background:#14120d; border-color:#4a3f29; }
-@R .set-icon { border-radius:0; transform:rotate(45deg) scale(.8); background:#120f0a; border-color:#6d5a35; color:#d4b46a; }
-@R .set-icon > .gc-icon { transform:rotate(-45deg); }
-@R .set-facts { border-top:1px solid transparent; border-image:linear-gradient(90deg, rgba(212,180,106,.4), transparent) 1; }
-
-/* Calendar */
-@R .cal.cal { --cal-line:#3d3423; --cal-line-soft:rgba(212,180,106,.1); --cal-free-bg:rgba(169,207,143,.1); --cal-free-edge:#a9cf8f; --cal-free-text:#c3e2ad;
-  --cal-ovl-2:rgba(255,236,190,.05); --cal-ovl-3:rgba(255,236,190,.1); --cal-ovl-4:rgba(255,236,190,.16); --cal-ovl-edge:#a69a7c; --cal-now:#f3d78f; --cal-warn:#e8bd62; --cal-danger:#ec9282; }
-@R .cal :is(.cal-main, .cal-panel) { border-color:#3f3524; box-shadow:0 14px 34px rgba(0,0,0,.38); }
-@R .cal .cal-panel { background:${ELDEN_CORNERS}, var(--gc-surface); }
-@R .cal .cal-btn { border-radius:1px; border-color:#6d5a35; background:linear-gradient(180deg, #2a251b, #1c1913); color:#e3c77f; font:600 12px/1 var(--gc-font-display); letter-spacing:.1em; text-transform:uppercase; }
-@R .cal .cal-btn.primary { border-color:#c9a961; color:#f3e2b2; background:linear-gradient(180deg, #3b3223, #1b1711); }
-@R .cal .cal-btn.quiet { background:transparent; border-color:transparent; color:#cfc4a8; }
-@R .cal .cal-btn:hover { border-color:#e3c77f; box-shadow:0 0 12px rgba(240,212,138,.3); }
-@R .cal .cal-icon { border-radius:2px; color:#e3c77f; }
-@R .cal .cal-chip { border-radius:1px; background:transparent; border:1px solid rgba(212,180,106,.45); color:#e3c77f; font:600 11px/1 var(--gc-font-display); letter-spacing:.08em; text-transform:uppercase; }
-@R .cal .cal-range { font-family:var(--gc-font-display); font-weight:500; letter-spacing:.04em; color:#efe1bb; }
-@R .cal .cal-panel h2 { font-family:var(--gc-font-display); font-size:13px; letter-spacing:.1em; text-transform:uppercase; color:#e3c77f; }
-@R .cal .cal-head-dow { font-family:var(--gc-font-display); }
-@R .cal .cal-head.today .cal-head-dow { color:#f3d78f; }
-@R .cal .cal-head.today .cal-head-date { background:radial-gradient(circle, rgba(240,212,138,.25), transparent 70%); color:#fff1c4; box-shadow:0 0 0 1px #c9a961, 0 0 14px rgba(240,212,138,.45); }
-@R .cal .cal-busy { border-radius:1px; background:color-mix(in srgb, var(--m-solid) 34%, var(--gc-surface)); color:#efe6cf; }
-@R .cal .cal-avatar { color:#fff; font-family:var(--gc-font-display); box-shadow:0 0 0 1px #0d0c0a, 0 0 0 2px #9c8150; filter:saturate(.6) brightness(.9); }
-@R .cal .cal-now { box-shadow:0 0 8px rgba(243,215,143,.8); }
-@R .cal .cal-best button { border-radius:2px; }
-@R .cal .cal-best-day { font-size:15px; }
-
-@S .gc-celebrate { inset:0; display:grid; align-content:center; padding-bottom:8vh; }
-@S .gc-celebrate-box { display:block; padding:34px 16px 30px; text-align:center; background:linear-gradient(180deg, transparent, rgba(6,5,4,.88) 26%, rgba(6,5,4,.88) 74%, transparent); animation:gc-er-band 2.6s ease both; }
-@S .gc-celebrate-title { font:600 clamp(26px, 7vw, 68px)/1.08 var(--gc-font-display); letter-spacing:.06em; text-transform:uppercase; color:#e9cf8c; background:linear-gradient(180deg, #fff3cf 0%, #e9cf8c 45%, #a8843f 100%); -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; filter:drop-shadow(0 0 18px rgba(240,212,138,.45)); animation:gc-er-title 2.6s ease both; }
-@S .gc-celebrate-detail { margin-top:10px; font:italic 400 18px/1.3 var(--gc-font); color:#d8ccb0; }
-@S .gc-celebrate.is-leaving { opacity:0; transition:opacity .35s ease; }
-@keyframes gc-er-band { 0% { opacity:0 } 14% { opacity:1 } 82% { opacity:1 } 100% { opacity:0 } }
-@keyframes gc-er-title { 0% { opacity:0; letter-spacing:.18em; } 18% { opacity:1 } 100% { letter-spacing:.06em } }
-
-@S :focus-visible { outline:2px solid var(--gc-focus); outline-offset:3px; box-shadow:0 0 0 5px rgba(243,215,143,.14), 0 0 18px rgba(243,215,143,.5); }
-
-@media (max-width: 760px) {
-  @S .gc-rail { background:linear-gradient(180deg, #17150f, #0b0a08); border-right:0; border-top:1px solid transparent; border-image:linear-gradient(90deg, transparent, rgba(212,180,106,.65) 18%, rgba(212,180,106,.65) 82%, transparent) 1; }
-  @S .gc-nav-item { font-size:9px; letter-spacing:0; }
-  @S .gc-appbar-sub { display:none; }
-  @S .gc-appbar-title { font-size:15px; }
-  @S .gc-card-title { font-size:15px; letter-spacing:.04em; }
-  @S .gc-stat-label { gap:4px; font-size:10px; letter-spacing:.02em; }
-  @S .gc-stat-label > .gc-icon { width:13px; height:13px; }
-}
-`);
 
 // ── Minecraft-inspired: grass-block app bar, hotbar nav, inventory panels ──
 const MC_PANEL = "background:#c6c6c6; border:2px solid #000; border-radius:0; box-shadow:inset 3px 3px 0 #fff, inset -3px -3px 0 #555, 4px 4px 0 rgba(0,0,0,.28);";
@@ -1006,177 +811,6 @@ const MINECRAFT_CSS = scoped("minecraft", `
 }
 `);
 
-// ── Red Dead–inspired: parchment, inked frames, leather, stamped labels ──
-const RDR_PAPER = `background:var(--gc-tx-paper) 0 0/240px 240px, #f3e8cf;`;
-const RDR_INKED = `border:1px solid transparent; border-image:var(--gc-tx-ink-frame) 10 / 10px / 0 round;`;
-const RDR_CSS = scoped("rdr", `
-@R { color-scheme:light;
-  --gc-bg:#e8d8b3; --gc-surface:#f3e8cf; --gc-surface-2:#eadbb8; --gc-hover:#e6d3a8;
-  --gc-border:#a58c66; --gc-border-strong:#3b2a1a;
-  --gc-text:#2a1c10; --gc-text-2:#45311f; --gc-muted:#65503a;
-  --gc-accent:#8b1c1c; --gc-accent-hover:#a32323; --gc-accent-soft:#efcdb8; --gc-on-accent:#fbf1dc; --gc-on-accent-soft:#5c1010;
-  --gc-success:#2e5426; --gc-success-soft:#d3dfb3; --gc-warning:#6f4108; --gc-warning-soft:#f0d394; --gc-danger:#8b1c1c; --gc-danger-soft:#efc4b2;
-  --gc-track:#dcc69a; --gc-focus:#8b1c1c; --gc-tooltip-bg:#2b1d12; --gc-tooltip-text:#f6ead0;
-  --gc-font:"Libre Baskerville",Baskerville,Georgia,serif; --gc-font-display:"Rye","Rockwell Extra Bold",Georgia,serif;
-  --gc-fs-xs:11.5px; --gc-fs-sm:12.5px; --gc-fs-md:13.5px; --gc-fs-lg:15.5px; --gc-fs-xl:22px; --gc-fs-2xl:28px;
-  --gc-radius-sm:2px; --gc-radius-md:2px; --gc-radius-lg:2px; --gc-radius-pill:3px;
-  scrollbar-color:#7a5f3f #e8d8b3; }
-@R body { background:var(--gc-tx-paper) 0 0/240px 240px, #e8d8b3; }
-@S body::before { content:""; position:fixed; inset:0; z-index:-1; pointer-events:none; background:radial-gradient(ellipse at 50% 45%, transparent 50%, rgba(110,66,24,.3) 100%); }
-@S ::selection { background:#8b1c1c; color:#fbf1dc; }
-@S :where(h1,h2,h3) { font-family:var(--gc-font-display); font-weight:400; }
-
-@S .gc-appbar { --gc-text:#f6ead0; --gc-text-2:#eadbb8; --gc-muted:#dcc8a0; --gc-border:rgba(246,234,208,.4); --gc-hover:rgba(246,234,208,.12); --gc-focus:#f6ead0;
-  background:linear-gradient(90deg, rgba(233,210,160,.5) 0 6px, transparent 6px 11px) left 0 bottom 7px/11px 1px repeat-x, var(--gc-tx-grain-x) 0 0/480px 120px, linear-gradient(180deg, #3d2816, #24160b);
-  border-bottom:3px solid #120a04; box-shadow:0 4px 14px rgba(43,29,18,.35); color:#f6ead0; }
-@S .gc-logo { border-radius:50%; background:#8b1c1c; color:#f6ead0; box-shadow:0 0 0 2px #24160b, 0 0 0 3px #d9b77a, inset 0 0 0 2px rgba(246,234,208,.35); }
-@S .gc-brand-name { font-family:var(--gc-font-display); font-size:23px; letter-spacing:.03em; color:#f6ead0; text-shadow:0 2px 0 #120a04; }
-@S .gc-appbar-title { font-family:var(--gc-font-display); font-weight:400; font-size:19px; color:#f6ead0; border-left:1px solid rgba(246,234,208,.3); }
-@S .gc-appbar-sub { font-style:italic; font-size:13px; letter-spacing:.04em; color:#dcc8a0; }
-@S .gc-appbar .gc-dot { background:#9fd38a; }
-
-@S .gc-rail { background:linear-gradient(180deg, rgba(233,210,160,.45) 0 6px, transparent 6px 11px) right 7px top 0/1px 11px repeat-y, var(--gc-tx-grain-y) 0 0/120px 480px, linear-gradient(90deg, #2a1a0d, #3a2412); box-shadow:inset -3px 0 0 #120a04; }
-@S .gc-nav-item { color:#e8d6ae; font:700 10px/1.2 var(--gc-font); letter-spacing:.1em; text-transform:uppercase; }
-@S .gc-nav-pill { border-radius:3px; }
-@S .gc-nav-item:hover .gc-nav-pill { background:rgba(246,234,208,.12); }
-@S .gc-nav-item[aria-current="page"] { color:#fff6e2; }
-@S .gc-nav-item[aria-current="page"] .gc-nav-pill { background:#8b1c1c; color:#fbf1dc; box-shadow:inset 0 0 0 1px #5e1010, inset 0 0 0 3px #8b1c1c, inset 0 0 0 4px rgba(246,234,208,.6), 0 2px 0 #120a04; }
-
-@S :is(.gc-card, .gc-stat, .gc-disclosure) { ${RDR_PAPER} ${RDR_INKED} border-radius:0; box-shadow:3px 4px 0 rgba(59,42,26,.14); }
-@S .gc-card-head { padding-bottom:8px; border-bottom:3px double rgba(59,42,26,.6); }
-@S .gc-card-title { font-family:var(--gc-font-display); font-weight:400; font-size:19px; letter-spacing:.02em; color:#2a1c10; }
-@S .gc-card-icon { background:transparent; border:1.5px solid #3b2a1a; color:#3b2a1a; }
-@S .gc-section-title { display:flex; align-items:center; gap:10px; font-family:var(--gc-font-display); font-size:17px; font-weight:400; color:#2a1c10; }
-@S .gc-section-title::before, @S .gc-section-title::after { content:""; width:26px; height:4px; border-top:1px solid #3b2a1a; border-bottom:1px solid #3b2a1a; }
-@S .gc-meta { font-style:italic; }
-@S .gc-stat-label { font:700 10px/1.2 var(--gc-font); letter-spacing:.12em; text-transform:uppercase; color:#45311f; }
-@S .gc-stat-value { font-family:var(--gc-font-display); font-weight:400; font-size:24px; color:#2a1c10; }
-
-@S .gc-track { height:8px; border-radius:0; background:#e8d6ad; box-shadow:0 0 0 1px #3b2a1a; }
-@S .gc-fill { border-radius:0; background:repeating-linear-gradient(-45deg, #8b1c1c 0 3px, #a72b22 3px 6px); }
-@S .gc-fill.is-over { background:repeating-linear-gradient(-45deg, #3b2a1a 0 3px, #5a4024 3px 6px); }
-
-@S .gc-chip { height:22px; border-radius:2px; border:1.5px solid currentColor; background:transparent; font:700 10px/1 var(--gc-font); letter-spacing:.08em; text-transform:uppercase; -webkit-mask:var(--gc-tx-stamp) 0 0/120px 120px; mask:var(--gc-tx-stamp) 0 0/120px 120px; }
-@S .gc-chip-neutral { color:#45311f; border-color:#45311f; }
-@S .gc-chip-accent { color:#7a1515; background:rgba(139,28,28,.07); }
-@S .gc-chip-success { background:rgba(46,84,38,.08); }
-@S .gc-chip-warning { background:rgba(111,65,8,.08); }
-@S .gc-chip-danger { background:rgba(139,28,28,.08); }
-@S .gc-appbar .gc-chip-neutral { color:#f6ead0; border-color:#f6ead0; }
-@S .gc-appbar .gc-chip-accent { color:#ffd9c9; border-color:#ffd9c9; background:rgba(139,28,28,.45); }
-
-@S .gc-btn { height:38px; padding:0 18px; border-radius:2px; border:2px solid #5e1010; background:#8b1c1c; color:#fbf1dc; font:700 11.5px/1 var(--gc-font); letter-spacing:.14em; text-transform:uppercase;
-  box-shadow:inset 0 0 0 2px #8b1c1c, inset 0 0 0 3px rgba(251,241,220,.55), 1px 2px 0 rgba(59,42,26,.25); transition:transform .12s ease, background-color .12s ease; }
-@S .gc-btn:not(:disabled):hover { background:#a32323; box-shadow:inset 0 0 0 2px #a32323, inset 0 0 0 3px rgba(251,241,220,.6), 1px 2px 0 rgba(59,42,26,.25); transform:rotate(-1deg); }
-@S .gc-btn-tonal { background:#e3cfa5; color:#2a1c10; border-color:#3b2a1a; box-shadow:inset 0 0 0 2px #e3cfa5, inset 0 0 0 3px rgba(59,42,26,.5); }
-@S .gc-btn-tonal:not(:disabled):hover { background:#ecdcb9; filter:none; box-shadow:inset 0 0 0 2px #ecdcb9, inset 0 0 0 3px rgba(59,42,26,.5); }
-@S .gc-btn-outline { background:transparent; color:#8b1c1c; border:3px double #8b1c1c; box-shadow:none; }
-@S .gc-btn-outline:not(:disabled):hover { background:rgba(139,28,28,.07); box-shadow:none; }
-@S .gc-btn-text { background:transparent; border-color:transparent; box-shadow:none; color:#8b1c1c; padding:0 8px; }
-@S .gc-btn-text:not(:disabled):hover { background:transparent; box-shadow:none; transform:none; text-decoration:underline; text-underline-offset:3px; }
-@S .gc-btn-sm { height:30px; padding:0 12px; font-size:10.5px; }
-@S .gc-icon-btn:hover { background:rgba(59,42,26,.1); }
-@S .gc-appbar .gc-icon-btn:hover { background:rgba(246,234,208,.14); }
-
-@S :is(.gc-input, .gc-select) { border-radius:0; border:0; border-bottom:2px solid #3b2a1a; background:rgba(255,250,236,.6); color:#2a1c10; }
-@S :is(.gc-input, .gc-select):focus { outline:2px solid #8b1c1c; outline-offset:2px; border-bottom-color:#8b1c1c; }
-@S .gc-input::placeholder { color:#6f5a40; font-style:italic; }
-
-@S .gc-avatar { font-family:var(--gc-font-display); font-weight:400; box-shadow:0 0 0 2px #f3e8cf, 0 0 0 3px #3b2a1a; filter:sepia(.45) saturate(.9); }
-@S .gc-avatars .gc-avatar { box-shadow:0 0 0 2px #f3e8cf, 0 0 0 3px #3b2a1a; }
-@S .gc-avatars .gc-avatar + .gc-avatar { margin-left:-3px; }
-
-@S .gc-list-item { border-top:1px dashed rgba(59,42,26,.45); }
-@S .gc-amount { font-weight:700; }
-
-/* Wanted posters: .gc-list.gc-people */
-@S .gc-people { display:grid; grid-template-columns:repeat(auto-fill, minmax(92px, 1fr)); gap:16px 10px; padding:8px 2px 6px; }
-@S .gc-people > .gc-list-item { position:relative; flex-direction:column; justify-content:flex-start; gap:5px; min-width:0; padding:14px 6px 11px; text-align:center; ${RDR_INKED} background:var(--gc-tx-paper) 0 0/240px 240px, #efe0bb; box-shadow:2px 3px 0 rgba(59,42,26,.2); transform:rotate(-1.3deg); }
-@S .gc-people > .gc-list-item:nth-child(even) { transform:rotate(1.1deg); }
-@S .gc-people > .gc-list-item:first-child { border-top:1px solid transparent; }
-@S .gc-people > .gc-list-item::before { content:"Wanted"; align-self:stretch; padding-bottom:5px; border-bottom:3px double rgba(59,42,26,.6); font:400 14px/1 var(--gc-font-display); letter-spacing:.06em; text-transform:uppercase; color:#2a1c10; }
-@S .gc-people > .gc-list-item::after { content:""; position:absolute; top:5px; left:50%; width:7px; height:7px; margin-left:-3.5px; border-radius:50%; background:radial-gradient(circle at 35% 35%, #9a8a74, #3b2a1a); }
-@S .gc-people .gc-avatar { --gc-avatar-size:48px !important; border-radius:4px; }
-@S .gc-people .gc-list-main { flex:none; width:100%; }
-@S .gc-people .gc-list-title { font-family:var(--gc-font-display); font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-@S .gc-people .gc-list-sub { justify-content:center; }
-@S .gc-people .gc-chip { max-width:100%; padding:0 5px; letter-spacing:.03em; }
-@S .gc-people .gc-amount { text-align:center; font-size:14px; }
-@S .gc-people .gc-amount::before { content:"Bounty"; display:block; font:700 9px/1.5 var(--gc-font); letter-spacing:.16em; text-transform:uppercase; color:#8b1c1c; }
-
-@S .gc-empty > .gc-icon { color:#3b2a1a; }
-@S .gc-empty-title { font-family:var(--gc-font-display); font-weight:400; font-size:19px; color:#2a1c10; }
-@S .gc-empty-text { font-style:italic; color:#45311f; }
-@S .gc-tip::after { border-radius:1px; border:1px solid #d9b77a; box-shadow:2px 3px 0 rgba(0,0,0,.25); font:italic 400 12.5px/1.45 var(--gc-font); }
-@S .gc-disclosure > summary { margin:6px; padding:8px 14px; border-radius:0; font-family:var(--gc-font-display); font-weight:400; font-size:16px; }
-@S .gc-steps .gc-step-icon { border-radius:50%; background:transparent; border:1.5px solid #3b2a1a; color:#3b2a1a; }
-@S .gc-steps strong { font-weight:700; }
-@S .gc-dot { background:#2e5426; }
-@S .gc-sync.is-paused .gc-dot { background:#c27a1a; }
-
-@S .gc-dialog { ${RDR_PAPER} ${RDR_INKED} box-shadow:0 20px 50px rgba(30,18,8,.45); }
-@S .gc-dialog::backdrop { background:rgba(43,29,18,.55); }
-@S .gc-dialog-title { font-family:var(--gc-font-display); font-weight:400; }
-@S .gc-skin-menu { --gc-text:#2a1c10; --gc-text-2:#45311f; --gc-muted:#65503a; --gc-hover:#e6d3a8; --gc-border:#a58c66; ${RDR_PAPER} ${RDR_INKED} padding:8px; box-shadow:0 14px 34px rgba(30,18,8,.4); }
-@S .gc-skin-menu :focus-visible { outline-color:#8b1c1c; }
-@S .gc-notice-eyebrow { font:700 11px/1.3 var(--gc-font); letter-spacing:.22em; color:#8b1c1c; }
-@R .gc-notice-icon { background:transparent; border:2px solid #3b2a1a; color:#3b2a1a; box-shadow:0 0 0 3px #f3e8cf, 0 0 0 4px #3b2a1a; }
-
-/* Known pages */
-@R .home-date { font-family:var(--gc-font-display); font-weight:400; letter-spacing:.01em; }
-@R .home-big { font-family:var(--gc-font-display); }
-@R .cart-banner { ${RDR_PAPER} ${RDR_INKED} color:#2a1c10; }
-@R .set-icon { border-radius:50%; background:transparent; border:1.5px solid #3b2a1a; color:#3b2a1a; }
-@R .set-facts { border-top:1px dashed rgba(59,42,26,.45); }
-
-/* Calendar */
-@R .cal.cal { --cal-line:rgba(59,42,26,.55); --cal-line-soft:rgba(59,42,26,.16);
-  --cal-free-bg:repeating-linear-gradient(-45deg, rgba(46,84,38,.2) 0 5px, rgba(46,84,38,.07) 5px 10px); --cal-free-edge:#2e5426; --cal-free-text:#1f3d1a;
-  --cal-ovl-2:rgba(59,42,26,.1); --cal-ovl-3:rgba(59,42,26,.2); --cal-ovl-4:rgba(59,42,26,.3); --cal-ovl-edge:#3b2a1a; --cal-now:#8b1c1c; --cal-warn:#6f4108; --cal-danger:#8b1c1c; }
-@R .cal .cal-main { border:2px solid #3b2a1a; border-radius:0; outline:1px solid #3b2a1a; outline-offset:2px; }
-@R .cal .cal-panel { ${RDR_PAPER} ${RDR_INKED} border-radius:0; box-shadow:3px 4px 0 rgba(59,42,26,.14); }
-@R .cal .cal-btn { border-radius:2px; border:2px solid #3b2a1a; background:#e3cfa5; color:#2a1c10; font:700 11px/1 var(--gc-font); letter-spacing:.12em; text-transform:uppercase; box-shadow:inset 0 0 0 2px #e3cfa5, inset 0 0 0 3px rgba(59,42,26,.45); }
-@R .cal .cal-btn.primary { background:#8b1c1c; color:#fbf1dc; border-color:#5e1010; box-shadow:inset 0 0 0 2px #8b1c1c, inset 0 0 0 3px rgba(251,241,220,.55); }
-@R .cal .cal-btn.quiet { background:transparent; border-color:transparent; box-shadow:none; color:#8b1c1c; }
-@R .cal .cal-btn:hover { transform:rotate(-1deg); }
-@R .cal .cal-icon { color:#2a1c10; }
-@R .cal .cal-icon:hover { background:rgba(59,42,26,.1); }
-@R .cal .cal-chip { border-radius:2px; background:transparent; border:1.5px solid #8b1c1c; color:#8b1c1c; font:700 10.5px/1 var(--gc-font); letter-spacing:.12em; text-transform:uppercase; }
-@R .cal .cal-notice { border-radius:0; }
-@R .cal .cal-range { font-family:var(--gc-font-display); font-weight:400; font-size:22px; }
-@media (max-width: 640px) { @R .cal .cal-range { font-size:17px; } } /* [calendar-detail] */
-@R .cal .cal-panel h2 { font-family:var(--gc-font-display); font-weight:400; font-size:17px; padding-bottom:6px; border-bottom:3px double rgba(59,42,26,.55); }
-@R .cal .cal-head-dow { font:700 10px/1 var(--gc-font); letter-spacing:.14em; }
-@R .cal .cal-head-date { font-family:var(--gc-font-display); }
-@R .cal .cal-head.today .cal-head-dow { color:#8b1c1c; }
-@R .cal .cal-head.today .cal-head-date { background:transparent; color:#8b1c1c; box-shadow:0 0 0 2px #8b1c1c, 0 0 0 4px #f3e8cf, 0 0 0 5px #8b1c1c; }
-@R .cal .cal-busy { border-radius:1px; background:color-mix(in srgb, var(--m-solid) 26%, #f3e8cf); }
-@R .cal .cal-avatar { color:#fff; font-family:var(--gc-font-display); box-shadow:0 0 0 2px #f3e8cf, 0 0 0 3px #3b2a1a; filter:sepia(.45); }
-
-/* "Job done" stamp */
-@S .gc-celebrate { top:calc(var(--gc-appbar-h) + 16px); left:50%; transform:translateX(-50%); }
-@S .gc-celebrate-box { display:grid; justify-items:center; gap:10px; min-width:min(300px, calc(100vw - 32px)); padding:18px 22px 14px; ${RDR_PAPER} ${RDR_INKED} box-shadow:0 14px 34px rgba(30,18,8,.35); animation:gc-rdr-in .3s ease-out both; }
-@S .gc-celebrate-text { display:grid; justify-items:center; gap:10px; }
-@S .gc-celebrate-title { padding:8px 16px 6px; border:4px double #8b1c1c; font:400 30px/1 var(--gc-font-display); letter-spacing:.08em; text-transform:uppercase; color:#8b1c1c; transform:rotate(-6deg); -webkit-mask:var(--gc-tx-stamp) 0 0/120px 120px; mask:var(--gc-tx-stamp) 0 0/120px 120px; animation:gc-rdr-stamp .42s cubic-bezier(.2,1.5,.4,1) .1s both; }
-@S .gc-celebrate-detail { font:italic 14px/1.4 var(--gc-font); color:#2a1c10; }
-@S .gc-celebrate.is-leaving { opacity:0; transition:opacity .35s ease; }
-@keyframes gc-rdr-in { from { opacity:0; transform:translateY(-14px); } }
-@keyframes gc-rdr-stamp { from { opacity:0; transform:rotate(-6deg) scale(1.9); } to { opacity:1; transform:rotate(-6deg) scale(1); } }
-
-@S :focus-visible { outline:2px solid #8b1c1c; outline-offset:2px; }
-@S :is(.gc-appbar, .gc-rail) :focus-visible { outline-color:#f6ead0; }
-
-@media (max-width: 760px) {
-  @S .gc-rail { background:linear-gradient(90deg, rgba(233,210,160,.45) 0 6px, transparent 6px 11px) left 0 top 6px/11px 1px repeat-x, var(--gc-tx-grain-x) 0 0/480px 120px, linear-gradient(180deg, #3a2412, #2a1a0d); box-shadow:inset 0 3px 0 #120a04; }
-  @S .gc-nav-item { font-size:9px; letter-spacing:.05em; }
-  @S .gc-appbar-sub { display:none; }
-  @S .gc-appbar-title { font-size:17px; border-left:0; padding-left:0; }
-  @S .gc-card-title { font-size:16.5px; }
-  @S .gc-stat-label { gap:4px; font-size:9px; letter-spacing:.02em; }
-  @S .gc-stat-label > .gc-icon { width:13px; height:13px; }
-}
-`);
-
 // ── Cyberpunk 2077–inspired: neon HUD, angular cuts, electric yellow ──
 const CP_INK = "#0a0a0a";
 const CYBER_CSS = scoped("cyberpunk", `
@@ -1359,7 +993,7 @@ const CYBER_CSS = scoped("cyberpunk", `
 `);
 
 /** All skin CSS (~100 KB). Served once as a cached stylesheet; renderPage() links it after the base CSS and before page CSS. */
-export const SKIN_CSS = SHARED_CSS + ELDEN_CSS + MINECRAFT_CSS + RDR_CSS + CYBER_CSS;
+export const SKIN_CSS = SHARED_CSS + MINECRAFT_CSS + CYBER_CSS;
 
 const SKIN_CSS_VERSION = createHash("sha256").update(SKIN_CSS).digest("hex").slice(0, 12);
 const SKIN_CSS_PATH = "/ui/skins.css";

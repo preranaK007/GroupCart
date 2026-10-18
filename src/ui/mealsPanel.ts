@@ -18,12 +18,12 @@ import { PANTRY_ICON, PANTRY_SCRIPT, PANTRY_STYLES, PANTRY_VIEW } from "./pantry
  */
 
 registerFlavor({
-  "groceries.tab.meals": { classic: "Meals", elden: "Feasts", minecraft: "Recipes", rdr: "Grub", cyberpunk: "Chow" },
-  "kitchen.plan": { classic: "Plan my week", elden: "Divine the feasts", minecraft: "Craft a menu", rdr: "Plan the grub", cyberpunk: "Run menu.exe" },
-  "kitchen.shop": { classic: "Shop", elden: "Barter", minecraft: "Trade", rdr: "Go to town", cyberpunk: "Buy" },
-  "kitchen.tonight": { classic: "Tonight", elden: "Tonight's feast", minecraft: "Tonight", rdr: "Supper", cyberpunk: "Tonight" },
-  "kitchen.suggested": { classic: "Suggested plan", elden: "A vision of feasts", minecraft: "Recipe preview", rdr: "Camp cook's idea", cyberpunk: "Menu draft" },
-  "empty.meals.title": { classic: "No dinners yet", elden: "No feasts foretold", minecraft: "Nothing crafted", rdr: "No grub planned", cyberpunk: "No chow queued" },
+  "groceries.tab.meals": { classic: "Meals", minecraft: "Recipes", cyberpunk: "Chow" },
+  "kitchen.plan": { classic: "Plan my week", minecraft: "Craft a menu", cyberpunk: "Run menu.exe" },
+  "kitchen.shop": { classic: "Shop", minecraft: "Trade", cyberpunk: "Buy" },
+  "kitchen.tonight": { classic: "Tonight", minecraft: "Tonight", cyberpunk: "Tonight" },
+  "kitchen.suggested": { classic: "Suggested plan", minecraft: "Recipe preview", cyberpunk: "Menu draft" },
+  "empty.meals.title": { classic: "No dinners yet", minecraft: "Nothing crafted", cyberpunk: "No chow queued" },
 });
 
 export const MEALS_ICON = '<svg class="gc-icon gl-tab-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M7 3.5v6.5a2 2 0 0 0 4 0V3.5"/><path d="M9 10v10.5"/><path d="M17 20.5V3.5c-2.1 1.3-3.2 3.6-3.2 6.8V14H17"/></svg>';

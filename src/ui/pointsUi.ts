@@ -15,12 +15,12 @@ import { flavored, flavorText, registerFlavor } from "./themes.js";
  */
 
 registerFlavor({
-  "points.unit": { classic: "Points", minecraft: "XP", rdr: "Bounty", elden: "Runes", cyberpunk: "Street cred" },
-  "points.unit.lower": { classic: "points", minecraft: "XP", rdr: "bounty", elden: "runes", cyberpunk: "street cred" },
-  "points.leaderboard.title": { classic: "Leaderboard", minecraft: "Scoreboard", rdr: "Most Wanted", elden: "Hall of Champions", cyberpunk: "Top Mercs" },
-  "points.level": { classic: "Level", minecraft: "Level", rdr: "Rank", elden: "Rune level", cyberpunk: "Level" },
-  "points.mvp": { classic: "MVP", minecraft: "MVP", rdr: "Top gun", elden: "Elden Lord", cyberpunk: "Legend" },
-  "points.levelup": { classic: "Level up", minecraft: "Level up!", rdr: "Rank up", elden: "Rune level up", cyberpunk: "Level up" },
+  "points.unit": { classic: "Points", minecraft: "XP", cyberpunk: "Street cred" },
+  "points.unit.lower": { classic: "points", minecraft: "XP", cyberpunk: "street cred" },
+  "points.leaderboard.title": { classic: "Leaderboard", minecraft: "Scoreboard", cyberpunk: "Top Mercs" },
+  "points.level": { classic: "Level", minecraft: "Level", cyberpunk: "Level" },
+  "points.mvp": { classic: "MVP", minecraft: "MVP", cyberpunk: "Legend" },
+  "points.levelup": { classic: "Level up", minecraft: "Level up!", cyberpunk: "Level up" },
 });
 
 export const POINTS_CSS = `
