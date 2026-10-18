@@ -87,6 +87,8 @@ export function renderConsentPage(options: {
   memberName: string;
   redirectHost: string;
   tools: Array<{ name: string; description: string; mutates: boolean }>;
+  /** True when the member came from a web session; offers switching to a pairing code. */
+  fromSession?: boolean;
 }): string {
   const tools = options.tools.map((tool) => `<li><code>${escapeHtml(tool.name)}</code>${tool.mutates ? '<em class="oa-tag">Can change household data</em>' : ""}<span>${escapeHtml(tool.description)}</span></li>`).join("");
   const body = `<section class="oa-card" aria-labelledby="oa-title">
@@ -99,6 +101,7 @@ export function renderConsentPage(options: {
     <input type="hidden" name="ticket" value="${escapeHtml(options.ticket)}" />
     <div class="oa-actions"><button class="gc-btn gc-btn-outline" type="submit" name="decision" value="deny">Deny</button><button class="gc-btn" type="submit" name="decision" value="allow">Allow</button></div>
   </form>
+  ${options.fromSession ? `<form method="post" action="/oauth/authorize" class="oa-switch">${hiddenFields(options.fields)}<input type="hidden" name="use_pairing" value="1" /><button class="gc-btn gc-btn-text gc-btn-sm" type="submit">Not ${escapeHtml(options.memberName)}? Use a pairing code</button></form>` : ""}
   <p class="oa-foot">Disconnect it any time in GroupCart Settings &gt; AI assistants.</p>
 </section>`;
   return page(`Allow ${options.clientName}`, body);

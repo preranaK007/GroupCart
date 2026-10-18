@@ -423,6 +423,9 @@ test("a signed-in web session skips the pairing code", async () => {
     const page = await raw("GET", `/oauth/authorize?${query}`, tunnel());
     assert.equal(page.status, 200);
     assert.match(page.body, /Claude wants to act as Alex in GroupCart/);
+    assert.match(page.body, /Not Alex\? Use a pairing code/);
+    const switched = await raw("POST", "/oauth/authorize", { ...tunnel(), "content-type": "application/x-www-form-urlencoded" }, `${query}&use_pairing=1`);
+    assert.match(switched.body, /name="pairing_code"/);
   } finally {
     setRemoteAuthorizer(null);
     setRequestMemberResolver(null);
@@ -436,12 +439,27 @@ test("a signed-in web session skips the pairing code", async () => {
   }
 });
 
-test("tunnel guard: OAuth and metadata are public, everything else still 404s", async () => {
-  for (const path of ["/", "/settings", "/api/cart", "/api/feed", "/api/connector", "/.well-known/openid-configuration", "/oauth/unknown", "/api/google/oauth/start"]) {
-    assert.equal((await raw("GET", path, tunnel())).status, 404, path);
+test("tunnel guard: OAuth and metadata are public, everything else is still blocked", async () => {
+  // Blocked remote requests get a sign-in redirect (302), 401 JSON, or 404 depending on the route.
+  const BLOCKED = new Set([302, 401, 404]);
+  for (const path of ["/", "/settings", "/api/cart", "/api/feed", "/api/connector", "/api/google/oauth/start"]) {
+    const response = await raw("GET", path, { ...tunnel(), accept: "text/html" });
+    assert.ok(BLOCKED.has(response.status), `GET ${path} -> ${response.status}`);
+    assert.ok(!response.body.includes("AI assistants"), `GET ${path} must not render the dashboard`);
   }
   for (const path of ["/api/connector/pairing", "/api/connector/tokens", "/api/connector/grants/revoke", "/api/demo-message"]) {
-    assert.equal((await raw("POST", path, { ...tunnel(), "content-type": "application/json" }, JSON.stringify({ memberId: alex.id }))).status, 404, path);
+    const response = await raw("POST", path, { ...tunnel(), "content-type": "application/json" }, JSON.stringify({ memberId: alex.id }));
+    assert.ok(BLOCKED.has(response.status), `POST ${path} -> ${response.status}`);
+  }
+  // Public paths that GroupCart doesn't serve are plain 404s.
+  assert.equal((await raw("GET", "/oauth/unknown", tunnel())).status, 404);
+  assert.equal((await raw("GET", "/.well-known/openid-configuration", tunnel())).status, 404);
+  // Even a signed-in remote session can't mint pairing codes or connector tokens.
+  setRemoteAuthorizer(() => true);
+  try {
+    assert.equal((await raw("POST", "/api/connector/pairing", { ...tunnel(), "content-type": "application/json" }, JSON.stringify({ memberId: alex.id }))).status, 404);
+  } finally {
+    setRemoteAuthorizer(null);
   }
   assert.equal((await raw("GET", "/.well-known/oauth-authorization-server", tunnel())).status, 200);
   assert.equal((await raw("GET", "/oauth/authorize?client_id=x", tunnel())).status, 400);

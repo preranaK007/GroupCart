@@ -154,16 +154,18 @@ test("validateArguments checks required keys, types, and enums", () => {
 });
 
 test("tunnel guard: remote requests reach only /mcp, sign-in, and authorized routes", async () => {
+  // Blocked remote requests get a sign-in redirect (302), 401 JSON, or 404 depending on the route.
+  const BLOCKED = new Set([302, 401, 404]);
   const remote = { host: TUNNEL_HOST, "x-forwarded-for": "198.51.100.7", "cf-connecting-ip": "198.51.100.7" };
   for (const path of ["/", "/settings", "/groceries", "/calendar", "/api/cart", "/api/feed", "/api/connector", "/api/google/oauth/start?memberId=x", "/api/kroger/oauth/start?memberId=x", "/members-only"]) {
-    assert.equal((await raw("GET", path, remote)).status, 404, `GET ${path}`);
+    assert.ok(BLOCKED.has((await raw("GET", path, remote)).status), `GET ${path}`);
   }
   for (const path of ["/api/demo-message", "/api/approve", "/api/checkout", "/api/connector/tokens"]) {
     const response = await raw("POST", path, { ...remote, "content-type": "application/json" }, JSON.stringify({ memberId: alex.id, text: "eggs" }));
-    assert.equal(response.status, 404, `POST ${path}`);
+    assert.ok(BLOCKED.has(response.status), `POST ${path}`);
   }
   // DNS rebinding: a local socket with a foreign Host is remote too.
-  assert.equal((await raw("GET", "/settings", { host: "rebind.example:3000" })).status, 404);
+  assert.ok(BLOCKED.has((await raw("GET", "/settings", { host: "rebind.example:3000" })).status));
   // Sign-in routes pass the guard (the profiles module checks them itself).
   assert.equal((await raw("GET", "/signin", remote)).status, 200);
   // /mcp passes the guard and then requires a token.
@@ -172,7 +174,7 @@ test("tunnel guard: remote requests reach only /mcp, sign-in, and authorized rou
   setRemoteAuthorizer((_request, url) => url.pathname === "/members-only");
   try {
     assert.equal((await raw("GET", "/members-only", remote)).status, 200);
-    assert.equal((await raw("GET", "/settings", remote)).status, 404);
+    assert.ok(BLOCKED.has((await raw("GET", "/settings", remote)).status));
   } finally {
     setRemoteAuthorizer(null);
   }

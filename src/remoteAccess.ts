@@ -5,14 +5,12 @@
 // keep the public Host), from another device (non-loopback socket), or names a Host other than
 // 127.0.0.1 / localhost / [::1]. The Host check also blocks DNS-rebinding pages in a local browser.
 //
-// Remote requests may reach only:
+// Without a signed-in session (isRemoteAuthorized, installed by src/profilesAndChat.ts), remote requests may
+// reach only these public paths; remoteAccessGuard in src/auth.ts enforces it as the first step of every request:
 //   /mcp, /mcp/t/<token>          the AI assistant connector (own token auth, src/connector.ts)
 //   /oauth/…, /.well-known/…      its OAuth sign-in and metadata (src/connectorOAuth.ts; pairing code + consent)
-//   /signin…, /api/auth/…         sign-in routes of a profiles module (they do their own checks)
-//   anything isRemoteAuthorized() accepts (src/platform.ts; false until a profiles module installs one)
-// Everything else answers 404, so the dashboard, /api/*, demo endpoints and OAuth starts stay local-only.
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { isRemoteAuthorized } from "./platform.js";
+//   /signin…, /api/auth/…         web sign-in (src/auth.ts; does its own checks)
+import type { IncomingMessage } from "node:http";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const FORWARDING_HEADERS = [
@@ -56,23 +54,4 @@ export function isRemotePublicPath(pathname: string): boolean {
     || pathname.startsWith("/.well-known/")
     || pathname.startsWith("/signin")
     || pathname.startsWith("/api/auth/");
-}
-
-/**
- * Early guard for the dashboard server. Returns true (after sending 404) when a remote request asks for
- * anything other than the connector, sign-in routes, or a route the remote authorizer accepts.
- */
-export function blockRemoteRequest(request: IncomingMessage, response: ServerResponse, url: URL): boolean {
-  if (!isRemoteRequest(request)) return false;
-  if (isRemotePublicPath(url.pathname)) return false;
-  let authorized = false;
-  try {
-    authorized = isRemoteAuthorized(request, url);
-  } catch {
-    authorized = false;
-  }
-  if (authorized) return false;
-  response.writeHead(404, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  response.end(JSON.stringify({ error: "Not found." }));
-  return true;
 }

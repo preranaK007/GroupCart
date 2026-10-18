@@ -11,7 +11,7 @@ npm install
 npm run start
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Groceries (`/groceries`) shows the shared cart, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Home (`/`) shows today's overview, Chat (`/chat`) is the household conversation (in the demo, the easiest way to try the bot), Groceries (`/groceries`) shows the shared cart, People (`/people`) shows everyone's profile, and Settings (`/settings`) shows connections. Chores, Bills, and Calendar are placeholders for now. Data is stored in `./data/groupcart.sqlite` by default; uploaded avatars and chat photos go next to it in `avatars/` and `chat-files/`.
 
 ## Connect your Spectrum dedicated line
 
@@ -86,9 +86,28 @@ The OAuth layer is in `src/connectorOAuth.ts`:
 
 Codes, tokens, client secrets, and pairing codes are stored only as hashes.
 
-**Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1`. ChatGPT, Grok, and claude.ai need a public HTTPS URL; Grok rejects localhost and private addresses. Run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`, set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, and restart GroupCart. Quick-tunnel addresses change on every run, so update the connector URL in each assistant when that happens.
+**Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1` unless `GROUP_CART_HOST` is set. ChatGPT, Grok, and claude.ai need a public HTTPS URL; Grok rejects localhost and private addresses. Run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`, set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, and restart GroupCart. Quick-tunnel addresses change on every run, so update the connector URL in each assistant when that happens.
 
-Requests that come through a tunnel or proxy (non-loopback `Host`, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp`, `/mcp/t/<token>`, `/oauth/*`, `/.well-known/*`, and sign-in routes (see `src/remoteAccess.ts`). The dashboard, `/api/*` (including token and pairing-code management), demo endpoints, and the Kroger/Google OAuth starts answer 404. Because those callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs. A personal URL `…/mcp/t/<token>` (in the Connect Claude dialog) works with assistants set to no authentication; treat it like a password. Failed token, pairing-code, and OAuth attempts are rate-limited.
+Without a signed-in session, requests that come through a tunnel, proxy, or another device (non-loopback `Host` or socket, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp`, `/mcp/t/<token>`, `/oauth/*`, `/.well-known/*`, and sign-in routes (`src/remoteAccess.ts`, enforced by `remoteAccessGuard` in `src/auth.ts`). Everything else (dashboard pages, `/api/*`, demo endpoints, and the Kroger/Google OAuth starts) redirects to `/signin` or is refused. Token and pairing-code management (`/api/connector/*`) works only on the computer running GroupCart, even for signed-in users. Because those callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs. A personal URL `…/mcp/t/<token>` (in the Connect Claude dialog) works with assistants set to no authentication; treat it like a password. Failed token, pairing-code, and OAuth attempts are rate-limited.
+## Chores
+
+Open [http://127.0.0.1:3000/chores](http://127.0.0.1:3000/chores). A Mon–Sun week strip shows each day's chores in the assignee's color (late ones get a red dot and move to today; done ones are struck through; later weeks show the planned rotation). Below are **Up next** (tap the circle to mark done, **⋮** to skip, give the turn to someone, or delete), **People** (completions in the last 30 days, plus an away toggle), and **Recent**. **Add chore** picks a name, an icon, One-off / Weekly / Monthly, and who is in the rotation. Home shows a **Chores due** card with today's and overdue chores. The page can change chores in demo and live mode; it only accepts same-origin JSON requests.
+
+- **Schedules:** weekly on a weekday (or every 2–8 weeks), monthly on a day (29–31 fall on the last day of shorter months; "monthly" alone means the last day), or one-off by a date. Doing a chore early counts for the current cycle; doing it late moves to the next date after today. A chore can be marked done once a day, and not again until its next cycle starts.
+- **Fair rotation:** the next turn goes to whoever in the chore's rotation has gone longest without doing it, then fewest completions, then name order. Members who are away are skipped. `skip` passes the current turn on (the skipper is still first in line next time); `swap` hands it to someone else. If someone covers, the person whose turn it was stays up next.
+- **Group chat:** `chores` (due this week and who's up), `my chores`, `done dishes` / `I did the dishes` / `I took out the trash`, `skip dishes`, `swap dishes with Maya`, `away until Oct 30` / `I'm back`, and `add chore vacuum every Sunday`, `add chore take out trash weekly on Tuesday`, `add chore deep clean fridge monthly`, `add chore fix lamp by Friday` (add `for Maya and Jordan` to limit the rotation). Replies are idempotent by message ID; phrases that don't name a chore (like "finished the milk") fall through to groceries.
+- **Nudges:** a morning digest of what's due today (after 9 AM, only if something is due) and at most one overdue nudge per chore per day, e.g. "🍽️ Maya hasn’t done the dishes in 2 weeks. Maya’s up next." Sent between 9 AM and 9 PM server time; in the demo they appear in `GET /api/feed`.
+- **Claude connector tools:** `list_chores`, `my_chores`, `complete_chore`, `add_chore`, `skip_chore`, `set_away` (run as the calling member).
+- **API:** `GET /api/chores?week=YYYY-MM-DD`; JSON `POST /api/chores` (create), `/api/chores/done`, `/undo`, `/skip`, `/assign`, `/delete`, `/restore`, `/away`.
+
+The local demo seeds sample chores and history (dishes, trash, vacuum, bathroom, plants, recycling, fridge) once; live mode starts empty. Data lives in `chore_*` tables in the same SQLite file.
+## Profiles, sign-in, and web chat
+
+Each member has a profile at `/people/<id>`: a name, a photo or emoji avatar, optional pronouns (GroupCart never guesses; it uses names or they/them), a short bio, dietary notes and allergies, favorite snacks, movie and game picks, a birthday, and a payment handle such as Venmo. Open your own profile from the avatar menu in the top right to edit it.
+
+`/chat` shows the group conversation the way iMessage does. In live mode it mirrors the iMessage group: every message from allowlisted members, GroupCart's replies, and group notifications. A message you send from the website is posted to the group as “Maya: …” and handled exactly like the same text in the group, so “2 bananas”, “cart”, and photos of bills all work. In the demo, nothing is sent anywhere.
+
+On the computer running GroupCart you are already signed in; the avatar menu's **Viewing as** list picks which member you act as. To use GroupCart from your own phone or laptop, set `GROUP_CART_HOST=0.0.0.0` (or put it behind a tunnel), open `/signin`, and enter the phone number or Apple ID you use in the group. GroupCart texts you a 6-digit code by iMessage (valid 10 minutes, single use). Sessions last 30 days. If iMessage isn't connected, sign-in from other devices is unavailable and the page says so. In the demo the code is shown on screen.
 
 ## Configuration
 
@@ -102,6 +121,7 @@ Requests that come through a tunnel or proxy (non-loopback `Host`, or any `X-For
 | `GROUP_CART_BUDGET_CENTS` | Sample budget in cents | `5000` |
 | `GROUP_CART_PUBLIC_URL` | Public base URL used in links; a non-loopback HTTPS value (e.g. a tunnel) also becomes the public AI assistant connector URL | `http://127.0.0.1:$PORT` |
 | `PORT` | Local dashboard port | `3000` |
+| `GROUP_CART_HOST` | Address the dashboard listens on. `0.0.0.0` serves your network; other devices must sign in | `127.0.0.1` (this computer only) |
 | `KROGER_CLIENT_ID` | Kroger Production app client ID for product search and user-authorized cart access | unset (live Kroger features disabled) |
 | `KROGER_CLIENT_SECRET` | Kroger Production app client secret | unset (live Kroger features disabled) |
 | `KROGER_LOCATION_ID` | Kroger-family store ID for local availability/prices | unset |

@@ -5,7 +5,7 @@
 //   registerRoute(handler)     HTTP route on the local dashboard server (pages and /api/*)
 //   registerTools(tools)       tools exposed to Claude through the connector (MCP)
 //   scheduleEvery(name, ms, fn) background job (nudges, recurring lists, reminders)
-//   notifyGroup(text)          proactive message to the household group chat
+//   notifyGroup(text)          proactive message to the household group chat (also shown in the web chat)
 //   registerHelp(line)         one line appended to the "help" reply
 //   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
@@ -165,10 +165,20 @@ export function setGroupSender(sender: ((text: string) => Promise<void>) | null)
   groupSender = sender;
 }
 
+// --- Profiles & chat: mirror group notifications into the web chat ---
+const notifyListeners: Array<(text: string) => void> = [];
+
+/** Called with every notifyGroup() text (the web chat records them as GroupCart messages). */
+export function onGroupNotify(listener: (text: string) => void): void {
+  notifyListeners.push(listener);
+}
+// --- end profiles & chat ---
+
 /** Sends a proactive message to the group (live) and always records it in the feed. */
 export async function notifyGroup(text: string): Promise<void> {
   feed.push({ id: ++feedId, at: new Date().toISOString(), text });
   if (feed.length > 100) feed.splice(0, feed.length - 100);
+  for (const listener of notifyListeners) { try { listener(text); } catch (error) { console.warn("A group notification listener failed:", error instanceof Error ? error.message : error); } } // profiles & chat
   if (!groupSender) return;
   try {
     await groupSender(text);

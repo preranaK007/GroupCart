@@ -513,7 +513,7 @@ export class ConnectorOAuth {
     sendPage(response, result.status, renderOAuthErrorPage({ title: result.title, message: result.message }));
   }
 
-  #consentPage(response: ServerResponse, client: OAuthClient, fields: AuthorizeFields, memberId: string): void {
+  #consentPage(response: ServerResponse, client: OAuthClient, fields: AuthorizeFields, memberId: string, fromSession = false): void {
     const member = this.#member(memberId);
     if (!member) return sendPage(response, 400, renderOAuthErrorPage({ title: "Member not found", message: "That household member isn't in GroupCart anymore." }));
     const now = Date.now();
@@ -534,6 +534,7 @@ export class ConnectorOAuth {
       memberName: member.name,
       redirectHost,
       tools: listTools().map((tool) => ({ name: tool.name, description: tool.description, mutates: Boolean(tool.mutates) })),
+      fromSession,
     }));
   }
 
@@ -547,7 +548,7 @@ export class ConnectorOAuth {
     const result = this.#validateAuthorize(Object.fromEntries(url.searchParams));
     if (result.kind !== "ok") return this.#respondInvalid(response, result);
     const memberId = this.#sessionMember(request, url);
-    if (memberId) return this.#consentPage(response, result.client, result.fields, memberId);
+    if (memberId) return this.#consentPage(response, result.client, result.fields, memberId, true);
     sendPage(response, 200, renderPairingPage({ fields: result.fields, clientName: result.client.name }));
   }
 
@@ -583,10 +584,11 @@ export class ConnectorOAuth {
       if (fields.state !== undefined) target.searchParams.set("state", fields.state);
       return redirect(response, target.toString());
     }
+    if (text(params.use_pairing) === "1") return sendPage(response, 200, renderPairingPage({ fields, clientName: client.name }));
     const sessionMemberId = this.#sessionMember(request, url);
     const pairingCode = text(params.pairing_code);
     if (pairingCode === undefined) {
-      if (sessionMemberId) return this.#consentPage(response, client, fields, sessionMemberId);
+      if (sessionMemberId) return this.#consentPage(response, client, fields, sessionMemberId, true);
       return sendPage(response, 200, renderPairingPage({ fields, clientName: client.name }));
     }
     const limitKey = clientKey(request);
