@@ -11,7 +11,8 @@
 //   registerCardHandler(owner, handler)     taps on web chat cards (polls, buttons) whose id starts with "<owner>:"
 //   postCard(text, card) / cardReply(text, card)  a bot message with a card (see "Chat cards" below)
 //   runBuiltInCommand(context) GroupCart's own command handling for a member's text (index.ts installs it), never the coordinator
-//   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
+//   requestMember(request) / actingMember(request, members, claimedId)  who a web request is; live buttons act as them only
+//   store.database            the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
 // Live mode sends notifyGroup() messages to the household group that the store persists (upstream's
 // store.rememberGroupSpace / store.groupSpace, reopened with imessage(app).space.get after a restart; see
@@ -37,7 +38,12 @@ export type CommandContext = {
   /** Message text (empty string for attachment-only messages). */
   text: string;
   attachments: CommandAttachment[];
+  /** The chat message this one replies to (an iMessage threaded reply, or Reply in the web chat). */
+  replyTo?: ReplyTarget;
 };
+
+/** A replied-to chat message: who wrote it (a roommate, "GroupCart", or "Claude") and its text. */
+export type ReplyTarget = { messageId: number; name: string; text: string; fromBot: boolean };
 
 /** Returns a reply to send to the group, or null when the message isn't for this handler. */
 export type CommandHandler = (context: CommandContext) => Promise<string | null> | string | null;
@@ -107,6 +113,20 @@ export function requestMember(request: IncomingMessage): { memberId: string } | 
   }
 }
 
+export type ActingMember = { ok: true; memberId: string } | { ok: false; status: 401 | 403; error: string };
+
+/**
+ * The member a live-mode web button acts as: the signed-in (or "Viewing as") household member and nobody else.
+ * No such member is a 401; a body naming another member (`claimedId`, e.g. a `memberId` field) is a 403, so a
+ * button never adds to the cart, RSVPs, or votes for another roommate.
+ */
+export function actingMember(request: IncomingMessage, members: ReadonlyArray<{ id: string }>, claimedId?: unknown): ActingMember {
+  const viewer = requestMember(request)?.memberId;
+  if (!viewer || !members.some((member) => member.id === viewer)) return { ok: false, status: 401, error: "Sign in to GroupCart first." };
+  if (claimedId !== undefined && claimedId !== null && claimedId !== viewer) return { ok: false, status: 403, error: "You can only do that for yourself." };
+  return { ok: true, memberId: viewer };
+}
+
 export type FeedEntry = { id: number; at: string; text: string };
 
 const commands: Array<{ name: string; handler: CommandHandler }> = [];
@@ -114,7 +134,9 @@ const routes: RouteHandler[] = [];
 const tools = new Map<string, ToolSpec>();
 const feed: FeedEntry[] = [];
 let feedId = 0;
-let groupSender: ((text: string) => Promise<void>) | null = null;
+/** Sends text into the household group and returns iMessage's id for it when known. */
+type GroupSender = (text: string) => Promise<string | null | void>;
+let groupSender: GroupSender | null = null;
 const timers: NodeJS.Timeout[] = [];
 const helpLines: string[] = [];
 
@@ -217,7 +239,7 @@ export function listTools(): ToolSpec[] {
 }
 
 /** Live mode: index.ts sets this once to send into the persisted household group (src/householdGroup.ts). */
-export function setGroupSender(sender: ((text: string) => Promise<void>) | null): void {
+export function setGroupSender(sender: GroupSender | null): void {
   groupSender = sender;
 }
 
@@ -316,6 +338,8 @@ export type CardSink = {
   recordText(text: string, author: string): ChatMessage | null;
   /** Replaces the newest message carrying card.id with this card (null when none is shown). */
   refresh(card: ChatCard): ChatMessage | null;
+  /** Remembers iMessage's id for a bot message sent to the group, so replies and reactions to it find it. */
+  linkSent?(messageId: number, sentId: string): void;
 };
 let cardSink: CardSink | null = null;
 
@@ -335,7 +359,7 @@ export async function postCard(text: string, card: ChatCard, options: { author?:
   // An open poll goes to iMessage as a native poll (its votes come back through votePollFromGroup).
   if (groupSender && groupPollSender && card.kind === "poll" && !card.closed) {
     try {
-      if (text.trim()) await groupSender(signed(text.trim(), options.author));
+      if (text.trim()) linkSent(message, await groupSender(signed(text.trim(), options.author)));
       const nativePollId = await groupPollSender(card.question, card.options.map((option) => option.label));
       // Remember iMessage's id for the poll so its votes find this card.
       if (nativePollId && message) return cardSink?.refresh({ ...card, nativePollId }) ?? message;
@@ -346,7 +370,7 @@ export async function postCard(text: string, card: ChatCard, options: { author?:
   }
   if (groupSender) {
     try {
-      await groupSender(signed(fallback, options.author));
+      linkSent(message, await groupSender(signed(fallback, options.author)));
     } catch (error) {
       console.warn("Could not send a card to the group:", error instanceof Error ? error.message : error);
     }
@@ -362,13 +386,17 @@ function signed(text: string, author: string | undefined): string {
   return author ? `${author}: ${text}` : text;
 }
 
+function linkSent(message: ChatMessage | null, sentId: string | null | void): void {
+  if (message && sentId) cardSink?.linkSent?.(message.id, sentId);
+}
+
 /** Posts a plain bot message as `author` (web chat, feed, and the household group in live mode). */
 export async function postMessage(text: string, options: { author: string }): Promise<ChatMessage | null> {
   recordGroupMessage(text);
   const message = cardSink?.recordText(text.trim(), options.author) ?? null;
   if (groupSender) {
     try {
-      await groupSender(signed(text, options.author));
+      linkSent(message, await groupSender(signed(text, options.author)));
     } catch (error) {
       console.warn("Could not send a message to the group:", error instanceof Error ? error.message : error);
     }

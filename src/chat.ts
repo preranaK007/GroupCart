@@ -20,7 +20,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { attachment, type Space } from "spectrum-ts";
-import { cardHandler, cardOwner, claimReplyCard, type CardActionResult, type CommandAttachment, type CommandContext } from "./platform.js";
+import { cardHandler, cardOwner, claimReplyCard, type CardActionResult, type CommandAttachment, type CommandContext, type ReplyTarget } from "./platform.js";
 import { joinNames } from "./choresLogic.js";
 import { isStoredImageName, sniffImage } from "./profiles.js";
 import type { Member } from "./store.js";
@@ -86,6 +86,8 @@ export type ChatMessage = {
   card: ChatCard | null;
   /** Emoji reactions on the message (the household coordinator's, today), oldest first. */
   reactions: Array<{ emoji: string; by: string }>;
+  /** The message this one replies to, or null. */
+  replyTo: ReplyTarget | null;
   /** Last change (a card update bumps it), so pollers can ask for messages updated since their last poll. */
   updatedAt: string;
 };
@@ -95,19 +97,27 @@ export type MemberMessageProcessor = (context: CommandContext) => Promise<string
 
 /** What the chat needs from the household's iMessage group. */
 export type GroupChannel = {
-  sendText(text: string): Promise<void>;
+  /** Sends text; returns iMessage's id for it when known. */
+  sendText(text: string): Promise<string | null | void>;
   sendImage(path: string, mimeType: string, name: string): Promise<void>;
-  /** Sends a GroupCart reply with the typing indicator. */
-  respond(text: string): Promise<void>;
+  /** Sends a GroupCart reply with the typing indicator; returns iMessage's id for it when known. */
+  respond(text: string): Promise<string | null | void>;
+  /** Sends text as a threaded reply to a group message (by its Spectrum id); returns the new message's id. */
+  reply?(messageId: string, text: string): Promise<string | null | void>;
   /** Reacts to a message in the group (an iMessage tapback) by its Spectrum message id. */
   react?(messageId: string, emoji: string): Promise<void>;
 };
 
 export function spectrumChannel(space: Space): GroupChannel {
   return {
-    sendText: async (text) => { await space.send(text); },
+    sendText: async (text) => (await space.send(text))?.id ?? null,
     sendImage: async (path, mimeType, name) => { await space.send(attachment(path, { name, mimeType })); },
-    respond: async (text) => { await space.responding(async () => { await space.send(text); }); },
+    respond: async (text) => {
+      let sentId: string | null = null;
+      await space.responding(async () => { sentId = (await space.send(text))?.id ?? null; });
+      return sentId;
+    },
+    reply: async (messageId, text) => replyInSpace(space, messageId, text),
     react: async (messageId, emoji) => { await reactInSpace(space, messageId, emoji); },
   };
 }
@@ -116,6 +126,13 @@ export function spectrumChannel(space: Space): GroupChannel {
 export async function reactInSpace(space: Space, messageId: string, emoji: string): Promise<void> {
   const message = await space.getMessage(messageId);
   if (message?.direction === "inbound") await message.react(emoji);
+}
+
+/** A threaded reply to one of the group's messages; a plain message when that one can't be found. */
+export async function replyInSpace(space: Space, messageId: string, text: string): Promise<string | null> {
+  const target = await space.getMessage(messageId);
+  const sent = target ? await target.reply(text) : await space.send(text);
+  return sent?.id ?? null;
 }
 
 /** One emoji (with its modifiers), nothing else. */
@@ -129,7 +146,7 @@ export class ChatError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-type Row = { id: number; external_id: string | null; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string; card_json: string | null; updated_at: string | null; reactions_json: string | null };
+type Row = { id: number; external_id: string | null; kind: string; member_id: string | null; author_name: string; text: string; attachments_json: string; source: string; via: string | null; created_at: string; card_json: string | null; updated_at: string | null; reactions_json: string | null; reply_to_id: number | null };
 
 /** Author of a bot message that names none. */
 export const BOT_AUTHOR = "GroupCart";
@@ -187,6 +204,7 @@ export class ChatService {
     if (!columns.some((column) => column.name === "card_json")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN card_json TEXT");
     if (!columns.some((column) => column.name === "updated_at")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN updated_at TEXT");
     if (!columns.some((column) => column.name === "reactions_json")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN reactions_json TEXT");
+    if (!columns.some((column) => column.name === "reply_to_id")) this.#db.exec("ALTER TABLE chat_messages ADD COLUMN reply_to_id INTEGER");
     this.#db.exec("CREATE INDEX IF NOT EXISTS chat_messages_updated ON chat_messages (updated_at)");
   }
 
@@ -217,12 +235,12 @@ export class ChatService {
   // Recording
   // ---------------------------------------------------------------------------
 
-  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; via?: string; at?: Date; card?: ChatCard | null }): ChatMessage | null {
+  #insert(input: { externalId?: string; kind: ChatKind; memberId: string | null; authorName: string; text: string; attachments: StoredAttachment[]; source: ChatSource; via?: string; at?: Date; card?: ChatCard | null; replyToId?: number | null }): ChatMessage | null {
     const at = input.at && !Number.isNaN(input.at.getTime()) ? input.at : new Date();
     // updated_at is the real insert time even for back-dated (seed) messages.
     const result = this.#db.prepare(
-      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, via, created_at, card_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, input.via ?? null, at.toISOString(), input.card ? JSON.stringify(input.card) : null, new Date().toISOString());
+      "INSERT OR IGNORE INTO chat_messages (external_id, kind, member_id, author_name, text, attachments_json, source, via, created_at, card_json, updated_at, reply_to_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(input.externalId ?? null, input.kind, input.memberId, input.authorName, input.text, JSON.stringify(input.attachments), input.source, input.via ?? null, at.toISOString(), input.card ? JSON.stringify(input.card) : null, new Date().toISOString(), input.replyToId ?? null);
     if (!Number(result.changes)) return null;
     return this.get(Number(result.lastInsertRowid));
   }
@@ -232,10 +250,11 @@ export class ChatService {
    * its attachments for command handlers. Attachment bytes are read once and shared: image files are saved for
    * inline display while handlers (e.g. Bills) read the same bytes.
    */
-  recordInbound(input: { messageId: string; memberId: string; memberName: string; text: string; attachments: InboundAttachment[]; at?: Date }): CommandAttachment[] {
+  recordInbound(input: { messageId: string; memberId: string; memberName: string; text: string; attachments: InboundAttachment[]; at?: Date; replyToId?: number | null }): CommandAttachment[] {
     const shared = input.attachments.map((item) => ({ ...item, read: memoize(item.read) }));
     const message = this.#insert({
       externalId: `imessage:${input.messageId}`,
+      replyToId: input.replyToId ?? null,
       kind: "member",
       memberId: input.memberId,
       authorName: input.memberName,
@@ -434,11 +453,51 @@ export class ChatService {
 
   /** Live loop: sends a GroupCart reply into the group (with typing) and records it. */
   async replyInGroup(channel: GroupChannel, text: string): Promise<void> {
+    let sentId: string | null | void = null;
     try {
-      await channel.respond(text);
+      sentId = await channel.respond(text);
     } finally {
-      this.recordBot(text, "reply");
+      const recorded = this.recordBot(text, "reply");
+      if (recorded && sentId) this.linkSent(recorded.id, sentId);
     }
+  }
+
+  /** Remembers iMessage's id for a message GroupCart sent to the group (bot posts, web relays). */
+  linkSent(messageId: number, sentId: string): void {
+    try {
+      this.#db.prepare("UPDATE chat_messages SET external_id = ? WHERE id = ? AND external_id IS NULL").run(`imessage:${sentId}`, messageId);
+    } catch { /* already linked to another message */ }
+  }
+
+  /**
+   * The chat message an iMessage reply points at: by iMessage id (roommates' messages, and GroupCart's own once
+   * linked), else the newest message whose iMessage text matches (“Claude: …”, “Maya: …”, or GroupCart's text).
+   */
+  findReplyTarget(target: { messageId: string; text: string | null }): number | null {
+    const linked = this.#db.prepare("SELECT id FROM chat_messages WHERE external_id = ?").get(`imessage:${target.messageId}`) as { id: number } | undefined;
+    if (linked) return linked.id;
+    const wanted = target.text?.trim();
+    if (!wanted) return null;
+    const rows = this.#db.prepare("SELECT * FROM chat_messages ORDER BY id DESC LIMIT 300").all() as Row[];
+    const match = rows.find((row) => {
+      const text = row.text.trim();
+      return text === wanted || `${row.author_name}: ${text}` === wanted || wanted.startsWith(`${row.author_name}: ${text}\n`);
+    });
+    return match?.id ?? null;
+  }
+
+  /** Who wrote a message and its first line or so, for showing (and telling the coordinator) what a reply answers. */
+  quote(messageId: number): ReplyTarget | null {
+    const row = this.#db.prepare("SELECT id, kind, member_id, author_name, text, attachments_json FROM chat_messages WHERE id = ?").get(messageId) as Pick<Row, "id" | "kind" | "member_id" | "author_name" | "text" | "attachments_json"> | undefined;
+    if (!row) return null;
+    const bot = row.kind === "bot";
+    const photo = (JSON.parse(row.attachments_json) as StoredAttachment[]).length ? "Photo" : "";
+    return {
+      messageId: row.id,
+      name: bot ? row.author_name || BOT_AUTHOR : (row.member_id && this.#displayName(row.member_id)) || row.author_name,
+      text: (row.text.replace(/\s+/g, " ").trim() || photo).slice(0, 160),
+      fromBot: bot,
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -453,7 +512,7 @@ export class ChatService {
    */
   async send(
     member: Member,
-    input: { text: string; image?: Buffer; imageName?: string },
+    input: { text: string; image?: Buffer; imageName?: string; replyToId?: number | null },
     options: { source: "web" | "connector"; awaitReply?: boolean; /** Connector: which assistant ("Claude", "ChatGPT", "Grok"). */ via?: string; process?: MemberMessageProcessor } = { source: "web" },
   ): Promise<{ message: ChatMessage; reply?: string | null }> {
     const text = input.text.replace(/\r\n/g, "\n").trim().slice(0, CHAT_TEXT_LIMIT);
@@ -466,6 +525,8 @@ export class ChatService {
       if (!stored) throw new ChatError(415, "Send a PNG, JPEG, GIF, WebP, or HEIC image.");
     }
     const imageName = (input.imageName ?? "").replace(/[^\w .()-]+/g, "").trim().slice(0, 80) || `photo.${stored?.file.split(".").pop() ?? "jpg"}`;
+    const replyTo = input.replyToId ? this.quote(input.replyToId) : null;
+    if (input.replyToId && !replyTo) throw new ChatError(404, "The message you’re replying to isn’t in the chat anymore.");
     const message = this.#insert({
       kind: "member",
       memberId: member.id,
@@ -474,7 +535,11 @@ export class ChatService {
       attachments: stored ? [{ name: imageName, mimeType: stored.mimeType, size: input.image!.length, file: stored.file }] : [],
       source: options.source,
       via: options.source === "connector" ? options.via ?? "AI assistant" : undefined,
+      replyToId: replyTo?.messageId ?? null,
     })!;
+    // A reply to a message that is in iMessage goes there as a threaded reply.
+    const threadTo = replyTo ? (this.#db.prepare("SELECT external_id FROM chat_messages WHERE id = ?").get(replyTo.messageId) as { external_id: string | null } | undefined)?.external_id : null;
+    const replyId = threadTo?.startsWith("imessage:") ? threadTo.slice("imessage:".length) : null;
 
     const job = async (): Promise<string | null> => {
       this.#busy += 1;
@@ -483,7 +548,10 @@ export class ChatService {
         if (group) {
           const label = options.source === "connector" ? `${member.name} (via ${options.via ?? "AI assistant"})` : member.name;
           try {
-            if (text) await group.sendText(`${label}: ${text}`);
+            if (text) {
+              const sentId = replyId && group.reply ? await group.reply(replyId, `${label}: ${text}`) : await group.sendText(`${label}: ${text}`);
+              if (sentId) this.linkSent(message.id, sentId);
+            }
             if (stored) {
               if (!text) await group.sendText(`${label} sent a photo:`);
               await group.sendImage(join(this.#filesDir, stored.file), stored.mimeType, imageName);
@@ -498,7 +566,7 @@ export class ChatService {
         const attachments: CommandAttachment[] = stored
           ? [{ mimeType: stored.mimeType, name: imageName, read: memoize(() => readFile(join(this.#filesDir, stored!.file))) }]
           : [];
-        const reply = await (options.process ?? this.#process)({ messageId: `web:${message.id}`, memberId: member.id, memberName: member.name, text, attachments });
+        const reply = await (options.process ?? this.#process)({ messageId: `web:${message.id}`, memberId: member.id, memberName: member.name, text, attachments, ...(replyTo ? { replyTo } : {}) });
         if (reply) {
           if (group) {
             try { await group.respond(reply); } catch (error) {
@@ -547,6 +615,7 @@ export class ChatService {
       at: row.created_at,
       card: row.card_json ? JSON.parse(row.card_json) as ChatCard : null,
       reactions: row.reactions_json ? JSON.parse(row.reactions_json) as Array<{ emoji: string; by: string }> : [],
+      replyTo: row.reply_to_id ? this.quote(row.reply_to_id) : null,
       updatedAt: row.updated_at ?? row.created_at,
     };
   }

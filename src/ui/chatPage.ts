@@ -56,6 +56,20 @@ const styles = `
 .ch-img-link { display:block; border-radius:18px; overflow:hidden; border:1px solid var(--gc-border); background:var(--gc-surface-2); line-height:0; }
 .ch-img { display:block; max-width:min(260px, 60vw); max-height:320px; width:auto; height:auto; object-fit:cover; }
 .ch-file { display:inline-flex; align-items:center; gap:6px; padding:8px 12px; border-radius:18px; border:1px solid var(--gc-border); color:var(--gc-text-2); font-size:var(--gc-fs-sm); }
+/* Replies: a quote of the answered message above the bubble, a Reply button beside each message, and the composer bar */
+.ch-quote { display:block; max-width:100%; box-sizing:border-box; padding:4px 10px; margin-bottom:-2px; border:0; border-left:3px solid var(--gc-border-strong); border-radius:4px 12px 12px 4px !important; background:var(--gc-surface-2); color:var(--gc-muted); font:400 12px/1.35 var(--gc-font); text-align:left; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ch-quote strong { color:var(--gc-text-2); font-weight:600; margin-right:4px; }
+.ch-row.is-mine .ch-quote { border-left:0; border-right:3px solid var(--gc-border-strong); border-radius:12px 4px 4px 12px !important; text-align:right; }
+.ch-reply-btn { align-self:center; flex:none; width:28px; height:28px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; color:var(--gc-muted); cursor:pointer; opacity:0; transition:opacity .12s ease; }
+.ch-reply-btn:hover, .ch-reply-btn:focus-visible { background:var(--gc-hover); color:var(--gc-text); opacity:1; outline:none; }
+.ch-row:hover .ch-reply-btn, .ch-row.is-picked .ch-reply-btn { opacity:1; }
+@media (hover: none) { .ch-reply-btn { opacity:.55; } }
+.ch-row.is-flash .ch-bubble, .ch-row.is-flash .ch-card { box-shadow:0 0 0 2px var(--gc-accent); transition:box-shadow .2s ease; }
+.ch-replying { display:flex; align-items:center; gap:8px; margin:0 0 var(--gc-space-2) 44px; padding:6px 6px 6px 10px; border-left:3px solid var(--gc-accent); border-radius:6px; background:var(--gc-surface-2); font-size:var(--gc-fs-sm); color:var(--gc-muted); }
+.ch-replying span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ch-replying strong { color:var(--gc-text); font-weight:600; }
+.ch-replying button { flex:none; width:24px; height:24px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; color:var(--gc-muted); cursor:pointer; }
+.ch-replying button:hover { background:var(--gc-hover); color:var(--gc-text); }
 .ch-reacts { display:flex; flex-wrap:wrap; gap:4px; margin-top:-2px; }
 .ch-react { display:inline-flex; align-items:center; gap:4px; padding:1px 8px 1px 6px; border-radius:999px !important; border:1px solid var(--gc-border); background:var(--gc-surface); font-size:14px; line-height:20px; }
 .ch-react span { color:var(--gc-muted); font-size:11px; }
@@ -157,6 +171,7 @@ const body = `
   <button class="ch-jump" id="chJump" type="button" hidden>${icon("chevronDown", { size: 16 })}New messages</button>
   <div class="ch-foot">
     <div class="ch-suggest" id="chSuggest"></div>
+    <div class="ch-replying" id="chReplying" hidden>${icon("reply", { size: 16 })}<span id="chReplyingText"></span><button type="button" id="chReplyCancel" aria-label="Cancel reply">${icon("close", { size: 14 })}</button></div>
     <div class="ch-preview" id="chPreview" hidden><img id="chPreviewImg" alt="Photo to send" /><button type="button" id="chPreviewRemove" aria-label="Remove photo">${icon("close", { size: 14 })}</button></div>
     <form class="ch-composer" id="chForm" autocomplete="off">
       <label class="ch-attach" title="Add a photo" tabindex="0" id="chAttach">${icon("photo", { size: 22 })}<span class="gc-sr">Add a photo</span><input type="file" id="chFile" accept="image/*" hidden /></label>
@@ -173,13 +188,14 @@ const GC = window.GC;
 const $ = (id) => document.getElementById(id);
 const scroller = $("chScroll"), list = $("chList"), input = $("chInput"), sendButton = $("chSend");
 const BOT_AVATAR = ${JSON.stringify(BOT_AVATAR(32))};
+const REPLY_ICON = ${JSON.stringify(icon("reply", { size: 16 }))};
 const CLAUDE_AVATAR = ${JSON.stringify(CLAUDE_AVATAR(32))};
 const CLAUDE_AUTHOR = ${JSON.stringify(CLAUDE_AUTHOR)};
 const CHECK = ${JSON.stringify(icon("check", { size: 14 }))};
 const DONE = ${JSON.stringify(icon("checkCircle", { size: 16 }))};
 const EXTERNAL = ${JSON.stringify(icon("external", { size: 14 }))};
 const POLL = ${JSON.stringify(icon("chores", { size: 14 }))};
-const state = { messages: [], ids: new Set(), pending: [], me: null, household: [], typing: false, expectReply: false, live: false, groupConnected: true, hasEarlier: false, file: null, fileUrl: null, since: null, changed: false, cardBusy: new Set(), cardErrors: {} };
+const state = { messages: [], ids: new Set(), pending: [], me: null, household: [], typing: false, expectReply: false, live: false, groupConnected: true, hasEarlier: false, file: null, fileUrl: null, since: null, changed: false, cardBusy: new Set(), cardErrors: {}, replyTo: null };
 let stick = true;
 
 const dayKey = (date) => date.getFullYear() + "-" + date.getMonth() + "-" + date.getDate();
@@ -308,6 +324,7 @@ function render() {
     const classes = ["ch-row", kind, claude ? "is-claude" : "", first ? "is-first" : "", last ? "is-last" : "", message.pending ? "is-pending" : ""].filter(Boolean).join(" ");
     let col = "";
     if (first && (!mine || message.via)) col += '<div class="ch-name">' + GC.esc(mine ? "via " + message.via : message.name + (message.via ? " · via " + message.via : "")) + '</div>';
+    if (message.replyTo) col += '<button type="button" class="ch-quote" data-jump="' + GC.esc(message.replyTo.messageId) + '" title="Show the message this replies to"><strong>' + GC.esc(message.replyTo.name) + '</strong>' + GC.esc(message.replyTo.text) + '</button>';
     for (const item of message.attachments || []) col += attachmentHtml(item);
     if (message.text) col += emojiOnly(message.text) ? '<div class="ch-emoji" title="' + GC.esc(fullTime(at)) + '">' + GC.esc(message.text) + '</div>' : '<div class="ch-bubble" title="' + GC.esc(fullTime(at)) + '">' + linkify(message.text) + '</div>';
     if (message.card) col += cardHtml(message);
@@ -319,7 +336,9 @@ function render() {
     }
     html += '<li class="' + classes + '" data-id="' + GC.esc(message.id || message.tempId) + '">'
       + (mine ? "" : '<span class="ch-av">' + (last ? avatarFor(message) : "") + '</span>')
-      + '<div class="ch-col">' + col + '</div></li>';
+      + '<div class="ch-col">' + col + '</div>'
+      + (message.id && !message.pending ? '<button type="button" class="ch-reply-btn" data-reply="' + GC.esc(message.id) + '" aria-label="Reply to ' + GC.esc(message.name) + '" title="Reply">' + REPLY_ICON + '</button>' : "")
+      + '</li>';
   }
   list.innerHTML = html || '<li class="ch-empty">' + GC.icon("message") + '<p data-flavor="empty.chat.title">No messages yet. Say hi!</p></li>';
   $("chTyping").hidden = !(state.typing || state.expectReply);
@@ -449,8 +468,8 @@ async function prepareImage(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-async function send(text, file, retryOf) {
-  const temp = retryOf || { tempId: "t" + Date.now() + Math.random().toString(36).slice(2, 6), kind: "member", name: state.me ? state.me.name : "", text, attachments: [], at: new Date().toISOString(), pending: true, file };
+async function send(text, file, retryOf, replyTo) {
+  const temp = retryOf || { tempId: "t" + Date.now() + Math.random().toString(36).slice(2, 6), kind: "member", name: state.me ? state.me.name : "", text, attachments: [], at: new Date().toISOString(), pending: true, file, replyTo: replyTo || null };
   temp.failed = false; temp.pending = true;
   if (file && !temp.attachments.length) temp.attachments = [{ image: true, url: URL.createObjectURL(file), name: file.name }];
   if (!retryOf) state.pending.push(temp);
@@ -460,9 +479,11 @@ async function send(text, file, retryOf) {
     let response;
     if (file) {
       const blob = await prepareImage(file);
-      response = await fetch("/api/chat/messages", { method: "POST", headers: { "content-type": blob.type || "application/octet-stream", "x-gc-request": "1", "x-gc-text": encodeURIComponent(text), "x-gc-filename": encodeURIComponent(file.name || "photo") }, body: blob });
+      const headers = { "content-type": blob.type || "application/octet-stream", "x-gc-request": "1", "x-gc-text": encodeURIComponent(text), "x-gc-filename": encodeURIComponent(file.name || "photo") };
+      if (temp.replyTo) headers["x-gc-reply-to"] = String(temp.replyTo.messageId);
+      response = await fetch("/api/chat/messages", { method: "POST", headers, body: blob });
     } else {
-      response = await fetch("/api/chat/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      response = await fetch("/api/chat/messages", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text, replyToId: temp.replyTo ? temp.replyTo.messageId : null }) });
     }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || "Not sent");
@@ -514,7 +535,38 @@ async function actOnCard(cardEl, input) {
   if (stick) toBottom();
 }
 
+/** Reply mode: the composer shows who and what you're answering until you send or cancel. */
+function setReplyTo(target) {
+  state.replyTo = target;
+  $("chReplying").hidden = !target;
+  $("chReplyingText").innerHTML = target ? "Replying to <strong>" + GC.esc(target.name) + "</strong> " + GC.esc(target.text) : "";
+}
+$("chReplyCancel").addEventListener("click", () => { setReplyTo(null); input.focus(); });
+function jumpTo(id) {
+  const row = list.querySelector('li[data-id="' + CSS.escape(String(id)) + '"]');
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.add("is-flash");
+  setTimeout(() => row.classList.remove("is-flash"), 1400);
+}
+
 list.addEventListener("click", (event) => {
+  const replyButton = event.target.closest("[data-reply]");
+  if (replyButton) {
+    const message = state.messages.find((item) => String(item.id) === replyButton.getAttribute("data-reply"));
+    if (message) {
+      const photo = (message.attachments || []).length ? "Photo" : "";
+      setReplyTo({ messageId: message.id, name: message.name, text: (message.text || photo || (message.card ? "Card" : "")).replace(/\\s+/g, " ").slice(0, 160) });
+      input.focus();
+    }
+    return;
+  }
+  const quote = event.target.closest("[data-jump]");
+  if (quote) { jumpTo(quote.getAttribute("data-jump")); return; }
+  // On touch screens a tap on a message shows its Reply button.
+  const row = event.target.closest(".ch-row");
+  list.querySelectorAll(".ch-row.is-picked").forEach((other) => { if (other !== row) other.classList.remove("is-picked"); });
+  if (row && !event.target.closest("a, button")) row.classList.toggle("is-picked");
   const cardEl = event.target.closest("[data-card-msg]");
   const option = event.target.closest("[data-opt]");
   const action = event.target.closest("button[data-action]");
@@ -567,7 +619,9 @@ $("chForm").addEventListener("submit", (event) => {
   input.value = ""; autosize();
   state.file = null; $("chPreview").hidden = true; $("chFile").value = "";
   updateSend();
-  send(text, file);
+  const replyTo = state.replyTo;
+  setReplyTo(null);
+  send(text, file, null, replyTo);
   input.focus();
 });
 $("chSuggest").addEventListener("click", (event) => {

@@ -260,7 +260,7 @@ if (!liveMode) {
         continue;
       }
       if (message.direction !== "inbound") continue;
-      if (message.content.type !== "text" && message.content.type !== "attachment" && message.content.type !== "poll_option") continue;
+      if (message.content.type !== "text" && message.content.type !== "attachment" && message.content.type !== "poll_option" && message.content.type !== "reply") continue;
 
       const senderHandle = message.sender?.id;
       if (!senderHandle) continue;
@@ -275,7 +275,14 @@ if (!liveMode) {
       // Upstream: persist the household group an allowlisted member wrote from. Proactive messages (list
       // check-ins, notifyGroup(), web chat relays) only ever go there (src/householdGroup.ts).
       group.remember(space, groupSpace.phone);
-      const content = message.content;
+      // A threaded reply carries the message it answers; its own content is text or a photo like any other.
+      const reply = message.content.type === "reply" ? message.content : null;
+      const content = reply ? reply.content : message.content;
+      if (content.type !== "text" && content.type !== "attachment" && content.type !== "poll_option") continue;
+      const replyToId = reply
+        ? social.chat.findReplyTarget({ messageId: reply.target.id, text: reply.target.content.type === "text" ? reply.target.content.text : null })
+        : null;
+      const replyTo = replyToId ? social.chat.quote(replyToId) ?? undefined : undefined;
       // A vote on one of GroupCart's native iMessage polls updates that poll (web chat card included); not a message.
       if (content.type === "poll_option") {
         console.log(`iMessage poll vote: ${member.name} ${content.selected ? "picked" : "unpicked"} “${content.option.title}”.`);
@@ -295,14 +302,15 @@ if (!liveMode) {
           ? [{ mimeType: content.mimeType, name: content.name, size: content.size, read: () => content.read() }]
           : [],
         at: message.timestamp,
+        replyToId,
       });
-      const reply = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments });
-      if (!reply) continue;
+      const answer = await processMemberMessage({ messageId: message.id, memberId: member.id, memberName: member.name, text, attachments, ...(replyTo ? { replyTo } : {}) });
+      if (!answer) continue;
 
       // Fallback delivery (upstream): a due list check-in not yet sent rides along with
       // this group reply (still at most once per cycle).
       const reminder = config.listRemindersEnabled ? store.claimDueListReminders() : null;
-      const outgoing = reminder ? `${reply}\n\n${reminder.text}` : reply;
+      const outgoing = reminder ? `${answer}\n\n${reminder.text}` : answer;
       try {
         await social.replyInGroup(space, outgoing);
       } catch (error) {

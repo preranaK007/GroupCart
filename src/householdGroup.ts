@@ -6,7 +6,7 @@
 // from the message loop when we have one, otherwise Spectrum's `imessage(app).space.get(chatGuid, { phone })`.
 // Nothing is ever sent before the bot has seen the household group.
 import { attachment, poll, type Space } from "spectrum-ts";
-import { reactInSpace, type GroupChannel } from "./chat.js";
+import { reactInSpace, replyInSpace, type GroupChannel } from "./chat.js";
 import type { GroupTarget } from "./reminders.js";
 import type { CartStore } from "./store.js";
 
@@ -53,15 +53,18 @@ export class HouseholdGroup {
     return space;
   }
 
-  /** notifyGroup() sender: posts into the household group. Quietly skips (logged once) before the group is known. */
-  async send(text: string): Promise<void> {
+  /**
+   * notifyGroup() sender: posts into the household group and returns iMessage's id for the message. Quietly skips
+   * (logged once) before the group is known.
+   */
+  async send(text: string): Promise<string | null> {
     const space = await this.space();
     if (!space) {
       if (!this.#warnedUnknown) console.log("Group notifications wait until a household member messages GroupCart from the group.");
       this.#warnedUnknown = true;
-      return;
+      return null;
     }
-    await space.send(text);
+    return (await space.send(text))?.id ?? null;
   }
 
   /**
@@ -91,11 +94,14 @@ export class HouseholdGroup {
   /** Web chat relays (src/chat.ts) go to the same persisted group. */
   channel(): GroupChannel {
     return {
-      sendText: async (text) => { await (await this.#require()).send(text); },
+      sendText: async (text) => (await (await this.#require()).send(text))?.id ?? null,
+      reply: async (messageId, text) => replyInSpace(await this.#require(), messageId, text),
       sendImage: async (path, mimeType, name) => { await (await this.#require()).send(attachment(path, { name, mimeType })); },
       respond: async (text) => {
         const space = await this.#require();
-        await space.responding(async () => { await space.send(text); });
+        let sentId: string | null = null;
+        await space.responding(async () => { sentId = (await space.send(text))?.id ?? null; });
+        return sentId;
       },
       react: async (messageId, emoji) => { await reactInSpace(await this.#require(), messageId, emoji); },
     };

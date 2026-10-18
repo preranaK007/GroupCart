@@ -20,7 +20,7 @@ function setup(replies: Array<string | null>, chance = 1) {
   const channel: CoordinatorChannel = {
     post: async (text, card) => {
       posted.push({ text, card });
-      const message = { id: messages.length + 1, kind: "bot", memberId: null, name: "Claude", text, attachments: [], source: "reply", via: null, card: card ?? null, reactions: [], at: new Date().toISOString(), updatedAt: new Date().toISOString() } as ChatMessage;
+      const message = { id: messages.length + 1, kind: "bot", memberId: null, name: "Claude", text, attachments: [], source: "reply", via: null, card: card ?? null, reactions: [], replyTo: null, at: new Date().toISOString(), updatedAt: new Date().toISOString() } as ChatMessage;
       messages.push(message);
       return message;
     },
@@ -162,4 +162,14 @@ test("now and then banter gets a turn, so Claude can react or chime in; at most 
   await coordinator.handleMessage(message("m-ana", "lol"));
   assert.equal(turns.length, 1, "the next laugh soon after doesn't");
   assert.equal(posted.length, 0, "a reaction posts no message");
+});
+
+test("a direct reply to Claude is always for Claude, even a one-word laugh", async () => {
+  const { coordinator, turns } = setup(["(no reply)"]);
+  coordinator.connect("m-ana");
+  await coordinator.handleMessage({ ...message("m-ben", "lol"), replyTo: { messageId: 4, name: "Claude", text: "Bananas are in the cart 🍌", fromBot: true } });
+  assert.equal(turns.length, 1);
+  assert.match(turns[0]!.prompt, /a direct reply to your message #4 \(“Bananas are in the cart 🍌”\), so it's for you: answer it: “lol”/);
+  await coordinator.handleMessage({ ...message("m-ben", "lol"), replyTo: { messageId: 5, name: "Ana", text: "the fridge is a crime scene", fromBot: false } });
+  assert.equal(turns.length, 1, "a laugh replying to a roommate is still banter");
 });

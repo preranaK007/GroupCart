@@ -47,7 +47,7 @@ export type ProfilesAndChat = {
   profiles: ProfileService;
   chat: ChatService;
   /** Live loop: record an inbound member message; returns its attachments for command handlers. */
-  recordInbound(input: { messageId: string; memberId: string; memberName: string; text: string; attachments: InboundAttachment[]; at?: Date }): CommandAttachment[];
+  recordInbound(input: { messageId: string; memberId: string; memberName: string; text: string; attachments: InboundAttachment[]; at?: Date; replyToId?: number | null }): CommandAttachment[];
   /** Live loop: send GroupCart's reply into the group (typing indicator) and record it. */
   replyInGroup(space: Space, text: string): Promise<void>;
   /** Live mode: enable sign-in codes by iMessage DM and relay web chat messages to the persisted household group. */
@@ -134,6 +134,7 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
   onGroupNotify((text) => { chat.recordBot(text, "notify"); });
   // postCard() / refreshCard(): bot messages with polls and buttons.
   setCardSink({
+    linkSent: (messageId, sentId) => chat.linkSent(messageId, sentId),
     record: (text, card, author) => chat.recordBot(text, "notify", undefined, card, { author }),
     recordText: (text, author) => chat.recordBot(text, "notify", undefined, undefined, { author }),
     refresh: (card) => { const message = chat.findByCardId(card.id); return message ? chat.updateCard(message.id, card) : null; },
@@ -367,13 +368,14 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
       const viewer = viewerOr401(request, response);
       if (!viewer) return true;
       const type = String(request.headers["content-type"] ?? "").toLowerCase();
-      let input: { text: string; image?: Buffer; imageName?: string };
+      let input: { text: string; image?: Buffer; imageName?: string; replyToId?: number | null };
+      const replyId = (value: unknown) => { const id = Number(value); return Number.isSafeInteger(id) && id > 0 ? id : null; };
       if (type.startsWith("application/json")) {
         const body = await readJsonBody(request, 16_384);
-        input = { text: typeof body.text === "string" ? body.text : "" };
+        input = { text: typeof body.text === "string" ? body.text : "", replyToId: replyId(body.replyToId) };
       } else {
         const decode = (value: string | string[] | undefined) => { try { return decodeURIComponent(String(value ?? "")); } catch { return ""; } };
-        input = { text: decode(request.headers["x-gc-text"]), image: await readRawBody(request, 15 * 1024 * 1024), imageName: decode(request.headers["x-gc-filename"]) };
+        input = { text: decode(request.headers["x-gc-text"]), image: await readRawBody(request, 15 * 1024 * 1024), imageName: decode(request.headers["x-gc-filename"]), replyToId: replyId(request.headers["x-gc-reply-to"]) };
       }
       try {
         const result = await chat.send(viewer.member, input, { source: "web", awaitReply: url.searchParams.get("wait") === "1" });
