@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { registeredHelp } from "./platform.js";
 import { DatabaseSync } from "node:sqlite";
 import {
   CATALOG,
@@ -270,6 +271,15 @@ export class CartStore {
       }
     }
     return this.getMembers();
+  }
+
+  /** Shared SQLite handle for feature modules (they create their own tables). */
+  get database(): DatabaseSync {
+    return this.#db;
+  }
+
+  get household(): string {
+    return this.#householdId;
   }
 
   getMembers(): Member[] {
@@ -1291,6 +1301,7 @@ export class CartStore {
         ? "Approve/Kroger cart: everyone texts “approve,” then “checkout” checks availability at the configured store before asking whose Kroger account to use. If something appears unavailable, GroupCart suggests alternatives but never substitutes automatically; choose one with “replace 1 with 2.” Any changed list needs everyone’s approval again. After sign-in, available UPC items are added to Kroger; you finish ordering there. No order or payment is placed by GroupCart."
         : "Approve/checkout: in the local demo, checkout is simulated. Live Kroger cart transfer requires configured Kroger app credentials and Cart API access. GroupCart never places an order or charges anyone.",
       "Splitwise: after checkout, GroupCart logs the total as one Splitwise expense paid by the shopper, with each person owing their share. Text “splitwise” (or “settle”) for the latest status, or “splitwise retry” if logging failed.",
+      ...registeredHelp(),
       "Not sure what to say? Text “help” or “commands” anytime.",
     ].join("\n\n");
   }

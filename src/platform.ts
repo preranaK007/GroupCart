@@ -6,6 +6,8 @@
 //   registerTools(tools)       tools exposed to Claude through the connector (MCP)
 //   scheduleEvery(name, ms, fn) background job (nudges, recurring lists, reminders)
 //   notifyGroup(text)          proactive message to the household group chat
+//   registerHelp(line)         one line appended to the "help" reply
+//   store.database             the shared SQLite handle (create your own tables with CREATE TABLE IF NOT EXISTS)
 //
 // Live mode sends notifyGroup() messages to the most recent iMessage group space; demo mode
 // keeps them in an in-memory feed served at GET /api/feed so the dashboard can show them.
@@ -56,6 +58,16 @@ const feed: FeedEntry[] = [];
 let feedId = 0;
 let groupSender: ((text: string) => Promise<void>) | null = null;
 const timers: NodeJS.Timeout[] = [];
+const helpLines: string[] = [];
+
+/** Adds a line to the group "help" reply (keep it to one short sentence with the command in quotes). */
+export function registerHelp(line: string): void {
+  helpLines.push(line);
+}
+
+export function registeredHelp(): string[] {
+  return [...helpLines];
+}
 
 export function registerCommand(name: string, handler: CommandHandler): void {
   commands.push({ name, handler });
