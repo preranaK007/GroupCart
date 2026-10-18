@@ -17,6 +17,8 @@ export type SettingsContext = {
     locationConfigured: boolean;
     checkout: { status: string; selectedMemberId: string | null } | null;
   };
+  /** Google sign-in is configured; members can always connect with a calendar link on /calendar. */
+  calendar: { googleAvailable: boolean };
 };
 
 export type IntegrationCard = {
@@ -100,17 +102,20 @@ function imessageCard(context: SettingsContext): IntegrationCard {
   };
 }
 
-// --- Placeholders: replaced on merge by feature/google-calendar, feature/splitwise,
-// --- and the Claude connector branch. Each is one self-contained function.
-
-function googleCalendarCard(): IntegrationCard {
+// Calendars: each roommate connects their own on /calendar (src/calendarPage.ts), with Google sign-in when it is
+// configured or by pasting their calendar's secret iCal link (src/calendarLinks.ts).
+function calendarCard(context: SettingsContext): IntegrationCard {
+  const { googleAvailable } = context.calendar;
   return {
-    id: "google-calendar",
-    name: "Google Calendar",
+    id: "calendar",
+    name: googleAvailable ? "Google Calendar" : "Calendars",
     icon: "calendar",
     summary: "Find times everyone is free",
-    status: { label: "Not configured", tone: "neutral" },
-    actions: button({ label: "Connect", variant: "outline", size: "sm", disabled: true }),
+    status: googleAvailable ? { label: "Google sign-in on", tone: "success" } : { label: "Calendar links", tone: "neutral" },
+    actions: button({ label: "Connect your calendar", variant: "outline", size: "sm", href: "/calendar#calPeoplePanel" }),
+    tip: googleAvailable
+      ? "Each roommate connects their own Google Calendar (or a calendar link) on the Calendar page. Housemates see busy times only unless that person turns on event titles."
+      : "Each roommate pastes their own calendar's secret link on the Calendar page: Google's “Secret address in iCal format”, an iCloud public calendar, or an Outlook ICS link. Housemates see busy times only unless that person turns on event titles.",
   };
 }
 
@@ -161,7 +166,7 @@ export function renderSettingsPage(context: SettingsContext): string {
   ${appearanceCard()}
   ${installCard()}
   ${sectionHeader("Connections", { flavor: "settings.connections" })}
-  ${[coordinatorCard(), imessageCard(context), krogerCard(context), googleCalendarCard(), splitwiseCard(), billsAnthropicCard(), claudeCard()].filter((card): card is IntegrationCard => card !== null).map(renderIntegrationCard).join("\n")}
+  ${[coordinatorCard(), imessageCard(context), krogerCard(context), calendarCard(context), splitwiseCard(), billsAnthropicCard(), claudeCard()].filter((card): card is IntegrationCard => card !== null).map(renderIntegrationCard).join("\n")}
 </div>`;
   return renderPage({
     title: "Settings",

@@ -76,7 +76,7 @@ const MEALS_DIALOGS = dialog({
 }) + dialog({
   id: "kmShopDialog",
   title: "Shop for meals",
-  body: `<div id="kmShopBody"></div><p class="gc-status" id="kmShopStatus" role="status" aria-live="polite"></p>`,
+  body: `<div id="kmShopBody"></div>`,
   actions: `${button({ label: "Cancel", variant: "text", attrs: "data-gc-close" })}${button({ label: "Add to cart", id: "kmShopGo", icon: "cart" })}`,
 });
 
@@ -370,9 +370,8 @@ ${PANTRY_SCRIPT}
       : '<p class="km-shop-sub">Everything is in the pantry or the cart.</p>')
       + (skip.length ? '<div class="km-shop-skip">' + GC.icon("check") + skip.map((line) => '<span class="gc-chip gc-chip-neutral" title="' + (line.status === "pantry" ? "In the pantry" : "Already in the cart") + '">' + esc(line.name) + '</span>').join("") + '</div>' : "");
     const goButton = $("kmShopGo");
-    goButton.disabled = !buy.length || !state.demoMode;
+    goButton.disabled = !buy.length;
     goButton.lastChild.textContent = buy.length ? (state.mode === "kroger" ? "Add " + buy.length + " to list" : "Add " + buy.length + " to cart") : "Add to cart";
-    $("kmShopStatus").textContent = state.demoMode ? "" : "Live mode: text “shop for meals” in the group.";
   }
   $("kmShop").addEventListener("click", async () => { await K.load(true); renderShop(); GC.openDialog("kmShopDialog"); });
   $("kmShopGo").addEventListener("click", async () => {
@@ -380,7 +379,8 @@ ${PANTRY_SCRIPT}
     const result = await K.post("/api/kitchen/meals/shop", {});
     if (!result) { $("kmShopGo").disabled = false; return; }
     GC.closeDialog("kmShopDialog");
-    K.toast(result.message);
+    // Kroger: everything went on the one-off list, which the Lists tab sends to the cart to pick products.
+    K.toast(result.status === "listed" && K.state.mode === "kroger" ? "📝 Put " + result.listed.length + " on “Dinners this week”. Tap To cart on the Lists tab to pick the products." : result.message);
     if (result.status === "added" && GC.celebrate) GC.celebrate("Ingredients in the cart");
     K.load(true);
   });

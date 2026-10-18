@@ -144,6 +144,7 @@ export function startDashboard(store: CartStore, port: number, demoMode: boolean
           locationConfigured: Boolean(krogerClient?.hasLocation),
           checkout: pending ? { status: pending.status, selectedMemberId: pending.selectedMemberId } : null,
         },
+        calendar: { googleAvailable: Boolean(calendar?.googleAvailable) },
       }));
     }
     if (request.method === "GET" && url.pathname === "/api/cart") {

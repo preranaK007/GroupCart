@@ -154,6 +154,10 @@ button.hv-person:hover { background:var(--gc-hover); }
 .hv-badge.going { background:#188038; }
 .hv-badge.maybe { background:#e37400; }
 .hv-badge.no { background:#c5221f; }
+.hv-rsvp { display:flex; flex-wrap:wrap; gap:6px; }
+.hv-rsvp button { height:32px; padding:0 14px; border:1px solid var(--gc-border-strong); border-radius:var(--gc-radius-pill); background:transparent; color:var(--gc-text-2); font:500 var(--gc-fs-sm) var(--gc-font); cursor:pointer; }
+.hv-rsvp button:hover { background:var(--gc-hover); }
+.hv-rsvp button[aria-pressed="true"] { background:var(--gc-accent-soft); border-color:transparent; color:var(--gc-on-accent-soft); }
 .hv-tasks { list-style:none; margin:0; padding:0; }
 .hv-task { display:flex; align-items:center; gap:var(--gc-space-3); min-height:40px; border-top:1px solid var(--gc-border); }
 .hv-task:first-child { border-top:0; }
@@ -554,6 +558,12 @@ const calendarScript = String.raw`
 
   // ---- Event detail -------------------------------------------------------
   const marks = { going: "✓", maybe: "?", no: "✕" };
+  const RSVP_CHOICES = [["going", "Going"], ["maybe", "Maybe"], ["no", "Can’t go"]];
+  // Live mode posts any product choices (Kroger matches, which milk) in the chat, where this member answers them
+  // (same wording as the Lists tab, src/ui/listsPanel.ts).
+  const movedMessage = (r) => !currentEvent.demoMode && r.pending.length
+    ? (r.added.length ? "🛒 Moved " + r.added.length + " to the cart. " : "") + "GroupCart posted the choices in the chat: reply there with your pick."
+    : r.message || "Moved to the cart";
   async function openEvent(id) {
     try {
       const response = await fetch("/api/events/detail?id=" + encodeURIComponent(id));
@@ -578,20 +588,23 @@ const calendarScript = String.raw`
       return '<' + tag + (tag === "button" ? ' type="button" data-rsvp="' + esc(m.id) + '" title="Change RSVP"' : "") + ' class="hv-person is-' + status + '">' + GC.avatar(m, allIds, 36)
         + (status !== "none" ? '<span class="hv-badge ' + status + '">' + marks[status] + '</span>' : "") + '<span>' + esc(m.name) + '</span></' + tag + '>';
     }).join("");
+    // Live mode: the viewer answers for themselves only; everyone else's RSVP stays read-only.
+    const canRsvp = !d.demoMode && e.kind !== "house" && Boolean(d.range) && e.attendeeIds.includes(d.viewerId);
+    const myRsvp = canRsvp ? '<div class="hv-rsvp" role="group" aria-label="Your RSVP">' + RSVP_CHOICES.map(([status, label]) => '<button type="button" data-my-rsvp="' + status + '" aria-pressed="' + (d.rsvps[d.viewerId] === status) + '">' + label + '</button>').join("") + '</div>' : "";
     const tasks = d.tasks.length ? '<div class="hv-section"><div class="hv-section-title">' + GC.icon("chores") + 'Tasks</div><ul class="hv-tasks">' + d.tasks.map((t) => '<li class="hv-task' + (t.done ? " is-done" : "") + '">'
       + GC.avatar(d.members.find((m) => m.id === t.memberId) || { id: t.memberId || "?", name: "?" }, allIds, 28)
       + '<span class="hv-task-label">' + esc(t.label) + ' <span class="gc-meta">' + esc((d.members.find((m) => m.id === t.memberId) || {}).name || "") + '</span></span>'
       + '<button type="button" class="hv-check" role="checkbox" aria-checked="' + t.done + '" data-task="' + esc(t.id) + '" aria-label="' + esc(t.label) + ' done">' + GC.icon("check") + '</button></li>').join("") + '</ul></div>' : "";
     const list = d.list ? '<div class="hv-section"><div class="hv-section-title">' + GC.icon("cart") + esc(d.list.name) + '</div><div class="hv-snacks">'
       + d.list.items.map((i) => '<span class="hv-pill' + (i.checked ? " is-done" : "") + '">' + esc(i.name) + '</span>').join("")
-      + (d.demoMode && d.list.remaining ? '<button type="button" class="gc-btn gc-btn-tonal gc-btn-sm" data-list-cart="' + esc(d.list.id) + '">' + GC.icon("cart") + 'To cart</button>' : "")
+      + (d.list.remaining ? '<button type="button" class="gc-btn gc-btn-tonal gc-btn-sm" data-list-cart="' + esc(d.list.id) + '">' + GC.icon("cart") + 'To cart</button>' : "")
       + '<a class="gc-btn gc-btn-text gc-btn-sm" href="/groceries#lists">Open</a></div></div>' : "";
     const ideas = d.ideas && d.ideas.length ? '<div class="hv-section"><div class="hv-section-title">🍿 Movie ideas</div><ul class="hv-ideas">' + d.ideas.slice(0, 4).map((i) => '<li class="hv-idea">' + esc(i.title)
       + '<span class="gc-avatars">' + i.votes.map((id) => GC.avatar(d.members.find((m) => m.id === id) || { id, name: "?" }, allIds, 20)).join("") + '</span><span class="gc-meta">' + i.votes.length + (i.votes.length === 1 ? " vote" : " votes") + '</span></li>').join("") + '</ul><div class="hv-foot">Text “add movie &lt;title&gt;” or “vote &lt;title&gt;”.</div></div>' : "";
     const notes = e.notes ? '<div class="hv-section"><div class="hv-section-title">' + GC.icon("message") + 'Notes</div><div class="hv-notes-text">' + esc(e.notes) + '</div></div>' : "";
     $("hvEventBody").innerHTML = '<div class="hv-hero"><span class="hv-hero-emoji">' + esc(e.emoji) + '</span><div><div class="hv-hero-sub">' + GC.icon("clock") + esc(when) + repeat + '</div></div></div>'
       + '<div class="hv-section"><div class="hv-section-title">' + GC.icon("users") + (e.kind !== "house" ? "Who’s in" : "Who") + '</div><div class="hv-people">' + people + '</div>'
-      + (e.kind !== "house" && !d.demoMode ? '<div class="hv-foot">RSVP in the group: “I’m in” or “can’t make it”.</div>' : "") + '</div>'
+      + myRsvp + '</div>'
       + tasks + list + ideas + notes;
   }
   $("hvEventBody").addEventListener("click", async (event) => {
@@ -603,6 +616,11 @@ const calendarScript = String.raw`
       try { const result = await post("/api/events/rsvp", { eventId: currentEvent.event.id, memberId: rsvp.dataset.rsvp, status: next }); currentEvent.rsvps = result.rsvps; renderEvent(); load(true); } catch (error) { toast(error.message); }
       return;
     }
+    const mine = event.target.closest("[data-my-rsvp]");
+    if (mine && currentEvent) {
+      try { const result = await post("/api/events/rsvp", { eventId: currentEvent.event.id, status: mine.dataset.myRsvp }); currentEvent.rsvps = result.rsvps; renderEvent(); load(true); } catch (error) { toast(error.message); }
+      return;
+    }
     const task = event.target.closest("[data-task]");
     if (task && currentEvent) {
       const done = task.getAttribute("aria-checked") !== "true";
@@ -612,7 +630,7 @@ const calendarScript = String.raw`
     const cart = event.target.closest("[data-list-cart]");
     if (cart) {
       cart.disabled = true;
-      try { const result = await post("/api/named-lists/to-cart", { listId: cart.dataset.listCart }); toast(result.message); openEvent(currentEvent.event.id); } catch (error) { toast(error.message); cart.disabled = false; }
+      try { const result = await post("/api/named-lists/to-cart", { listId: cart.dataset.listCart }); toast(movedMessage(result)); openEvent(currentEvent.event.id); } catch (error) { toast(error.message); cart.disabled = false; }
     }
   });
   $("hvDelete").addEventListener("click", async () => {
@@ -635,11 +653,16 @@ const calendarScript = String.raw`
     $("hvPollDialog-title").textContent = p.emoji + " " + p.title;
     const best = Math.max(0, ...p.options.map((o) => o.yes.length));
     const people = ev.members.filter((m) => p.attendeeIds.includes(m.id));
+    // The demo votes as anyone; live mode only as the viewer (their own face), everyone else's votes are read-only.
+    const canVote = (m) => ev.demoMode || m.id === ev.viewerId;
+    const foot = ev.demoMode ? "Tap a face to vote as them."
+      : p.attendeeIds.includes(ev.viewerId) ? "Tap your face on each time that works for you (tap again for no)."
+      : "Only the people in this plan vote on it.";
     $("hvPollBody").innerHTML = '<div class="hv-hero-sub">' + GC.chip("Voting", "warning", "users") + '<span>' + p.responded.length + " of " + p.attendeeIds.length + ' voted · books at ' + p.majority + ' yes</span>' + (p.organizerId ? '<span>· by ' + esc(member(p.organizerId).name) + '</span>' : "") + '</div>'
       + '<ol class="hv-opts">' + p.options.map((o) => {
         const voters = people.map((m) => {
           const state = o.yes.includes(m.id) ? "yes" : o.no.includes(m.id) ? "no" : "none";
-          const tag = ev.demoMode ? "button" : "span";
+          const tag = canVote(m) ? "button" : "span";
           return '<' + tag + (tag === "button" ? ' type="button" data-vote="' + esc(m.id) + '" data-option="' + o.index + '" title="' + esc(m.name) + ': ' + (state === "yes" ? "yes" : state === "no" ? "no" : "no answer") + '"' : ' title="' + esc(m.name) + '"') + ' class="hv-vote is-' + state + '">' + GC.avatar(m, allIds, 26) + '</' + tag + '>';
         }).join("");
         return '<li class="hv-opt' + (best && o.yes.length === best ? " is-leading" : "") + '"><span class="hv-opt-num">' + o.index + '</span><div><div class="hv-opt-time">' + esc(o.range || o.label) + '</div>'
@@ -647,7 +670,7 @@ const calendarScript = String.raw`
           + '<button type="button" class="gc-btn gc-btn-outline gc-btn-sm" data-book="' + o.index + '">Book</button>'
           + '<div class="hv-opt-voters">' + voters + '<span class="hv-bar"><span style="width:' + Math.round(o.yes.length / Math.max(1, p.attendeeIds.length) * 100) + '%"></span></span><span class="gc-meta">' + o.yes.length + '</span></div></li>';
       }).join("") + '</ol>'
-      + '<div class="hv-foot">' + (ev.demoMode ? "Tap a face to vote as them." : "Everyone votes in the group: reply 1, 2, or 3.") + '</div>';
+      + '<div class="hv-foot">' + foot + '</div>';
   }
   $("hvPollBody").addEventListener("click", async (event) => {
     const vote = event.target.closest("[data-vote]");

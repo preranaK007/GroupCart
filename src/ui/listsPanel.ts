@@ -195,9 +195,7 @@ const script = `
         + '<span class="gl-name">' + esc(item.name) + '</span>'
         + (item.carted ? '<span class="gl-tag" title="Moved to the cart">' + GC.icon("cart") + 'In cart</span>' : "")
         + '<button class="gl-x" type="button" data-del-item="' + esc(item.id) + '" aria-label="Remove ' + esc(item.name) + '">' + GC.icon("close") + '</button></li>';
-      const cartButton = data.demoMode
-        ? '<button class="gc-btn gc-btn-tonal gc-btn-sm" type="button" data-to-cart="' + esc(list.id) + '"' + (open.length ? "" : " disabled") + '>' + GC.icon("cart") + '<span class="gl-hide-xs">To cart</span></button>'
-        : '<button class="gc-btn gc-btn-tonal gc-btn-sm" type="button" disabled title="Text “' + esc(list.name.toLowerCase()) + ' to cart” in the group">' + GC.icon("cart") + '<span class="gl-hide-xs">To cart</span></button>';
+      const cartButton = '<button class="gc-btn gc-btn-tonal gc-btn-sm" type="button" data-to-cart="' + esc(list.id) + '"' + (open.length ? "" : " disabled") + '>' + GC.icon("cart") + '<span class="gl-hide-xs">To cart</span></button>';
       return '<section class="gc-card gl-card" data-list="' + esc(list.id) + '">'
         + '<div class="gc-card-head"><span class="gl-emoji" aria-hidden="true">' + (list.emoji ? esc(list.emoji) : GC.icon("chores")) + '</span>'
         + '<div class="gl-head-main"><h2 class="gc-card-title" title="' + esc(list.name) + '">' + esc(list.name) + '</h2>'
@@ -240,6 +238,11 @@ const script = `
     } catch (error) { /* offline; the cart view shows sync status */ }
   }
 
+  // Live mode posts any product choices (Kroger matches, which milk) in the chat, where this member answers them.
+  const movedMessage = (r) => !data.demoMode && r.pending.length
+    ? (r.added.length ? "🛒 Moved " + r.added.length + " to the cart. " : "") + "GroupCart posted the choices in the chat: reply there with your pick."
+    : r.message || "Moved to the cart";
+
   async function act(path, body, message) {
     try {
       const result = await post(path, body);
@@ -257,7 +260,7 @@ const script = `
     const doneToggle = event.target.closest("[data-done]");
     if (doneToggle) { const id = doneToggle.dataset.done; if (openDone.has(id)) openDone.delete(id); else openDone.add(id); return renderLists(); }
     const toCart = event.target.closest("[data-to-cart]");
-    if (toCart) { toCart.disabled = true; return act("/api/named-lists/to-cart", { listId: toCart.dataset.toCart }, (r) => r.message || "Moved to the cart"); }
+    if (toCart) { toCart.disabled = true; return act("/api/named-lists/to-cart", { listId: toCart.dataset.toCart }, movedMessage); }
     const delList = event.target.closest("[data-del-list]");
     if (delList) {
       const list = data.lists.find((l) => l.id === delList.dataset.delList);

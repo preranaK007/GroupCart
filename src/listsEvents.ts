@@ -14,7 +14,7 @@ import {
 import { CalendarService } from "./googleCalendar.js";
 import type { KrogerClient } from "./kroger.js";
 import { NamedListsService, RECURRING_LIST_WORDS, type ListView } from "./namedLists.js";
-import { notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
+import { actingMember, notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
 import type { CartStore } from "./store.js";
 
 export type ListsEventsOptions = {
@@ -41,7 +41,7 @@ export function setupListsAndEvents(options: ListsEventsOptions): { lists: Named
 
   registerCommand("events", (context) => chat.events(context));
   registerCommand("one-off lists", (context) => chat.lists(context));
-  registerRoute((request, response, url) => handleRoutes({ store, lists, events, demoMode }, request, response, url));
+  registerRoute((request, response, url) => handleListsEventsRoutes({ store, lists, events, demoMode }, request, response, url));
   registerTools(buildTools(lists, events));
   registerHelp("One-off lists: “new list party run: chips, soda”, “add salsa to party run”, “party run to cart”, “one-off lists”.");
   registerHelp("Events: “add event house meeting Sunday 7pm”, “events”, “plan house meeting 1h” (reply 1–3 to book), “cancel event house meeting”.");
@@ -365,8 +365,15 @@ function minutesNow(now: number, timeZone: string): number {
 
 // ---------------------------------------------------------------------------
 // HTTP routes (loopback dashboard). POSTs are JSON-only and same-origin.
+// Moving a list to the cart, RSVPs, and plan votes act as one member. Live mode: the signed-in (or "Viewing as")
+// member only (actingMember in src/platform.ts: 401 without one, 403 when the body names someone else), and the group
+// hears who did it ("Maya: …"). The demo still acts as whoever the page names.
 
-type RouteContext = { store: CartStore; lists: NamedListsService; events: EventsService; demoMode: boolean };
+export type ListsEventsRouteContext = { store: CartStore; lists: NamedListsService; events: EventsService; demoMode: boolean };
+
+const firstName = (name: string) => name.split(/\s+/)[0] ?? name;
+/** What a member would text for each RSVP (“I’m in”, …), for the group line when they RSVP on the web. */
+const RSVP_TEXT: Record<RsvpStatus, string> = { going: "I’m in", maybe: "I’m a maybe", no: "Can’t make it" };
 
 function sendJson(response: ServerResponse, status: number, value: unknown): true {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -413,12 +420,14 @@ function pollJson(poll: PollView, timeZone: string, today: string) {
   return { ...poll, options: poll.options.map((option) => ({ ...option, range: formatSlot(option.start, option.end, timeZone, today) })) };
 }
 
-async function handleRoutes(context: RouteContext, request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
+export async function handleListsEventsRoutes(context: ListsEventsRouteContext, request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
   const path = url.pathname;
   if (!path.startsWith("/api/named-lists") && !path.startsWith("/api/events")) return false;
   const { lists, events, demoMode } = context;
   const members = lists.members();
   const today = events.today();
+  // Whose RSVP and votes the calendar shows as tappable in live mode.
+  const viewerId = requestMember(request)?.memberId ?? null;
 
   if (request.method === "GET") {
     if (path === "/api/named-lists") {
@@ -436,7 +445,7 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
       const to = Number(url.searchParams.get("to")) || now + 14 * 86_400_000;
       if (to <= from || to - from > 62 * 86_400_000) return sendJson(response, 400, { error: "Choose a range up to 62 days." });
       return sendJson(response, 200, {
-        demoMode, timeZone: events.timeZone, now, today, members, calendarMode: events.calendarMode,
+        demoMode, timeZone: events.timeZone, now, today, members, viewerId, calendarMode: events.calendarMode,
         occurrences: events.occurrences(from, to),
         polls: events.openPolls("vote").map((poll) => pollJson(poll, events.timeZone, today)),
       });
@@ -466,7 +475,7 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
       if (!detail) return sendJson(response, 404, { error: "That event no longer exists." });
       const poll = detail.event.pollId ? events.getPoll(detail.event.pollId) : undefined;
       return sendJson(response, 200, {
-        demoMode, members, timeZone: events.timeZone, ...detail,
+        demoMode, members, viewerId, timeZone: events.timeZone, ...detail,
         list: detail.list ? listJson(events, detail.list) : null,
         range: detail.next ? (detail.event.allDay ? detail.next.label : formatSlot(detail.next.start, detail.next.end, events.timeZone, today)) : null,
         poll: poll ? pollJson(poll, events.timeZone, today) : null,
@@ -492,7 +501,9 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
   if (!isSameOriginJson(request)) return sendJson(response, 403, { error: "Use the GroupCart page to make changes." });
   let body: Record<string, unknown>;
   try { body = await readJsonBody(request); } catch (error) { return sendJson(response, 400, { error: error instanceof Error ? error.message : "Bad request." }); }
-  const demoOnly = (what: string) => sendJson(response, 403, { error: `In live mode, ${what} in the iMessage group.` });
+  /** Live mode: the viewer, and only the viewer; null in the demo (which acts as the member the page names). */
+  const liveMember = () => demoMode ? null : actingMember(request, members, body.memberId);
+  const by = (memberId: string, text: string) => `${firstName(lists.memberName(memberId))}: ${text}`;
   const memberOr = (value: unknown, fallback: string | null) => {
     const id = str(value, 64);
     return id && members.some((member) => member.id === id) ? id : fallback;
@@ -522,13 +533,16 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
       case "/api/named-lists/delete":
         return sendJson(response, lists.deleteList(str(body.listId, 64) ?? "") ? 200 : 404, { ok: true });
       case "/api/named-lists/to-cart": {
-        if (!demoMode) return demoOnly("text “<list> to cart”");
+        const live = liveMember();
+        if (live && !live.ok) return sendJson(response, live.status, { error: live.error });
         const list = lists.getList(str(body.listId, 64) ?? "");
         if (!list) return sendJson(response, 404, { error: "List not found." });
-        const memberId = memberOr(body.memberId, null) ?? memberOr(list.createdBy, null) ?? members[0]?.id;
+        const memberId = live ? live.memberId : memberOr(body.memberId, null) ?? memberOr(list.createdBy, null) ?? members[0]?.id;
         if (!memberId) return sendJson(response, 400, { error: "Add household members first." });
         const result = await lists.moveToCart(list.id, memberId);
-        if (result.added.length) await notifyGroup(result.message);
+        // Live: Kroger's product choices go to the group too, where that member answers them by number.
+        if (live && result.ok) await notifyGroup(by(memberId, result.message));
+        else if (!live && result.added.length) await notifyGroup(result.message);
         return sendJson(response, result.ok ? 200 : 400, result.ok ? result : { error: result.message, ...result });
       }
       case "/api/events": {
@@ -559,12 +573,14 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
         return sendJson(response, 200, { ok: true });
       }
       case "/api/events/rsvp": {
-        if (!demoMode) return demoOnly("RSVP with “I’m in” or “can’t make it”");
+        const live = liveMember();
+        if (live && !live.ok) return sendJson(response, live.status, { error: live.error });
         const event = events.getEvent(str(body.eventId, 64) ?? "");
-        const memberId = memberOr(body.memberId, null);
+        const memberId = live ? live.memberId : memberOr(body.memberId, null);
         const status = (["going", "maybe", "no"] as const).find((candidate) => candidate === body.status);
         if (!event || !memberId || !status) return sendJson(response, 400, { error: "Choose an event, member, and status." });
         events.setRsvp(event.id, memberId, status);
+        if (live) await notifyGroup(by(memberId, `${RSVP_TEXT[status]}. ${events.rsvpLine(event)}`));
         return sendJson(response, 200, { ok: true, rsvps: events.rsvps(event.id) });
       }
       case "/api/events/tasks/toggle":
@@ -578,13 +594,18 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
         return sendJson(response, 200, { ok: true, poll: pollJson(created.poll, events.timeZone, today) });
       }
       case "/api/events/polls/vote": {
-        if (!demoMode) return demoOnly("vote with the option numbers");
+        const live = liveMember();
+        if (live && !live.ok) return sendJson(response, live.status, { error: live.error });
         const poll = events.getPoll(str(body.pollId, 64) ?? "");
-        const memberId = memberOr(body.memberId, null);
+        const memberId = live ? live.memberId : memberOr(body.memberId, null);
         const option = int(body.option);
         if (!poll || poll.status !== "open" || !memberId || !option || option > poll.options.length) return sendJson(response, 400, { error: "That vote isn’t available." });
-        const result = events.vote(poll.id, memberId, body.yes === false ? { yes: [], no: [option] } : { yes: [option], no: [] });
-        if (result.booked) await notifyGroup(events.announcement(result.booked));
+        const yes = body.yes !== false;
+        const result = events.vote(poll.id, memberId, yes ? { yes: [option], no: [] } : { yes: [], no: [option] });
+        if (live) {
+          const line = by(memberId, `${option} ${yes ? "✓" : "✗"} for ${poll.emoji} ${poll.title}.`);
+          await notifyGroup(result.booked ? `${line}\n${events.announcement(result.booked)}` : `${line} Votes — ${events.tallyLine(result.poll)}`);
+        } else if (result.booked) await notifyGroup(events.announcement(result.booked));
         return sendJson(response, 200, { ok: true, booked: result.booked, poll: pollJson(result.poll, events.timeZone, today) });
       }
       case "/api/events/polls/book": {

@@ -5,7 +5,8 @@
 //   - Cart changes go through the store's normal member request path (store.processIncomingText /
 //     processLiveIncomingText as that member), so sharing sessions decide splits and undo/approvals work as usual.
 //     With live Kroger search, items that need a product choice go on a one-off list ("Dinners this week",
-//     src/namedLists.ts) instead of guessing; members send it to the cart with “dinners this week to cart”.
+//     src/namedLists.ts) instead of guessing; members send it to the cart with “dinners this week to cart” or the
+//     Lists tab's To cart. In live mode the web buttons act only as the signed-in member (actingMember).
 //   - The store's phrases (cart, sharing, recurring lists) never reach this module (index.ts routes them to the
 //     store). Recurring lists are never written here; the pantry suggests the store command (“biweekly: olive oil”).
 //   - A bare “yes”/“ok”/“no” is only claimed when this member's newest open question is a kitchen one: a pantry
@@ -24,7 +25,7 @@ import type { KrogerClient } from "./kroger.js";
 import { DIET_TAGS, MealsService, TAG_SHORT, WEEKDAY_SHORT, assignCooks, parseMealCommand, parseRecipeText, type DayRef, type MealCommand, type MealDay, type MealDraft, type RecipeView } from "./meals.js";
 import { NamedListsService, cartRequestText } from "./namedLists.js";
 import { PANTRY_STATUSES, PantryService, STATUS_LABEL, catalogProduct, itemKey, parsePantryCommand, splitItemNames, type PantryCommand, type PantryItem, type PantryStatus } from "./pantry.js";
-import { notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller, type ToolSpec } from "./platform.js";
+import { actingMember, notifyGroup, otherPendingQuestionAt, registerCommand, registerHelp, registerPendingQuestion, registerRoute, registerTools, requestMember, scheduleEvery, type CommandContext, type ToolCaller, type ToolSpec } from "./platform.js";
 import { avatarFor } from "./profiles.js";
 import type { CartStore } from "./store.js";
 
@@ -750,7 +751,11 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
   // Changes are attributed to the signed-in (or "Viewing as") member; announcements name only a known viewer.
   const actor = viewer ?? members[0]?.id ?? null;
   const by = (text: string) => viewer ? `${firstName(kitchen.meals.memberName(viewer))}: ${text}` : text;
-  const demoOnly = (what: string) => sendJson(response, 403, { error: `In live mode, ${what} in the iMessage group.` });
+  // Cart adds act as one member. Live mode: the viewer only (401 without one, 403 when the body names someone else);
+  // the demo keeps acting as the viewer or the first member.
+  const cartMember = () => kitchen.demoMode ? { ok: true as const, memberId: actor } : actingMember(request, members, body.memberId);
+  // What the group hears about; "choosing" is live Kroger's product choices, which the member answers by number.
+  const announced = (result: CartAddResult) => result.status === "added" || result.status === "listed" || result.status === "choosing";
   const status = (value: unknown): PantryStatus | null => PANTRY_STATUSES.includes(value as PantryStatus) ? value as PantryStatus : null;
   const date = (value: unknown): string | null => typeof value === "string" && isDateString(value) ? value : null;
   const { meals, pantry } = kitchen;
@@ -770,12 +775,13 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
       case "/api/kitchen/pantry/delete":
         return sendJson(response, pantry.remove(str(body.itemId, 64) ?? "") ? 200 : 404, { ok: true });
       case "/api/kitchen/pantry/to-cart": {
-        if (!kitchen.demoMode) return demoOnly("text “out of eggs” and reply “yes”");
+        const who = cartMember();
+        if (!who.ok) return sendJson(response, who.status, { error: who.error });
         const ids = Array.isArray(body.itemIds) ? body.itemIds.filter((id): id is string => typeof id === "string").slice(0, 30) : [];
         const items = ids.map((id) => pantry.get(id)).filter((item): item is PantryItem => Boolean(item));
-        if (!items.length || !actor) return sendJson(response, 400, { error: "Choose items." });
-        const result = await kitchen.addToCart(actor, items.map((item) => ({ name: item.name, quantity: 1 })), `kitchen-web:${randomUUID()}`, RESTOCK_LIST);
-        if (result.status === "added" || result.status === "listed") await notifyGroup(by(result.message));
+        if (!items.length || !who.memberId) return sendJson(response, 400, { error: "Choose items." });
+        const result = await kitchen.addToCart(who.memberId, items.map((item) => ({ name: item.name, quantity: 1 })), `kitchen-web:${randomUUID()}`, RESTOCK_LIST);
+        if (announced(result)) await notifyGroup(by(result.message));
         return sendJson(response, result.status === "blocked" ? 409 : 200, { ok: result.status !== "blocked", ...result });
       }
       case "/api/kitchen/meals/plan": {
@@ -813,10 +819,11 @@ export async function handleKitchenRoutes(kitchen: Kitchen, request: IncomingMes
         return sendJson(response, 200, { ok: true, nights: meals.setNights(weekdays) });
       }
       case "/api/kitchen/meals/shop": {
-        if (!kitchen.demoMode) return demoOnly("text “shop for meals”");
-        if (!actor) return sendJson(response, 400, { error: "Add household members first." });
-        const result = await kitchen.shopForMeals(actor, `kitchen-web:${randomUUID()}`);
-        if (result.status === "added" || result.status === "listed") await notifyGroup(by(result.message));
+        const who = cartMember();
+        if (!who.ok) return sendJson(response, who.status, { error: who.error });
+        if (!who.memberId) return sendJson(response, 400, { error: "Add household members first." });
+        const result = await kitchen.shopForMeals(who.memberId, `kitchen-web:${randomUUID()}`);
+        if (announced(result)) await notifyGroup(by(result.message));
         return sendJson(response, result.status === "blocked" ? 409 : 200, { ok: result.status !== "blocked", ...result });
       }
       case "/api/kitchen/recipes": {

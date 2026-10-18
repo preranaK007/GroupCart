@@ -3,8 +3,9 @@ import { registerFlavor } from "./themes.js";
 
 /**
  * Groceries › Pantry tab (#pantry). A compact grid of item chips grouped Out / Low / In stock; tapping a chip
- * cycles In stock → Low → Out. Low and Out items get an "add to cart" button (demo; in live mode the group chat
- * does it: “out of eggs” → “yes”). Items that run out regularly show the recurring-list command to text.
+ * cycles In stock → Low → Out. Low and Out items get an "add to cart" button (live mode: added for the signed-in
+ * member; with Kroger, they pick products from the choices GroupCart posts in the chat). Items that run out
+ * regularly show the recurring-list command to text.
  * Rendered by window.GCKitchen (src/ui/mealsPanel.ts) from GET /api/kitchen; changes are JSON POSTs to
  * /api/kitchen/pantry/* (src/kitchen.ts).
  */
@@ -89,10 +90,10 @@ export const PANTRY_SCRIPT = `
   const GROUPS = [["out", "Out", "kitchen.out"], ["low", "Low", "kitchen.low"], ["stock", "In stock", "kitchen.stock"]];
   const cadence = (days) => days >= 6 && days <= 8 ? "1w" : days >= 12 && days <= 16 ? "2w" : days >= 26 && days <= 35 ? "1mo" : Math.round(days) + "d";
 
-  function chip(item, demo) {
+  function chip(item) {
     const marks = (item.inCart ? '<span class="kp-mini" title="In the cart">' + GC.icon("cart") + '</span>' : "")
       + (item.cadenceDays ? '<span class="kp-mini" title="Runs out about every ' + Math.round(item.cadenceDays) + ' days">↻ ' + cadence(item.cadenceDays) + '</span>' : "");
-    const cart = demo && item.status !== "stock" && !item.inCart
+    const cart = item.status !== "stock" && !item.inCart
       ? '<button class="kp-cart" type="button" data-kp-cart="' + esc(item.id) + '" aria-label="Add ' + esc(item.name) + ' to cart" title="Add to cart">' + GC.icon("plus") + '</button>' : "";
     return '<span class="kp-item is-' + item.status + (cart ? " has-cart" : "") + '">'
       + '<button class="kp-chip is-' + item.status + '" type="button" data-kp-cycle="' + esc(item.id) + '" aria-label="' + esc(item.name) + ': ' + (item.status === "stock" ? "in stock" : item.status) + '. Tap to change." title="Tap: ' + (NEXT[item.status] === "stock" ? "in stock" : NEXT[item.status]) + '">'
@@ -102,18 +103,17 @@ export const PANTRY_SCRIPT = `
 
   function render(state) {
     const items = state.pantry.items;
-    const demo = state.demoMode;
     $("kpEmpty").hidden = items.length > 0;
     const groups = GROUPS.map(([status, label, flavor]) => ({ status, label, flavor, items: items.filter((item) => item.status === status) }));
     const urgent = groups.filter((group) => group.status !== "stock" && group.items.length);
     $("kpGroups").innerHTML = items.length ? groups.filter((group) => group.items.length || group.status === "stock").map((group) => {
       const addable = group.items.filter((item) => !item.inCart);
-      const action = demo && group.status !== "stock" && addable.length
+      const action = group.status !== "stock" && addable.length
         ? '<button class="gc-btn gc-btn-tonal gc-btn-sm" type="button" data-kp-cart-all="' + group.status + '">' + GC.icon("cart") + 'Add ' + addable.length + '</button>' : "";
       const alone = group.status !== "stock" && urgent.length === 1 ? " is-alone" : "";
       return '<section class="gc-card kp-group is-' + group.status + alone + '" aria-label="' + group.label + '"><div class="gc-card-head"><span class="kp-dot" aria-hidden="true"></span>'
         + '<h3 class="gc-card-title" data-flavor="' + group.flavor + '">' + group.label + '</h3><span class="kp-count">' + group.items.length + '</span><span class="gc-spacer"></span>' + action + '</div>'
-        + (group.items.length ? '<div class="kp-chips">' + group.items.map((item) => chip(item, demo)).join("") + '</div>' : '<p class="kp-none">Nothing yet.</p>') + '</section>';
+        + (group.items.length ? '<div class="kp-chips">' + group.items.map(chip).join("") + '</div>' : '<p class="kp-none">Nothing yet.</p>') + '</section>';
     }).join("") : "";
     const tip = items.find((item) => item.suggestion);
     $("kpSuggest").hidden = !tip;
@@ -121,9 +121,14 @@ export const PANTRY_SCRIPT = `
     if (GC.applyFlavor) GC.applyFlavor($("kpGroups"));
   }
 
+  // Live Kroger needs a product pick ("choosing"): GroupCart posted the choices in the chat for this member.
+  const PICK_IN_CHAT = "Kroger has a few matches. GroupCart posted the choices in the chat: reply there with your pick.";
   async function addToCart(ids) {
     const result = await K.post("/api/kitchen/pantry/to-cart", { itemIds: ids });
-    if (result) { K.toast(result.message || "Added to the cart"); if (result.status === "added") GC.celebrate && GC.celebrate("Added to the cart"); }
+    if (!result) return;
+    const more = result.listed.length ? "\\n📝 " + result.listed.length + " more went on a one-off list (Lists tab)." : "";
+    K.toast(result.status === "choosing" ? PICK_IN_CHAT + more : result.message || "Added to the cart");
+    if (result.status === "added") GC.celebrate && GC.celebrate("Added to the cart");
   }
 
   $("kpGroups").addEventListener("click", async (event) => {
