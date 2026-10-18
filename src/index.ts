@@ -3,8 +3,9 @@ import { dirname, resolve } from "node:path";
 import { Spectrum } from "spectrum-ts";
 import { imessage } from "spectrum-ts/providers/imessage";
 import { startDashboard } from "./dashboard.js";
-import { config, validateSpectrumConfig } from "./config.js";
+import { config, findMember, maskHandle, validateSpectrumConfig } from "./config.js";
 import { KrogerClient } from "./kroger.js";
+import { auditGroupRoster, handleMembershipEvent, isMembershipEvent } from "./membership.js";
 import { CartStore } from "./store.js";
 
 validateSpectrumConfig();
@@ -49,19 +50,35 @@ if (!liveMode) {
   });
 
   console.log(`GroupCart is listening for iMessage group requests from ${members.length} configured household member(s).`);
+  const auditedSpaces = new Set<string>();
 
   try {
     for await (const [space, message] of app.messages) {
-      if (message.direction !== "inbound" || message.platform !== "imessage") continue;
+      if (message.platform !== "imessage") continue;
+      const groupSpace = imessage(space);
+      if (groupSpace.type !== "group") continue;
+      if (!auditedSpaces.has(space.id)) {
+        auditedSpaces.add(space.id);
+        void auditGroupRoster(space, members, groupSpace.phone);
+      }
+      if (message.direction === "outbound") continue;
+      // Membership events (dedicated line only) carry no `direction` and are not text, so handle them first.
+      if (isMembershipEvent(message.content)) {
+        try {
+          await handleMembershipEvent(space, message, members, store, groupSpace.phone);
+        } catch (error) {
+          console.error(`Could not handle a group membership event: ${error instanceof Error ? error.message : "unknown error"}`);
+        }
+        continue;
+      }
+      if (message.direction !== "inbound") continue;
       if (message.content.type !== "text") continue;
-      if (imessage(space).type !== "group") continue;
 
       const senderHandle = message.sender?.id;
       if (!senderHandle) continue;
-      const normalizedHandle = senderHandle.includes("@") ? senderHandle.toLocaleLowerCase() : senderHandle;
-      const configuredMember = members.find((member) => member.handle === normalizedHandle);
+      const configuredMember = findMember(members, senderHandle);
       if (!configuredMember) {
-        console.warn("Ignored a group message from a sender not listed in GROUP_CART_MEMBERS.");
+        console.warn(`Ignored a group message from ${maskHandle(senderHandle)}, which is not listed in GROUP_CART_MEMBERS.`);
         continue;
       }
 

@@ -8,13 +8,14 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/store.ts`: SQLite persistence, cart revisions, deterministic splits, approvals, and Kroger cart checkout.
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
 - `src/dashboard.ts`: loopback-only browser dashboard and local demo endpoints.
-- `src/config.ts`: environment configuration.
+- `src/config.ts`: environment configuration, member allowlist parsing, and handle normalization/masking.
+- `src/membership.ts`: group join/leave events and roster checks against the allowlist.
 
 ## Environment and credentials
 
 `.env` is gitignored and contains credentials. **Do not read, write, print, or otherwise expose `.env`.** Use `.env.example` only for the variable names and placeholder formats. Never include credentials in source, logs, screenshots, or user-facing output.
 
-Spectrum Cloud uses `PROJECT_ID` and `PROJECT_SECRET`. `GROUP_CART_MEMBERS` is an explicit `senderHandle=name` allowlist. In live mode, only inbound text from these members in iMessage group spaces is handled. Do not remove the allowlist or start processing direct messages unless the product requirements change.
+Spectrum Cloud uses `PROJECT_ID` and `PROJECT_SECRET`. `GROUP_CART_MEMBERS` is an explicit `handle=name` allowlist (`handle1|handle2=name` maps several handles to one member; compare handles only via `normalizeHandle`). In live mode, only inbound text from these members in iMessage group spaces is handled. Do not remove the allowlist or start processing direct messages unless the product requirements change.
 
 ## Safety and product boundaries
 
