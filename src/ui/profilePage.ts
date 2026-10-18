@@ -89,7 +89,35 @@ const sharedStyles = `
 // /people
 // ---------------------------------------------------------------------------
 
-export function renderPeoplePage(context: { profiles: Profile[]; viewerId: string | null; householdName: string }): string {
+/**
+ * On the host computer: a sign-in link per roommate to share in the group chat, for when GroupCart can't text
+ * sign-in codes (no iMessage connection) or someone is on a new device.
+ */
+function inviteLinksCard(profiles: Profile[]): string {
+  const rows = profiles.map((profile) => `<li class="gc-list-item pp-invite">
+  <div class="gc-list-main"><div class="gc-list-title">${escapeHtml(profile.displayName)}</div><input class="gc-input pp-invite-url" readonly hidden aria-label="${escapeHtml(profile.displayName)}’s invite link" /></div>
+  ${button({ label: "Copy invite link", variant: "outline", size: "sm", icon: "lock", attrs: `data-invite="${escapeHtml(profile.memberId)}"` })}
+</li>`).join("");
+  return `<section class="gc-card" style="margin-top:var(--gc-space-4)"><div class="gc-card-head"><h2 class="gc-card-title">Invite links</h2></div>
+<p class="gc-meta" style="margin:0 0 var(--gc-space-2)">Send each roommate their own link to sign in on their phone or laptop. A link works on a few devices for a week; making a new one turns off the old one.</p>
+<ul class="gc-list">${rows}</ul></section>
+<script>
+document.querySelectorAll("[data-invite]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    var row = button.closest(".pp-invite"), field = row.querySelector(".pp-invite-url");
+    fetch("/api/auth/invite", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ memberId: button.getAttribute("data-invite") }) })
+      .then(function (response) { return response.json().then(function (data) { if (!response.ok) throw new Error(data.error || "Couldn't make a link."); return data; }); })
+      .then(function (data) {
+        field.value = data.url; field.hidden = false; field.select();
+        if (navigator.clipboard) navigator.clipboard.writeText(data.url).then(function () { button.lastChild.textContent = "Copied"; }, function () {});
+      })
+      .catch(function (error) { alert(error.message); });
+  });
+});
+</script>`;
+}
+
+export function renderPeoplePage(context: { profiles: Profile[]; viewerId: string | null; householdName: string; canInvite?: boolean }): string {
   const ids = context.profiles.map((profile) => profile.memberId);
   const me = context.profiles.find((profile) => profile.memberId === context.viewerId);
   const cards = context.profiles.map((profile) => {
@@ -113,7 +141,8 @@ ${sectionHeader(context.householdName, {
     meta: `${context.profiles.length} ${context.profiles.length === 1 ? "person" : "people"}`,
     actions: me ? button({ label: "Edit your profile", variant: "tonal", size: "sm", icon: "edit", href: `/people/${encodeURIComponent(me.memberId)}?edit=1` }) : "",
   })}
-<div class="pp-grid" style="margin-top:var(--gc-space-3)">${cards || emptyState({ icon: "users", title: "No one here yet" })}</div>`;
+<div class="pp-grid" style="margin-top:var(--gc-space-3)">${cards || emptyState({ icon: "users", title: "No one here yet" })}</div>
+${context.canInvite && context.profiles.length ? inviteLinksCard(context.profiles) : ""}`;
   return renderPage({ title: "People", active: "people", body, styles: sharedStyles });
 }
 

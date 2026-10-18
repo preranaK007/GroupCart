@@ -1,4 +1,5 @@
 import { BASE_CSS, TOKENS_CSS, escapeHtml, icon } from "./shell.js";
+import { PWA_HEAD } from "./pwa.js"; // a phone often adds GroupCart to its home screen from this first page
 
 /**
  * /signin: a standalone, Google-style sign-in card (no app bar or navigation, since nothing else is reachable
@@ -46,7 +47,7 @@ export function renderSignInPage(options: { demoMode: boolean; canSendCodes: boo
     <div class="si-error" id="error2" role="alert" hidden></div>
     <div class="si-actions"><button class="gc-btn gc-btn-text" type="button" id="back">Start over</button><button class="gc-btn" type="submit" id="verify">Verify</button></div>
   </form>`
-    : `<div class="si-note">${icon("info", { size: 18 })}<span>Sign-in codes are sent by iMessage, which isn’t connected right now. Open GroupCart on the computer running it.</span></div>`;
+    : `<div class="si-note">${icon("info", { size: 18 })}<span>Sign in with the invite link your household’s host sent you, or open GroupCart on the computer running it.</span></div>`;
 
   const script = `
 const next = ${JSON.stringify(options.next)};
@@ -102,6 +103,7 @@ if (step1) {
 <meta name="robots" content="noindex" />
 <title>Sign in · GroupCart</title>
 <link rel="icon" href="data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0b57d0"/><g transform="translate(4 4)" color="#ffffff">${icon("cart", { size: 24 })}</g></svg>`)}" />
+${PWA_HEAD}
 <style>${TOKENS_CSS}${BASE_CSS}${styles}</style>
 </head>
 <body>

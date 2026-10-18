@@ -189,7 +189,9 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
     if (path === "/signin" && method === "GET") {
       const next = safeNextPath(url.searchParams.get("next"));
       if (auth.viewer(request)) { redirect(response, next); return true; }
-      sendHtml(response, 200, renderSignInPage({ demoMode: auth.demoMode, canSendCodes: auth.canSendCodes, next }), { "x-frame-options": "DENY" });
+      // Demo codes appear on screen, so only the host computer may use them; everyone else needs an invite link.
+      const codesHere = auth.canSendCodes && (!auth.demoMode || isLocalRequest(request));
+      sendHtml(response, 200, renderSignInPage({ demoMode: auth.demoMode && codesHere, canSendCodes: codesHere, next }), { "x-frame-options": "DENY" });
       return true;
     }
     if (path === "/api/auth/me" && method === "GET") {
@@ -209,8 +211,27 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
       });
       return true;
     }
+    if (path.startsWith("/signin/invite/") && method === "GET") {
+      const result = auth.redeemInvite(path.slice("/signin/invite/".length), clientKey(request), request.headers["user-agent"]);
+      if (!result.ok) {
+        sendHtml(response, result.status, renderNotice({ title: "Invite link didn’t work", message: result.error, tone: "warning" }), { "x-frame-options": "DENY" });
+        return true;
+      }
+      response.writeHead(303, { location: "/", "set-cookie": auth.sessionCookie(result.token, request), "cache-control": "no-store" });
+      response.end();
+      return true;
+    }
+    if (path === "/api/auth/invite" && method === "POST") {
+      requireMutation(request);
+      if (!isLocalRequest(request)) { sendJson(response, 403, { error: "Make invite links on the computer running GroupCart." }); return true; }
+      const body = await readJsonBody(request, 1_024);
+      const invite = auth.createInvite(String(body.memberId ?? ""));
+      sendJson(response, 200, { url: `${options.publicUrl}/signin/invite/${invite.token}`, expiresAt: invite.expiresAt });
+      return true;
+    }
     if (path === "/api/auth/start" && method === "POST") {
       requireMutation(request);
+      if (auth.demoMode && !isLocalRequest(request)) { sendJson(response, 403, { error: "Use the invite link from your household’s host to sign in." }); return true; }
       const body = await readJsonBody(request, 2_048);
       const result = await auth.startSignIn(typeof body.handle === "string" ? body.handle : "", clientKey(request));
       if (!result.ok) {
@@ -251,7 +272,7 @@ export function setupProfilesAndChat(options: ProfilesAndChatOptions): ProfilesA
     // --- Pages ---
     if (method === "GET" && path === "/people") {
       const viewer = auth.viewer(request);
-      sendHtml(response, 200, renderPeoplePage({ profiles: profiles.list(), viewerId: viewer?.member.id ?? null, householdName: household }));
+      sendHtml(response, 200, renderPeoplePage({ profiles: profiles.list(), viewerId: viewer?.member.id ?? null, householdName: household, canInvite: isLocalRequest(request) }));
       return true;
     }
     const personPage = method === "GET" ? /^\/people\/([^/]+)$/.exec(path) : null;

@@ -3,7 +3,8 @@
 // Local requests (loopback socket, loopback Host header, no proxy/tunnel headers) count as signed in as a
 // chosen member: the "Viewing as" switcher stores that choice in the gc_view_as cookie, so the host machine
 // and the demo work with zero setup. Every other request is remote: it may reach only /signin*, /api/auth/*,
-// and the connector's /mcp, /oauth/*, and /.well-known/* paths until it carries a session cookie. A session is created by entering a
+// the connector's /mcp, /oauth/*, and /.well-known/* paths, and the home-screen install files (src/remoteAccess.ts)
+// until it carries a session cookie. A session is created by entering a
 // one-time 6-digit code that GroupCart texts to the member by iMessage DM (demo mode shows it on screen).
 //
 // Codes: random, HMAC-hashed at rest, expire in 10 minutes, single-use, at most 5 guesses each, and
@@ -22,6 +23,9 @@ export const VIEW_AS_COOKIE = "gc_view_as";
 export const CODE_TTL_MS = 10 * 60_000;
 export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 export const MAX_CODE_ATTEMPTS = 5;
+/** Invite links the host makes when sign-in codes can't be texted: good for a week, on a few devices. */
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60_000;
+export const INVITE_MAX_USES = 5;
 
 // ---------------------------------------------------------------------------
 // Local vs remote requests (same rules as the connector's tunnel guard)
@@ -254,6 +258,13 @@ export class AuthService {
         used_at INTEGER,
         attempts INTEGER NOT NULL DEFAULT 0
       );
+      CREATE TABLE IF NOT EXISTS auth_invites (
+        token_hash TEXT PRIMARY KEY,
+        member_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        uses INTEGER NOT NULL DEFAULT 0
+      );
       CREATE TABLE IF NOT EXISTS auth_sessions (
         token_hash TEXT PRIMARY KEY,
         member_id TEXT NOT NULL,
@@ -292,6 +303,7 @@ export class AuthService {
     const now = this.#now();
     this.#db.prepare("DELETE FROM auth_codes WHERE expires_at < ?").run(now - CODE_TTL_MS);
     this.#db.prepare("DELETE FROM auth_sessions WHERE expires_at < ?").run(now);
+    this.#db.prepare("DELETE FROM auth_invites WHERE expires_at < ?").run(now);
   }
 
   #hashCode(challengeId: string, code: string): string {
@@ -380,12 +392,44 @@ export class AuthService {
     if (consumed !== 1) return { ok: false, status: 400, error: "That code expired. Request a new one." };
     const member = this.#members().find((candidate) => candidate.id === row.member_id);
     if (!member) return { ok: false, status: 400, error: "That member is no longer in the household." };
+    return this.#startSession(member, now, userAgent);
+  }
+
+  #startSession(member: Member, now: number, userAgent?: string): VerifyResult {
     const token = randomBytes(32).toString("base64url");
     const expiresAt = now + SESSION_TTL_MS;
     this.#db.prepare(
       "INSERT INTO auth_sessions (token_hash, member_id, created_at, expires_at, last_seen_at, user_agent) VALUES (?, ?, ?, ?, ?, ?)",
     ).run(AuthService.hashToken(token), member.id, now, expiresAt, now, (userAgent ?? "").slice(0, 200) || null);
     return { ok: true, member, token, expiresAt };
+  }
+
+  /**
+   * A sign-in link for one member, made on the host computer and shared by the host (e.g. in the group chat) when
+   * GroupCart can't text codes. Making a new one retires the member's previous link. Only the hash is stored.
+   */
+  createInvite(memberId: string): { token: string; expiresAt: number } {
+    if (!this.#members().some((member) => member.id === memberId)) throw new Error("Not a household member.");
+    const now = this.#now();
+    const token = randomBytes(24).toString("base64url");
+    this.#db.prepare("DELETE FROM auth_invites WHERE member_id = ?").run(memberId);
+    this.#db.prepare("INSERT INTO auth_invites (token_hash, member_id, created_at, expires_at, uses) VALUES (?, ?, ?, ?, 0)")
+      .run(AuthService.hashToken(token), memberId, now, now + INVITE_TTL_MS);
+    return { token, expiresAt: now + INVITE_TTL_MS };
+  }
+
+  /** Signs in with an invite link (each link works on a few devices until it expires). */
+  redeemInvite(rawToken: string, client: string, userAgent?: string): VerifyResult {
+    const byClient = this.#verifyByClient.take(client);
+    if (!byClient.ok) return { ok: false, status: 429, error: "Too many tries. Wait a few minutes.", retryAfterSeconds: Math.ceil(byClient.retryAfterMs / 1000) };
+    const now = this.#now();
+    const hash = AuthService.hashToken(String(rawToken).slice(0, 100));
+    const used = Number(this.#db.prepare("UPDATE auth_invites SET uses = uses + 1 WHERE token_hash = ? AND expires_at > ? AND uses < ?").run(hash, now, INVITE_MAX_USES).changes);
+    if (used !== 1) return { ok: false, status: 400, error: "This invite link expired or was replaced. Ask for a new one." };
+    const row = this.#db.prepare("SELECT member_id FROM auth_invites WHERE token_hash = ?").get(hash) as { member_id: string };
+    const member = this.#members().find((candidate) => candidate.id === row.member_id);
+    if (!member) return { ok: false, status: 400, error: "That member is no longer in the household." };
+    return this.#startSession(member, now, userAgent);
   }
 
   /** The member behind a valid, unexpired session cookie (members removed from the allowlist lose access). */

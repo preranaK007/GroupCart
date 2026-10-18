@@ -10,6 +10,7 @@ GroupCart is a shared home base for roommates. It lives in your household's iMes
 - **Calendar:** everyone's Google Calendar free/busy in a Week or Day view, the times everyone is free, and household events and polls ("we all want to watch a movie" finds slots and takes votes).
 - **House:** Wi-Fi and door codes, repairs, guest heads-ups, quiet hours and quick polls.
 - **Chat:** the group conversation on the web, plus a Sunday digest of the week.
+- **Claude coordinator:** one roommate connects Claude for the whole apartment (Settings). It answers the group chat, plans things with tappable polls across everyone's calendars, logs expenses and bill photos, proposes groceries to confirm with a tap, and follows up on its own. It runs on that roommate's own Claude account through Claude Code on the computer hosting GroupCart, so no API key is needed.
 - **AI assistants:** connect Claude, ChatGPT or Grok so each roommate can ask their own assistant to add to the cart or check what's due.
 - **Skins:** Classic (light and dark) plus Elden Ring, Minecraft, Red Dead and Cyberpunk looks.
 
@@ -45,6 +46,24 @@ Keep `.env` private; never commit it or paste its secrets into chat. Start the a
 `GROUP_CART_MEMBERS` is an explicit allowlist; GroupCart never enrolls anyone automatically. Each entry is `handle=Name`. List several handles for one person with `|` (for example `+15555550101|maya@example.com=Maya`), because someone added to an existing group often shows up under their Apple ID email rather than their phone. Handles are normalized before comparison: emails are lowercased, phone numbers drop spaces, dashes, dots, and parentheses, and 10-digit US numbers are treated as `+1XXXXXXXXXX`. Existing single-handle entries and saved carts keep working.
 
 Join events require the dedicated Business line (shared-pool lines do not report them). When someone is added to the group, GroupCart replies once: a short welcome for allowlisted people, or a note that an organizer must add their phone or Apple ID to `GROUP_CART_MEMBERS`, with a masked hint (last 4 digits or masked email) of the handle Spectrum sees. No email or other notification is sent, so watch the group chat or console, update `.env`, and restart. After startup, the first message from each group also logs masked handles of any current participants not on the allowlist (covering people added before GroupCart connected). Messages from non-allowlisted senders are ignored and logged with a masked handle.
+
+## Host it on your own computer
+
+GroupCart can run on an always-on computer (Windows shown here) and be reached from anywhere, including as an app on your phone.
+
+1. Fill in `.env`: Spectrum credentials and `GROUP_CART_MEMBERS` (above) for iMessage, or just the members if you don't have Spectrum yet. A published server only shows demo sign-in codes on the host computer; everyone else signs in with an invite link or a texted code.
+2. Give it a public https address. With [Tailscale Funnel](https://tailscale.com/kb/1223/funnel): `tailscale funnel --bg 3000` serves it at `https://<computer>.<tailnet>.ts.net`. GroupCart keeps listening on 127.0.0.1 only; every remote request needs a signed-in roommate (a code texted by iMessage) or a connector token.
+3. Keep it running: `scripts/start-windows.ps1 -PublicUrl https://<computer>.<tailnet>.ts.net` starts GroupCart with `.env`, restarts it if it stops, and logs to `data/groupcart.log`. To start it at sign-in, register it once in PowerShell:
+
+```powershell
+$script = "$PWD\scripts\start-windows.ps1"
+$action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`" -PublicUrl https://<computer>.<tailnet>.ts.net"
+Register-ScheduledTask -TaskName "GroupCart" -Action $action -Trigger (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME) -Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0)
+```
+
+The Claude coordinator runs Claude Code on this computer, so sign in to Claude Code here as the roommate who connects it.
+
+Without Spectrum credentials there are no texted codes: on the host computer, open People and use **Copy invite link** for each roommate, then share the links in your group chat. On a phone, open the link in Safari, then Share → Add to Home Screen to install GroupCart as an app.
 
 ## Commands in the group
 
@@ -128,7 +147,7 @@ Codes, tokens, client secrets, and pairing codes are stored only as hashes.
 
 **Public HTTPS (tunnel).** GroupCart stays bound to `127.0.0.1` unless `GROUP_CART_HOST` is set. ChatGPT, Grok, and claude.ai need a public HTTPS URL; Grok rejects localhost and private addresses. Run a tunnel on this computer, for example `cloudflared tunnel --url http://127.0.0.1:3000`, set `GROUP_CART_PUBLIC_URL` to the `https://….trycloudflare.com` address it prints, and restart GroupCart. Quick-tunnel addresses change on every run, so update the connector URL in each assistant when that happens.
 
-Without a signed-in session, requests that come through a tunnel, proxy, or another device (non-loopback `Host` or socket, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp`, `/mcp/t/<token>`, `/oauth/*`, `/.well-known/*`, and sign-in routes (`src/remoteAccess.ts`, enforced by `remoteAccessGuard` in `src/auth.ts`). Everything else (dashboard pages, `/api/*`, demo endpoints, and the Kroger/Google OAuth starts) redirects to `/signin` or is refused. Token and pairing-code management (`/api/connector/*`) works only on the computer running GroupCart, even for signed-in users. Because those callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs. A personal URL `…/mcp/t/<token>` (in the Connect Claude dialog) works with assistants set to no authentication; treat it like a password. Failed token, pairing-code, and OAuth attempts are rate-limited.
+Without a signed-in session, requests that come through a tunnel, proxy, or another device (non-loopback `Host` or socket, or any `X-Forwarded-*` / `Forwarded` / `CF-Connecting-IP` header) may reach only `/mcp`, `/mcp/t/<token>`, `/oauth/*`, `/.well-known/*`, sign-in routes, and the files a phone needs to add GroupCart to its home screen (`/manifest.webmanifest`, the icons, `/sw.js`, `/offline.html`) (`src/remoteAccess.ts`, enforced by `remoteAccessGuard` in `src/auth.ts`). Everything else (dashboard pages, `/api/*`, demo endpoints, and the Kroger/Google OAuth starts) redirects to `/signin` or is refused. Token and pairing-code management (`/api/connector/*`) works only on the computer running GroupCart, even for signed-in users. Because those callbacks stay local, keep `KROGER_REDIRECT_URI` and `GOOGLE_REDIRECT_URI` set to the `127.0.0.1` URLs. A personal URL `…/mcp/t/<token>` (in the Connect Claude dialog) works with assistants set to no authentication; treat it like a password. Failed token, pairing-code, and OAuth attempts are rate-limited.
 
 ## Chores
 
@@ -238,6 +257,7 @@ node --import=tsx --test src/digest.test.ts         # Sunday digest text and onc
 node --import=tsx --test src/meals.test.ts          # meal plans: dietary flags, cook rotation, ok/swap, shop for meals
 node --import=tsx --test src/pantry.test.ts         # pantry: parsing, cadence, “yes” disambiguation, checkout → In stock
 node --import=tsx --test src/house.test.ts          # House: parsers, masking, polls and number disambiguation, nudges
+node --import=tsx --test src/pwa.test.ts            # home-screen app: public install files, icons, service worker never caches live data
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.
