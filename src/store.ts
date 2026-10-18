@@ -16,6 +16,7 @@ import type { KrogerCartAvailabilityIssue, KrogerProduct } from "./kroger.js";
 
 export type MemberConfig = { handle: string; name: string };
 export type Member = { id: string; handle: string; name: string };
+export type GoogleCalendarAccount = { memberId: string; refreshToken: string; scope: string; status: "connected" | "needs_reconnect"; lastError: string | null; connectedAt: string };
 type ItemRow = {
   id: string;
   product_id: string;
@@ -179,6 +180,7 @@ export class CartStore {
         created_at TEXT NOT NULL
       );
     `);
+    this.#ensureGoogleCalendarTables();
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -777,6 +779,66 @@ export class CartStore {
     ).run(String(cursor));
   }
 
+  // ---------------------------------------------------------------------------
+  // Google Calendar (per-member free/busy connection). Refresh tokens stay in this
+  // local SQLite file and are never returned by any dashboard API.
+
+  #ensureGoogleCalendarTables(): void {
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS google_calendar_accounts (
+        member_id TEXT PRIMARY KEY REFERENCES members(id) ON DELETE CASCADE,
+        refresh_token TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'connected',
+        last_error TEXT,
+        connected_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    `);
+  }
+
+  googleCalendarAccount(memberId: string): GoogleCalendarAccount | undefined {
+    const row = this.#db.prepare(
+      "SELECT member_id, refresh_token, scope, status, last_error, connected_at FROM google_calendar_accounts WHERE member_id = ?",
+    ).get(memberId) as { member_id: string; refresh_token: string; scope: string; status: string; last_error: string | null; connected_at: string } | undefined;
+    return row ? {
+      memberId: row.member_id,
+      refreshToken: row.refresh_token,
+      scope: row.scope,
+      status: row.status === "needs_reconnect" ? "needs_reconnect" : "connected",
+      lastError: row.last_error,
+      connectedAt: row.connected_at,
+    } : undefined;
+  }
+
+  saveGoogleCalendarAccount(memberId: string, refreshToken: string, scope: string): void {
+    const now = new Date().toISOString();
+    this.#db.prepare(
+      "INSERT INTO google_calendar_accounts (member_id, refresh_token, scope, status, last_error, connected_at, updated_at) VALUES (?, ?, ?, 'connected', NULL, ?, ?) ON CONFLICT(member_id) DO UPDATE SET refresh_token = excluded.refresh_token, scope = excluded.scope, status = 'connected', last_error = NULL, connected_at = excluded.connected_at, updated_at = excluded.updated_at",
+    ).run(memberId, refreshToken, scope, now, now);
+  }
+
+  markGoogleCalendarNeedsReconnect(memberId: string, reason: string): void {
+    this.#db.prepare(
+      "UPDATE google_calendar_accounts SET status = 'needs_reconnect', last_error = ?, updated_at = ? WHERE member_id = ?",
+    ).run(reason.slice(0, 240), new Date().toISOString(), memberId);
+  }
+
+  deleteGoogleCalendarAccount(memberId: string): void {
+    this.#db.prepare("DELETE FROM google_calendar_accounts WHERE member_id = ?").run(memberId);
+  }
+
+  /** Previously recorded reply for an idempotent command (undefined when the message is new). */
+  recordedReply(messageId: string): string | null | undefined {
+    return this.#existingReply(messageId);
+  }
+
+  /** Records a reply produced outside the cart flow (e.g. the "calendar" command) for idempotency. */
+  recordCommandReply(messageId: string, reply: string): void {
+    this.#saveMessageReply(messageId, reply);
+  }
+  // --- end Google Calendar ----------------------------------------------------
+
   close(): void {
     this.#db.close();
   }
@@ -1121,6 +1183,7 @@ export class CartStore {
       "Share: add sharing to the specific item, like “eggs shared with Anu and Prerana.” In a list, sharing applies only to the item next to that phrase.",
       "Review: “cart” shows items, total, budget, and each person’s share.",
       this.#dashboardMessage(),
+      `Calendar: “calendar” links the household calendar (${this.#dashboardUrl.replace(/\/$/, "")}/calendar) and lists the next times everyone is free for a pickup or delivery.`,
       "Remove: say “remove bread” or “I don’t want bread anymore.” For all your items, say “clear mine.”",
       "Clear everyone’s cart: “clear all,” then “confirm clear all” (or “cancel clear all”).",
       "Undo: “undo” reverts the latest cart change; repeat to step back through recent changes.",

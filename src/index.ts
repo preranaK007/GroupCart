@@ -5,6 +5,8 @@ import { imessage } from "spectrum-ts/providers/imessage";
 import { startDashboard } from "./dashboard.js";
 import { config, validateSpectrumConfig } from "./config.js";
 import { KrogerClient } from "./kroger.js";
+import { CalendarService, GoogleCalendarClient } from "./googleCalendar.js";
+import { googleCalendarConfig } from "./config.js";
 import { CartStore } from "./store.js";
 
 validateSpectrumConfig();
@@ -31,7 +33,16 @@ store.registerMembers(members);
 const krogerClient = config.krogerClientId && config.krogerClientSecret
   ? new KrogerClient(config.krogerClientId, config.krogerClientSecret, config.krogerLocationId, config.krogerRedirectUri, config.krogerCartModality)
   : undefined;
-const dashboard = startDashboard(store, config.port, !liveMode, krogerClient);
+// --- Google Calendar (sample schedules when GOOGLE_CLIENT_ID/SECRET are unset) ---
+const calendar = new CalendarService(
+  store,
+  config.dashboardPublicUrl,
+  googleCalendarConfig.clientId && googleCalendarConfig.clientSecret
+    ? new GoogleCalendarClient(googleCalendarConfig.clientId, googleCalendarConfig.clientSecret, googleCalendarConfig.redirectUri)
+    : undefined,
+);
+// --- end Google Calendar ---
+const dashboard = startDashboard(store, config.port, !liveMode, krogerClient, calendar);
 
 if (!liveMode) {
   console.log("Spectrum Cloud is not configured. Running the browser-based local demo; no messages are sent.");
@@ -67,6 +78,17 @@ if (!liveMode) {
 
       const member = store.memberForHandle(configuredMember.handle);
       if (!member) continue;
+      // Google Calendar: "calendar" command (read-only; answered before cart processing).
+      const calendarReply = await calendar.replyToCommand(message.id, message.content.text).catch((error: unknown) => {
+        console.warn("Calendar command failed:", error instanceof Error ? error.message : error);
+        return "I couldn’t check the household calendar just now. Please try again in a moment.";
+      });
+      if (calendarReply) {
+        await space.responding(async () => {
+          await space.send(calendarReply);
+        });
+        continue;
+      }
       const reply = krogerClient
         ? await store.processLiveIncomingText(
           message.id,

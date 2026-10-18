@@ -28,6 +28,7 @@ Keep `.env` private; never commit it or paste its secrets into chat. Start the a
 ## Commands in the group
 
 - Text `help`, `commands`, or `hi` for the welcome guide and examples. If a grocery search finds no match, GroupCart points you back to this guide.
+- Text `calendar` for the household calendar page link and the next couple of times everyone is free (8 AM–9 PM, at least 30 minutes).
 - Text `dashboard` for the companion cart page link. It is bound to `127.0.0.1`, so open it on the computer running GroupCart; it is not reachable from other devices by default.
 - Send one grocery item or a short list of up to five separated by commas or `and`, e.g. `2 bananas`, `Darigold 2% milk`, `bread, bananas, and eggs`, or `Vital Farms organic eggs shared with Anupritaa and Prerana`.
 - Add per-item price limits such as `pasta under $5` or `pasta under $5, bread up to $3`. `Under` is strict; `up to` includes the stated price. Limited searches only offer products with a current returned store price that meets the limit.
@@ -43,6 +44,12 @@ Keep `.env` private; never commit it or paste its secrets into chat. Start the a
 - In live mode, after every household member approves, `checkout` checks each selected UPC against the configured store and pickup/delivery mode. If Kroger reports unavailable products, GroupCart shows in-stock suggestions but does not substitute anything automatically. Choose a suggestion explicitly with `replace 1 with 2`; any changed cart requires everyone to approve again. Once the precheck passes, `checkout` asks whose Kroger account to use. The selected member opens Kroger sign-in and consents; GroupCart then adds the approved live Kroger UPCs to that account's cart and clears the GroupCart list only after Kroger confirms. Availability can change after the check, so verify the Kroger cart. The shopper reviews and places the order on Kroger; GroupCart never submits an order or payment. Local demo checkout remains simulated.
 
 Configure Kroger Production app credentials, Cart API access, and a `KROGER_LOCATION_ID` to use live product search and cart preparation; this must match the pickup/delivery store selected in the Kroger account. The precheck uses Kroger's Products API availability at that location and fulfillment mode, then searches that same location for suggestions. It is a point-in-time check and cannot guarantee stock at pickup. Add the exact `KROGER_REDIRECT_URI` to your Kroger app's allowed redirect URIs; for local testing it defaults to `http://127.0.0.1:3000/api/kroger/oauth/callback`. If you later deploy behind a protected public hostname, set both `GROUP_CART_PUBLIC_URL` and `KROGER_REDIRECT_URI` to matching URLs. `KROGER_CART_MODALITY` defaults to `PICKUP`; set it to `DELIVERY` if needed. The member selected in iMessage must sign in to their own Kroger account in the browser. GroupCart uses Kroger's user-authorized Cart API to add selected products by UPC and quantity; sample items without a Kroger UPC block the entire transfer. This adds items to the Kroger account but cannot read the resulting cart or place an order. Review the cart and finish checkout directly in Kroger. The dashboard reads the same SQLite cart and refreshes every 2.5 seconds. In Spectrum live mode it remains a read-only companion view; item changes, approvals, totals, and splits still come from the iMessage group. The dashboard is bound to `127.0.0.1`, so only the machine running GroupCart can open it unless you separately deploy it.
+
+## Household calendar
+
+Open [http://127.0.0.1:3000/calendar](http://127.0.0.1:3000/calendar) (also linked from the dashboard). It shows a week view with one lane per member in their own color, shades times when two or more people are busy at once (darker as more overlap), highlights windows when everyone is free, and lists the best shared free times for the week (1 hour or longer, 8 AM–9 PM), which is handy for picking a pickup or delivery slot. Use the arrows or ←/→ to change weeks and **Today** (or `t`) to jump back.
+
+Without Google credentials the page runs in demo mode with generated sample schedules (stable for each week). To use real calendars, create an OAuth 2.0 **Web application** client in Google Cloud, enable the Google Calendar API, register the exact `GOOGLE_REDIRECT_URI` (default `http://127.0.0.1:3000/api/google/oauth/callback`), and set `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET`. Each member then presses **Connect Google Calendar** on their row and signs in with their own Google account. GroupCart requests only the `calendar.freebusy` scope, so it sees busy blocks from the primary calendar and never event titles, attendees, or details. Refresh tokens are stored in the local SQLite database and never returned by the dashboard API. If Google revokes access, the member's row shows **Reconnect**; **Disconnect** deletes the stored token and revokes it with Google. Free time is computed only from connected calendars, and the page says when some members are missing.
 
 ## Configuration
 
@@ -61,12 +68,16 @@ Configure Kroger Production app credentials, Cart API access, and a `KROGER_LOCA
 | `GROUP_CART_PUBLIC_URL` | Base URL in the Kroger sign-in link | `http://127.0.0.1:3000` |
 | `KROGER_REDIRECT_URI` | OAuth callback URL registered with Kroger | dashboard URL + `/api/kroger/oauth/callback` |
 | `KROGER_CART_MODALITY` | Fulfillment modality for added items (`PICKUP` or `DELIVERY`) | `PICKUP` |
+| `GOOGLE_CLIENT_ID` | Google OAuth 2.0 web client ID for per-member calendar free/busy | unset (sample schedules) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth 2.0 client secret | unset (sample schedules) |
+| `GOOGLE_REDIRECT_URI` | OAuth callback URL registered with Google | `GROUP_CART_PUBLIC_URL` + `/api/google/oauth/callback` |
 
 ## Development
 
 ```sh
 npm run dev
 npm run typecheck
+node --import=tsx --test src/availability.test.ts   # overlap / free-time checks
 ```
 
 See the [Spectrum iMessage provider guide](https://photon.codes/docs/spectrum-ts/providers/imessage) for dedicated-line and group-chat requirements.

@@ -38,6 +38,15 @@ export const config = {
   krogerCartModality: configuredCartModality === "DELIVERY" ? "DELIVERY" as const : "PICKUP" as const,
 };
 
+// --- Google Calendar (per-member free/busy) --------------------------------
+// Unset client ID/secret = the /calendar page shows generated sample schedules.
+export const googleCalendarConfig = {
+  clientId: process.env.GOOGLE_CLIENT_ID?.trim() || undefined,
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET?.trim() || undefined,
+  redirectUri: process.env.GOOGLE_REDIRECT_URI?.trim() || `${dashboardPublicUrl}/api/google/oauth/callback`,
+};
+// --- end Google Calendar ------------------------------------------------------
+
 export function validateSpectrumConfig(): void {
   const hasProjectId = Boolean(config.spectrumProjectId);
   const hasProjectSecret = Boolean(config.spectrumProjectSecret);
