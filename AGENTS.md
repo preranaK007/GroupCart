@@ -7,6 +7,8 @@ This repository implements GroupCart using Photon Spectrum (`spectrum-ts`) and t
 - `src/index.ts`: Spectrum startup, group-message filtering, household mapping, and replies.
 - `src/store.ts`: SQLite persistence, cart revisions, deterministic splits, approvals, and Kroger cart checkout.
 - `src/cart.ts`: sample catalog and deterministic item/quantity extraction.
+- `src/lists.ts`: recurring weekly/biweekly/monthly list command parsing and cadence math (persistence lives in `store.ts`).
+- `src/reminders.ts`: delivery of due recurring-list check-ins to the remembered household group space.
 - `src/dashboard.ts`: loopback-only browser dashboard and local demo endpoints.
 - `src/config.ts`: environment configuration.
 

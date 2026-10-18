@@ -13,6 +13,91 @@ import {
   type Product,
 } from "./cart.js";
 import type { KrogerCartAvailabilityIssue, KrogerProduct } from "./kroger.js";
+import {
+  LIST_COMMAND_NAMES,
+  LIST_KEYS,
+  LIST_LABELS,
+  LIST_TITLES,
+  addLocalDays,
+  currentCycleStart,
+  describeSchedule,
+  friendlyDate,
+  localDateKey,
+  nextCycleStart,
+  nextWeekdayAfter,
+  parseListCommand,
+  type ListCommand,
+  type ListKey,
+  type ListSchedule,
+} from "./lists.js";
+
+/** Exact cart commands; anything matching is never treated as a product search. */
+const CART_COMMAND_PATTERN = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i;
+const PRICE_LIMIT_PATTERN = /\b(?:under|below|less than|at most|no more than|up to)\s+\$?\s*\d+(?:\.\d{1,2})?\s*(?:dollars?)?\b/gi;
+
+type ListRow = {
+  list_key: ListKey;
+  anchor_weekday: number;
+  anchor_date: string | null;
+  day_of_month: number;
+  active_since: string | null;
+  last_loaded_at: string | null;
+  last_loaded_by: string | null;
+  last_reminded_cycle: string | null;
+  reminders_enabled: number;
+  revision: number;
+};
+type ListItemRow = {
+  id: string;
+  list_key: ListKey;
+  product_id: string;
+  product_name: string | null;
+  quantity: number;
+  unit_price_cents: number | null;
+  price_source: string;
+  upc: string | null;
+  size: string | null;
+  added_by: string | null;
+  created_at: string;
+  quoted_at: string | null;
+};
+type ListRequest = { query: string; quantity: number; maxPriceCents?: number; maxPriceInclusive?: boolean };
+type PendingListSelection = { listKey: ListKey; requests: ListRequest[]; results: BatchProductResult[] | null };
+type ListDueInfo = {
+  cycleStart: Date;
+  cycleKey: string;
+  loadedThisCycle: boolean;
+  dueNow: boolean;
+  shouldRemind: boolean;
+  nextReminderAt: Date | null;
+};
+type ProductQuote = { product: KrogerProduct | null; error?: string };
+
+export type ProductQuoter = (productId: string) => Promise<KrogerProduct | null>;
+export type ListReminderClaim = {
+  text: string;
+  claims: Array<{ listKey: ListKey; cycleKey: string; previous: string | null }>;
+};
+export type RecurringListSnapshot = {
+  key: ListKey;
+  title: string;
+  command: string;
+  schedule: string;
+  active: boolean;
+  remindersEnabled: boolean;
+  dueNow: boolean;
+  nextReminderAt: string | null;
+  lastLoadedAt: string | null;
+  lastLoadedByName: string | null;
+  estimatedCents: number;
+  items: Array<{ id: string; name: string; quantity: number; unitPriceCents: number | null; priceSource: "sample" | "kroger"; size: string | null; quotedAt: string | null }>;
+};
+export type CartStoreOptions = {
+  /** Injectable clock for recurring-list cadence (tests); defaults to the real time. */
+  now?: () => Date;
+  /** Local hour (0-23) on a cycle's start day after which a due list is announced. */
+  reminderHour?: number;
+};
 
 export type MemberConfig = { handle: string; name: string };
 export type Member = { id: string; handle: string; name: string };
@@ -72,14 +157,27 @@ export class CartStore {
   readonly #householdId: string;
   readonly #dashboardUrl: string;
   readonly #krogerCartEnabled: boolean;
+  readonly #now: () => Date;
+  readonly #reminderHour: number;
 
-  constructor(databasePath: string, householdId: string, budgetCents: number, dashboardUrl = "http://127.0.0.1:3000", krogerCartEnabled = false) {
+  constructor(
+    databasePath: string,
+    householdId: string,
+    budgetCents: number,
+    dashboardUrl = "http://127.0.0.1:3000",
+    krogerCartEnabled = false,
+    options: CartStoreOptions = {},
+  ) {
     const absolutePath = resolve(databasePath);
     mkdirSync(dirname(absolutePath), { recursive: true });
     this.#db = new DatabaseSync(absolutePath);
     this.#householdId = householdId;
     this.#dashboardUrl = dashboardUrl;
     this.#krogerCartEnabled = krogerCartEnabled;
+    this.#now = options.now ?? (() => new Date());
+    this.#reminderHour = Number.isInteger(options.reminderHour) && options.reminderHour! >= 0 && options.reminderHour! <= 23
+      ? options.reminderHour!
+      : 9;
     this.#db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -179,6 +277,7 @@ export class CartStore {
         created_at TEXT NOT NULL
       );
     `);
+    this.#ensureRecurringListTables();
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -213,8 +312,11 @@ export class CartStore {
     try {
       const normalized = text.trim();
       let reply: string | null;
+      const listReply = this.#catalogListTurn(memberId, normalized);
 
-      if (/^(dashboard|open dashboard|cart page)$/i.test(normalized)) {
+      if (listReply !== undefined) {
+        reply = listReply;
+      } else if (/^(dashboard|open dashboard|cart page)$/i.test(normalized)) {
         reply = this.#dashboardMessage();
       } else if (this.#isHelpRequest(normalized)) {
         reply = this.#helpMessage();
@@ -302,14 +404,17 @@ export class CartStore {
     locationId?: string,
     allowKrogerCartCheckout = false,
     checkCartAvailability?: (items: Array<{ id: string; name: string; upc: string; quantity: number }>) => Promise<KrogerCartAvailabilityIssue[]>,
+    quoteProduct?: ProductQuoter,
   ): Promise<string | null> {
     const existing = this.#existingReply(messageId);
     if (existing !== undefined) return existing;
 
     const normalized = text.trim();
-    const isCommand = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i.test(normalized)
+    const listCommand = this.#listCommandFor(memberId, normalized);
+    const isCommand = CART_COMMAND_PATTERN.test(normalized)
       || this.#isHelpRequest(normalized)
-      || (/^yes$/i.test(normalized) && this.#hasPendingClearAll(memberId));
+      || (/^yes$/i.test(normalized) && this.#hasPendingClearAll(memberId))
+      || listCommand !== undefined;
     if (/^(checkout|finish checkout)$/i.test(normalized)) {
       if (!allowKrogerCartCheckout) return this.processIncomingText(messageId, memberId, normalized);
       return this.#startKrogerCheckout(messageId, memberId, locationId, checkCartAvailability);
@@ -318,8 +423,11 @@ export class CartStore {
       return this.#cancelKrogerCheckout(messageId, memberId);
     }
     const pendingKrogerCheckout = this.#getPendingKrogerCheckout();
+    // Recurring-list commands that do not touch the cart stay available while a
+    // Kroger checkout is in progress; loading a list into the cart does not.
+    const listOnlyCommand = listCommand !== undefined && listCommand.kind !== "load";
     if (pendingKrogerCheckout?.status === "adding") {
-      if (!/^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i.test(normalized)) {
+      if (!/^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i.test(normalized) && !listOnlyCommand) {
         const reply = "GroupCart is sending the approved list to Kroger right now. Please wait for the result before changing the cart.";
         this.#saveMessageReply(messageId, reply);
         return reply;
@@ -333,7 +441,7 @@ export class CartStore {
     if (pendingKrogerCheckout?.status === "replacement_review") {
       const selection = normalized.match(/^replace\s+(\d{1,2})\s+with\s+(\d{1,2})$/i);
       if (selection) return this.#handleKrogerReplacementChoice(messageId, memberId, Number(selection[1]), Number(selection[2]));
-      if (!/^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i.test(normalized)) {
+      if (!/^(cart|show cart|review cart|help|commands|hi|hello|hey|dashboard|open dashboard|cart page)$/i.test(normalized) && !listOnlyCommand) {
         const reply = "Kroger’s precheck found unavailable items. Choose a suggested option with “replace 1 with 2”, or text “cancel checkout” to leave GroupCart unchanged and manage the item yourself. No replacement is made unless you choose one.";
         return this.#saveAndReturnReply(messageId, reply);
       }
@@ -345,6 +453,23 @@ export class CartStore {
       this.#saveMessageReply(messageId, reply);
       return reply;
     }
+
+    // Recurring household lists (weekly / biweekly / monthly). Kept in their own
+    // section so the cart flows below are unchanged.
+    if (listCommand) {
+      return this.#handleLiveListCommand(messageId, memberId, listCommand, searchProducts, locationId, quoteProduct);
+    }
+    const pendingListSelection = this.#pendingListSelection(memberId);
+    if (pendingListSelection && !isCommand) {
+      if (this.#cancellationQuery(normalized)) {
+        // A cart removal request supersedes an unfinished list selection, the
+        // same way it supersedes an unfinished cart product choice.
+        this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+      } else {
+        return this.#continueLiveListSelection(messageId, memberId, normalized, pendingListSelection, searchProducts, locationId);
+      }
+    }
+
     const pendingCancellation = this.#db.prepare(
       "SELECT item_ids_json, query FROM pending_item_cancellations WHERE member_id = ?",
     ).get(memberId) as { item_ids_json: string; query: string } | undefined;
@@ -1124,6 +1249,7 @@ export class CartStore {
       "Remove: say “remove bread” or “I don’t want bread anymore.” For all your items, say “clear mine.”",
       "Clear everyone’s cart: “clear all,” then “confirm clear all” (or “cancel clear all”).",
       "Undo: “undo” reverts the latest cart change; repeat to step back through recent changes.",
+      "Recurring lists: the group shares a weekly, every-two-weeks (“biweekly”), and monthly list. Add with “weekly: milk, eggs” or “add paper towels to monthly list”; view with “weekly list” or “lists”; edit with “remove eggs from weekly list” or “set eggs on weekly list to 2”; clear with “clear weekly list”. “load weekly list” copies it into the cart as one undoable change. I’ll ask the group when a list is due; change timing with “weekly list on saturdays” / “monthly list on the 15th”, or “pause weekly reminders”. New here? Text “set up lists”.",
       this.#krogerCartEnabled
         ? "Approve/Kroger cart: everyone texts “approve,” then “checkout” checks availability at the configured store before asking whose Kroger account to use. If something appears unavailable, GroupCart suggests alternatives but never substitutes automatically; choose one with “replace 1 with 2.” Any changed list needs everyone’s approval again. After sign-in, available UPC items are added to Kroger; you finish ordering there. No order or payment is placed by GroupCart."
         : "Approve/checkout: in the local demo, checkout is simulated. Live Kroger cart transfer requires configured Kroger app credentials and Cart API access. GroupCart never places an order or charges anyone.",
@@ -1377,6 +1503,7 @@ export class CartStore {
       .run(this.#householdId);
     const nextRevision = this.snapshot().revision;
     this.#db.prepare("DELETE FROM cart_undo_history WHERE id = ?").run(last.id);
+    this.#revertListLoad(last.id);
     this.#db.prepare(
       "UPDATE cart_undo_history SET revision_after = ? WHERE id = (SELECT id FROM cart_undo_history WHERE household_id = ? ORDER BY rowid DESC LIMIT 1)",
     ).run(nextRevision, this.#householdId);
@@ -1623,5 +1750,1025 @@ export class CartStore {
       ? "Kroger prices are store-specific when a location is configured; sample items are marked."
       : "sample catalog prices";
     return `${prefix}Cart revision ${snapshot.revision} · ${priceNote}\n${lines.join("\n")}\nTotal: ${money(snapshot.totalCents)}\n${shares}${budgetNote}\nText “cart”, “approve”, or “checkout”.`;
+  }
+
+  // ===========================================================================
+  // Recurring household lists (weekly, every two weeks, monthly)
+  //
+  // The lists belong to the whole household. Items are saved with real Kroger
+  // product IDs/UPCs in live mode (via the same numbered-choice search) or with
+  // sample-catalog IDs in demo mode. Loading a list copies its items into the
+  // cart as ordinary cart lines owned by the sender, as one undoable change.
+
+  /** Read-only view of the three lists for the dashboard. */
+  listsSnapshot(): RecurringListSnapshot[] {
+    const now = this.#now();
+    const memberNames = new Map(this.getMembers().map((member) => [member.id, member.name]));
+    return LIST_KEYS.map((key) => {
+      const row = this.#listRow(key);
+      const info = this.#listDueInfo(row, now);
+      const items = this.#listItems(key);
+      return {
+        key,
+        title: LIST_TITLES[key],
+        command: LIST_COMMAND_NAMES[key],
+        schedule: describeSchedule(key, this.#listSchedule(row)),
+        active: Boolean(row.active_since),
+        remindersEnabled: row.reminders_enabled === 1,
+        dueNow: info.dueNow,
+        nextReminderAt: info.nextReminderAt?.toISOString() ?? null,
+        lastLoadedAt: row.last_loaded_at,
+        lastLoadedByName: row.last_loaded_by ? memberNames.get(row.last_loaded_by) ?? null : null,
+        estimatedCents: this.#listEstimate(items).cents,
+        items: items.map((item) => ({
+          id: item.id,
+          name: this.#listItemName(item),
+          quantity: item.quantity,
+          unitPriceCents: this.#listItemUnitPrice(item),
+          priceSource: item.price_source === "kroger" ? "kroger" as const : "sample" as const,
+          size: item.size,
+          quotedAt: item.quoted_at,
+        })),
+      };
+    });
+  }
+
+  /**
+   * Atomically claim every list whose reminder is due for the current cycle and
+   * return one group message for them. Each list is claimed at most once per
+   * cycle; call `releaseListReminders` if the message could not be delivered.
+   */
+  claimDueListReminders(): ListReminderClaim | null {
+    const now = this.#now();
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const claims: ListReminderClaim["claims"] = [];
+      const parts: string[] = [];
+      for (const key of LIST_KEYS) {
+        const row = this.#listRow(key);
+        const info = this.#listDueInfo(row, now);
+        if (!info.shouldRemind) continue;
+        claims.push({ listKey: key, cycleKey: info.cycleKey, previous: row.last_reminded_cycle });
+        this.#db.prepare("UPDATE recurring_lists SET last_reminded_cycle = ? WHERE household_id = ? AND list_key = ?")
+          .run(info.cycleKey, this.#householdId, key);
+        parts.push(this.#reminderText(key));
+      }
+      this.#db.exec("COMMIT");
+      if (!claims.length) return null;
+      const pauseHint = claims.map(({ listKey }) => `“pause ${LIST_COMMAND_NAMES[listKey]} reminders”`).join(" or ");
+      return { text: `${parts.join("\n\n")}\n(Text ${pauseHint} to stop these check-ins.)`, claims };
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Undo a claim whose message was not delivered, so a later attempt can send it. */
+  releaseListReminders(claim: ListReminderClaim): void {
+    const update = this.#db.prepare(
+      "UPDATE recurring_lists SET last_reminded_cycle = ? WHERE household_id = ? AND list_key = ? AND last_reminded_cycle = ?",
+    );
+    for (const entry of claim.claims) update.run(entry.previous, this.#householdId, entry.listKey, entry.cycleKey);
+  }
+
+  /** Persist the household group conversation the bot has received allowlisted messages from. */
+  rememberGroupSpace(spaceId: string, phone?: string): void {
+    const existing = this.groupSpace();
+    if (existing && existing.id === spaceId && existing.phone === phone) return;
+    this.#db.prepare(
+      "INSERT INTO app_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+    ).run(`group_space:${this.#householdId}`, JSON.stringify({ id: spaceId, phone: phone ?? null, seenAt: this.#now().toISOString() }));
+  }
+
+  groupSpace(): { id: string; phone?: string } | undefined {
+    const row = this.#db.prepare("SELECT value FROM app_state WHERE key = ?")
+      .get(`group_space:${this.#householdId}`) as { value: string } | undefined;
+    if (!row) return undefined;
+    try {
+      const parsed = JSON.parse(row.value) as { id?: unknown; phone?: unknown };
+      if (typeof parsed.id !== "string" || !parsed.id) return undefined;
+      return typeof parsed.phone === "string" && parsed.phone ? { id: parsed.id, phone: parsed.phone } : { id: parsed.id };
+    } catch {
+      return undefined;
+    }
+  }
+
+  #ensureRecurringListTables(): void {
+    this.#db.exec(`
+      CREATE TABLE IF NOT EXISTS recurring_lists (
+        household_id TEXT NOT NULL REFERENCES households(id),
+        list_key TEXT NOT NULL,
+        anchor_weekday INTEGER NOT NULL DEFAULT 0,
+        anchor_date TEXT,
+        day_of_month INTEGER NOT NULL DEFAULT 1,
+        active_since TEXT,
+        last_loaded_at TEXT,
+        last_loaded_by TEXT,
+        last_reminded_cycle TEXT,
+        reminders_enabled INTEGER NOT NULL DEFAULT 1,
+        revision INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (household_id, list_key)
+      );
+      CREATE TABLE IF NOT EXISTS recurring_list_loads (
+        undo_id TEXT PRIMARY KEY,
+        household_id TEXT NOT NULL REFERENCES households(id),
+        list_key TEXT NOT NULL,
+        prev_loaded_at TEXT,
+        prev_loaded_by TEXT
+      );
+      CREATE TABLE IF NOT EXISTS recurring_list_items (
+        id TEXT PRIMARY KEY,
+        household_id TEXT NOT NULL REFERENCES households(id),
+        list_key TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        product_name TEXT,
+        quantity INTEGER NOT NULL CHECK(quantity > 0),
+        unit_price_cents INTEGER,
+        price_source TEXT NOT NULL,
+        upc TEXT,
+        size TEXT,
+        added_by TEXT,
+        created_at TEXT NOT NULL,
+        quoted_at TEXT,
+        UNIQUE (household_id, list_key, product_id)
+      );
+      CREATE TABLE IF NOT EXISTS pending_list_selections (
+        member_id TEXT PRIMARY KEY REFERENCES members(id),
+        list_key TEXT NOT NULL,
+        requests_json TEXT NOT NULL,
+        results_json TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS pending_list_clears (
+        member_id TEXT PRIMARY KEY REFERENCES members(id),
+        list_key TEXT NOT NULL,
+        list_revision INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+    `);
+    const insert = this.#db.prepare("INSERT OR IGNORE INTO recurring_lists (household_id, list_key) VALUES (?, ?)");
+    for (const key of LIST_KEYS) insert.run(this.#householdId, key);
+  }
+
+  #listRow(list: ListKey): ListRow {
+    return this.#db.prepare(
+      "SELECT list_key, anchor_weekday, anchor_date, day_of_month, active_since, last_loaded_at, last_loaded_by, last_reminded_cycle, reminders_enabled, revision FROM recurring_lists WHERE household_id = ? AND list_key = ?",
+    ).get(this.#householdId, list) as ListRow;
+  }
+
+  #listItems(list: ListKey): ListItemRow[] {
+    return this.#db.prepare(
+      "SELECT id, list_key, product_id, product_name, quantity, unit_price_cents, price_source, upc, size, added_by, created_at, quoted_at FROM recurring_list_items WHERE household_id = ? AND list_key = ? ORDER BY created_at, rowid",
+    ).all(this.#householdId, list) as ListItemRow[];
+  }
+
+  #listSchedule(row: ListRow): ListSchedule {
+    return { anchorWeekday: row.anchor_weekday, anchorDate: row.anchor_date, dayOfMonth: row.day_of_month };
+  }
+
+  #listItemName(item: ListItemRow): string {
+    return item.product_name ?? CATALOG.find((product) => product.id === item.product_id)?.name ?? "item";
+  }
+
+  #listItemUnitPrice(item: ListItemRow): number | null {
+    if (item.price_source === "sample") {
+      return CATALOG.find((product) => product.id === item.product_id)?.priceCents ?? item.unit_price_cents;
+    }
+    return item.unit_price_cents;
+  }
+
+  #listEstimate(items: ListItemRow[]): { cents: number; unpriced: number } {
+    let cents = 0;
+    let unpriced = 0;
+    for (const item of items) {
+      const price = this.#listItemUnitPrice(item);
+      if (price === null) unpriced += 1;
+      else cents += price * item.quantity;
+    }
+    return { cents, unpriced };
+  }
+
+  /**
+   * Cadence rules (server local time):
+   * - A cycle starts at local midnight on the anchor day (weekly: anchor weekday;
+   *   biweekly: every 14 days from the anchor date; monthly: day-of-month,
+   *   clamped to short months).
+   * - Only cycles that start after the list was activated count, so a new list
+   *   is first announced at the next cycle start.
+   * - A load within 2 days before a cycle start counts for that cycle.
+   * - The reminder is sent once, at or after `reminderHour` on the cycle start day.
+   */
+  #listDueInfo(row: ListRow, now: Date): ListDueInfo {
+    const schedule = this.#listSchedule(row);
+    const cycleStart = currentCycleStart(row.list_key, schedule, now);
+    const cycleKey = `${row.list_key}:${localDateKey(cycleStart)}`;
+    const loadedAt = row.last_loaded_at ? new Date(row.last_loaded_at) : null;
+    const loadedThisCycle = loadedAt !== null && loadedAt >= addLocalDays(cycleStart, -2);
+    const activeSince = row.active_since ? new Date(row.active_since) : null;
+    const remindAt = (start: Date): Date => new Date(start.getFullYear(), start.getMonth(), start.getDate(), this.#reminderHour);
+    const cycleCounts = activeSince !== null && cycleStart > activeSince;
+    const dueNow = cycleCounts && now >= remindAt(cycleStart) && !loadedThisCycle;
+    const remindersOn = row.reminders_enabled === 1;
+    const shouldRemind = dueNow && remindersOn && row.last_reminded_cycle !== cycleKey;
+    let nextReminderAt: Date | null = null;
+    if (activeSince && remindersOn) {
+      nextReminderAt = cycleCounts && !loadedThisCycle && row.last_reminded_cycle !== cycleKey
+        ? remindAt(cycleStart)
+        : remindAt(nextCycleStart(row.list_key, schedule, cycleStart));
+    }
+    return { cycleStart, cycleKey, loadedThisCycle, dueNow, shouldRemind, nextReminderAt };
+  }
+
+  #pendingListSelection(memberId: string): PendingListSelection | undefined {
+    const row = this.#db.prepare(
+      "SELECT list_key, requests_json, results_json FROM pending_list_selections WHERE member_id = ?",
+    ).get(memberId) as { list_key: ListKey; requests_json: string; results_json: string | null } | undefined;
+    if (!row) return undefined;
+    return {
+      listKey: row.list_key,
+      requests: JSON.parse(row.requests_json) as ListRequest[],
+      results: row.results_json ? JSON.parse(row.results_json) as BatchProductResult[] : null,
+    };
+  }
+
+  #savePendingListSelection(memberId: string, selection: PendingListSelection): void {
+    this.#db.prepare(
+      "INSERT INTO pending_list_selections (member_id, list_key, requests_json, results_json, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET list_key = excluded.list_key, requests_json = excluded.requests_json, results_json = excluded.results_json, created_at = excluded.created_at",
+    ).run(memberId, selection.listKey, JSON.stringify(selection.requests), selection.results ? JSON.stringify(selection.results) : null, new Date().toISOString());
+  }
+
+  /**
+   * One unfinished selection per member: starting a list selection discards any
+   * unfinished cart selection so numbered replies can never go to the wrong place.
+   */
+  #replaceOtherPendingSelections(memberId: string): string {
+    const tables = ["pending_product_choices", "pending_product_batches", "pending_clarifications", "pending_item_cancellations"];
+    let hadPending = false;
+    for (const table of tables) {
+      const result = this.#db.prepare(`DELETE FROM ${table} WHERE member_id = ?`).run(memberId);
+      if (Number(result.changes) > 0) hadPending = true;
+    }
+    return hadPending ? "(I discarded your unfinished cart selection.)\n" : "";
+  }
+
+  #hasOtherPendingIntent(memberId: string): boolean {
+    const tables = ["pending_product_choices", "pending_product_batches", "pending_clarifications", "pending_item_cancellations", "pending_list_selections"];
+    if (tables.some((table) => this.#db.prepare(`SELECT 1 FROM ${table} WHERE member_id = ?`).get(memberId))) return true;
+    return this.#getPendingKrogerCheckout()?.requesterId === memberId;
+  }
+
+  /** Parse a list command, including bare “yes”/“cancel” replies to a pending list clear. */
+  #listCommandFor(memberId: string, text: string): ListCommand | undefined {
+    const command = parseListCommand(text);
+    if (command) return command;
+    const bare = text.trim().replace(/[.!?]+$/, "").trim();
+    if (!/^(yes|confirm|cancel|never mind|nevermind)$/i.test(bare)) return undefined;
+    if (!this.#db.prepare("SELECT 1 FROM pending_list_clears WHERE member_id = ?").get(memberId)) return undefined;
+    if (this.#hasPendingClearAll(memberId) || this.#hasOtherPendingIntent(memberId)) return undefined;
+    return /^(yes|confirm)$/i.test(bare) ? { kind: "confirmClear" } : { kind: "cancelClear" };
+  }
+
+  /** Demo / sample-catalog mode. Runs inside processIncomingText's transaction. */
+  #catalogListTurn(memberId: string, text: string): string | undefined {
+    const command = this.#listCommandFor(memberId, text);
+    if (command) return this.#runListCommand(memberId, command, "catalog");
+    const pending = this.#pendingListSelection(memberId);
+    if (!pending) return undefined;
+    if (CART_COMMAND_PATTERN.test(text) || this.#isHelpRequest(text) || (/^yes$/i.test(text) && this.#hasPendingClearAll(memberId))) {
+      return undefined;
+    }
+    const label = LIST_LABELS[pending.listKey];
+    if (/^(cancel|never mind|nevermind)$/i.test(text)) {
+      this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+      return `Okay, nothing was added to the ${label} list.`;
+    }
+    if (pending.results) return this.#saveListSelections(memberId, pending, text);
+    const milk = resolveMilkChoice(text);
+    if (!milk) {
+      return `For the ${label} list: which kind of milk? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond, or “cancel”.`;
+    }
+    this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+    return this.#saveCatalogListRequests(memberId, pending.listKey, pending.requests, milk);
+  }
+
+  async #handleLiveListCommand(
+    messageId: string,
+    memberId: string,
+    command: ListCommand,
+    searchProducts: (query: string) => Promise<{ total: number; products: KrogerProduct[] }>,
+    locationId?: string,
+    quoteProduct?: ProductQuoter,
+  ): Promise<string | null> {
+    if (command.kind === "add") {
+      return this.#liveListAdd(messageId, memberId, command.list, command.itemText, searchProducts, locationId);
+    }
+    if (command.kind === "load") {
+      let quotes: Map<string, ProductQuote> | undefined;
+      if (quoteProduct && !this.#listLoadBlocker(command.list, command.force)) {
+        quotes = await this.#quoteListItems(command.list, quoteProduct);
+      }
+      return this.#transactReply(messageId, () => this.#loadListIntoCart(memberId, command.list, command.force, quotes, Boolean(quoteProduct)));
+    }
+    return this.#transactReply(messageId, () => this.#runListCommand(memberId, command, "live"));
+  }
+
+  /** Run `produce` in a transaction and record its reply for this message ID (idempotent). */
+  #transactReply(messageId: string, produce: () => string): string | null {
+    this.#db.exec("BEGIN IMMEDIATE");
+    try {
+      const existing = this.#existingReply(messageId);
+      if (existing !== undefined) {
+        this.#db.exec("COMMIT");
+        return existing;
+      }
+      const reply = produce();
+      this.#recordReply(messageId, reply);
+      this.#db.exec("COMMIT");
+      return reply;
+    } catch (error) {
+      this.#db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** Synchronous list commands shared by demo and live mode; caller holds the transaction. */
+  #runListCommand(memberId: string, command: ListCommand, mode: "catalog" | "live"): string {
+    switch (command.kind) {
+      case "overview": return this.#formatListsOverview();
+      case "setup": return this.#listSetupPrompt(mode);
+      case "view": return this.#formatListView(command.list);
+      case "add":
+        if (mode === "live") throw new Error("Live list additions must use the Kroger search flow.");
+        return this.#catalogListAdd(memberId, command.list, command.itemText);
+      case "remove": return this.#removeFromList(command.list, command.itemText);
+      case "quantity": return this.#setListQuantity(command.list, command.itemText, command.quantity);
+      case "clear": return this.#requestListClear(memberId, command.list);
+      case "confirmClear": return this.#confirmListClear(memberId, command.list);
+      case "cancelClear": return this.#cancelListClear(memberId, command.list);
+      case "load": return this.#loadListIntoCart(memberId, command.list, command.force, undefined, false);
+      case "start": return this.#startList(command.list);
+      case "scheduleWeekday": return this.#setListWeekday(command.list, command.weekday);
+      case "scheduleMonthDay": return this.#setListMonthDay(command.list, command.dayOfMonth);
+      case "reminders": return this.#setListReminders(command.list, command.enabled);
+    }
+  }
+
+  #parseListRequests(list: ListKey, itemText: string): ListRequest[] | string {
+    const label = LIST_LABELS[list];
+    const segments = itemText.split(/\s*(?:,|;|\n)\s*|\s+and\s+|\s+&\s+/i)
+      .map((segment) => segment.trim().replace(/^(?:and|&)\s+/i, "").replace(/[.!?]+$/g, "").trim())
+      .filter(Boolean);
+    if (!segments.length) return `Tell me what to add to the ${label} list, for example “${LIST_COMMAND_NAMES[list]}: milk, eggs, bread”.`;
+    if (segments.length > 5) {
+      return `I can save up to 5 items from one message. Nothing was added to the ${label} list; split it into smaller batches.`;
+    }
+    const requests = segments.map((segment): ListRequest => {
+      const priceLimit = this.#priceLimit(segment);
+      const itemPart = segment.replace(PRICE_LIMIT_PATTERN, " ").replace(/\s+/g, " ").trim();
+      const extracted = extractCartRequests(itemPart);
+      return {
+        query: this.#retailerQuery(itemPart),
+        quantity: extracted.length === 1 ? extracted[0]!.quantity : this.#quantityFromText(itemPart),
+        ...(priceLimit ? { maxPriceCents: priceLimit.cents, maxPriceInclusive: priceLimit.inclusive } : {}),
+      };
+    });
+    if (requests.some((request) => request.query.length < 2)) {
+      return `I couldn’t tell which items to add. Nothing was added to the ${label} list. Try “${LIST_COMMAND_NAMES[list]}: milk, eggs, bread”.`;
+    }
+    return requests;
+  }
+
+  #catalogListAdd(memberId: string, list: ListKey, itemText: string): string {
+    const label = LIST_LABELS[list];
+    const branded = unsupportedBrandedRequest(itemText);
+    if (branded) {
+      return `I heard “${branded}”, but live product lookup isn’t connected, so I didn’t save a substitute to the ${label} list.`;
+    }
+    const parsed = this.#parseListRequests(list, itemText);
+    if (typeof parsed === "string") return parsed;
+    if (parsed.some((request) => isGenericMilkRequest(request.query))) {
+      const replaced = this.#replaceOtherPendingSelections(memberId);
+      this.#savePendingListSelection(memberId, { listKey: list, requests: parsed, results: null });
+      return `${replaced}For the ${label} list: which kind of milk? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond, or “cancel”.`;
+    }
+    return this.#saveCatalogListRequests(memberId, list, parsed);
+  }
+
+  #saveCatalogListRequests(memberId: string, list: ListKey, requests: ListRequest[], milk?: Product): string {
+    const label = LIST_LABELS[list];
+    const resolved = requests.map((request) => ({
+      request,
+      product: milk && isGenericMilkRequest(request.query) ? milk : extractCartRequests(request.query)[0]?.product,
+    }));
+    const unmatched = resolved.filter((entry) => !entry.product).map((entry) => `“${entry.request.query}”`);
+    if (unmatched.length) {
+      return `I couldn’t match ${unmatched.join(" and ")} to the sample catalog, so nothing was saved to the ${label} list. Try milk, oat milk, eggs, bananas, pasta, tomato sauce, parmesan, bread, apples, or peanut butter.`;
+    }
+    const overCap = resolved.filter(({ request, product }) => request.maxPriceCents !== undefined
+      && !(request.maxPriceInclusive ? product!.priceCents <= request.maxPriceCents : product!.priceCents < request.maxPriceCents));
+    if (overCap.length) {
+      return `${overCap.map(({ product, request }) => `${product!.name} (${money(product!.priceCents)} sample estimate) isn’t ${request.maxPriceInclusive ? "up to" : "under"} ${money(request.maxPriceCents!)}`).join("; ")}. Nothing was saved to the ${label} list.`;
+    }
+    const lines = resolved.map(({ request, product }) => {
+      const outcome = this.#upsertListItem(list, memberId, {
+        productId: product!.id,
+        name: product!.name,
+        quantity: request.quantity,
+        unitPriceCents: product!.priceCents,
+        priceSource: "sample",
+        upc: null,
+        size: null,
+      });
+      return `• ${request.quantity} × ${product!.name} — ${money(product!.priceCents * request.quantity)} sample estimate${outcome === "updated" ? " (updated the existing entry)" : ""}`;
+    });
+    return this.#listSavedReply(list, lines);
+  }
+
+  async #liveListAdd(
+    messageId: string,
+    memberId: string,
+    list: ListKey,
+    itemText: string,
+    searchProducts: (query: string) => Promise<{ total: number; products: KrogerProduct[] }>,
+    locationId?: string,
+  ): Promise<string | null> {
+    const label = LIST_LABELS[list];
+    const parsed = this.#parseListRequests(list, itemText);
+    if (typeof parsed === "string") return this.#transactReply(messageId, () => parsed);
+    if (parsed.some((request) => isGenericMilkRequest(request.query))) {
+      return this.#transactReply(messageId, () => {
+        const replaced = this.#replaceOtherPendingSelections(memberId);
+        this.#savePendingListSelection(memberId, { listKey: list, requests: parsed, results: null });
+        const rest = parsed.length > 1 ? "; then I’ll show Kroger choices for every item" : "";
+        return `${replaced}For the ${label} list: which kind of milk? Reply whole, 2%, oat, or almond${rest}. Or say “cancel”.`;
+      });
+    }
+    return this.#searchListRequests(messageId, memberId, list, parsed, searchProducts, locationId);
+  }
+
+  async #searchListRequests(
+    messageId: string,
+    memberId: string,
+    list: ListKey,
+    requests: ListRequest[],
+    searchProducts: (query: string) => Promise<{ total: number; products: KrogerProduct[] }>,
+    locationId?: string,
+  ): Promise<string | null> {
+    const label = LIST_LABELS[list];
+    const optionLimit = requests.length === 1 ? 5 : 3;
+    let results: BatchProductResult[];
+    try {
+      results = await Promise.all(requests.map(async (request) => {
+        const result = await searchProducts(request.query);
+        const matching = result.products.filter((product) => this.#meetsPriceLimit(product, request.maxPriceCents, request.maxPriceInclusive ?? false));
+        return { total: matching.length, products: matching.slice(0, optionLimit) };
+      }));
+    } catch (error) {
+      return this.#transactReply(messageId, () => {
+        this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+        return `I couldn’t reach Kroger’s product search just now (${error instanceof Error ? error.message : "request failed"}). Nothing was saved to the ${label} list; please try again.`;
+      });
+    }
+    const missing = requests.flatMap((request, index) => results[index]!.products.length ? [] : [
+      request.maxPriceCents === undefined
+        ? `“${request.query}”`
+        : `“${request.query}” ${request.maxPriceInclusive ? "up to" : "under"} ${money(request.maxPriceCents)}`,
+    ]);
+    if (missing.length) {
+      return this.#transactReply(messageId, () => {
+        this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+        return `I couldn’t find Kroger products for ${missing.join(" and ")} at the configured store. Nothing was saved to the ${label} list. Try a more specific description or raise the item budget.`;
+      });
+    }
+    return this.#transactReply(messageId, () => {
+      const replaced = this.#replaceOtherPendingSelections(memberId);
+      this.#savePendingListSelection(memberId, { listKey: list, requests, results });
+      const storeNote = locationId ? ` at the selected Kroger store (${locationId})` : "; choose a store to get local prices";
+      const option = (product: KrogerProduct, index: number, indent: string): string => {
+        const cents = this.#currentPrice(product);
+        return `${indent}${index + 1}) ${product.description}${product.size ? ` · ${product.size}` : ""} — ${cents === null ? "price unavailable" : money(cents)}`;
+      };
+      if (requests.length === 1) {
+        const request = requests[0]!;
+        const products = results[0]!.products;
+        const cap = request.maxPriceCents === undefined ? "" : ` (showing options ${request.maxPriceInclusive ? "up to" : "under"} ${money(request.maxPriceCents)} each)`;
+        return `${replaced}For the ${label} list, Kroger found ${products.length} matching options${cap} for “${request.query}”${storeNote}:\n${products.map((product, index) => option(product, index, "")).join("\n")}\nReply 1-${products.length} to save your choice to the ${label} list, or “cancel”.`;
+      }
+      const sections = requests.map((request, index) => {
+        const cap = request.maxPriceCents === undefined ? "" : ` · ${request.maxPriceInclusive ? "up to" : "under"} ${money(request.maxPriceCents)} each`;
+        return `${index + 1}. ${request.quantity > 1 ? `${request.quantity} × ` : ""}${request.query}${cap} (${results[index]!.total} options)\n${results[index]!.products.map((product, optionIndex) => option(product, optionIndex, "   ")).join("\n")}`;
+      });
+      return `${replaced}For the ${label} list, I found options for your ${requests.length} items${storeNote}:\n${sections.join("\n")}\nReply with one choice number per item in order, separated by commas (for example “1, 2, 1”). Nothing is saved until all choices are selected. Reply “cancel” to discard this search.`;
+    });
+  }
+
+  async #continueLiveListSelection(
+    messageId: string,
+    memberId: string,
+    text: string,
+    pending: PendingListSelection,
+    searchProducts: (query: string) => Promise<{ total: number; products: KrogerProduct[] }>,
+    locationId?: string,
+  ): Promise<string | null> {
+    const label = LIST_LABELS[pending.listKey];
+    if (/^(cancel|never mind|nevermind)$/i.test(text)) {
+      return this.#transactReply(messageId, () => {
+        this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+        return `Okay, nothing was added to the ${label} list.`;
+      });
+    }
+    if (!pending.results) {
+      const milk = this.#milkSearchQuery(text);
+      if (!milk) {
+        return this.#transactReply(messageId, () => `For the ${label} list: which kind of milk? Reply whole, 2%, oat, or almond, or “cancel”.`);
+      }
+      const requests = pending.requests.map((request) => isGenericMilkRequest(request.query) ? { ...request, query: milk } : request);
+      return this.#searchListRequests(messageId, memberId, pending.listKey, requests, searchProducts, locationId);
+    }
+    return this.#transactReply(messageId, () => this.#saveListSelections(memberId, pending, text));
+  }
+
+  /** Save numbered Kroger choices from a pending selection to its list; caller holds the transaction. */
+  #saveListSelections(memberId: string, pending: PendingListSelection, text: string): string {
+    const label = LIST_LABELS[pending.listKey];
+    const results = pending.results ?? [];
+    const numbers = text.match(/^\s*\d+(?:\s*(?:,|\s)\s*\d+)*\s*$/)?.[0].trim().split(/[\s,]+/).map(Number);
+    const valid = numbers !== undefined
+      && numbers.length === pending.requests.length
+      && numbers.every((number, index) => Number.isInteger(number) && number >= 1 && number <= (results[index]?.products.length ?? 0));
+    if (!valid) {
+      return pending.requests.length === 1
+        ? `Please reply with a number from 1 to ${results[0]?.products.length ?? 1}, or “cancel”. I’m still waiting to save your choice to the ${label} list.`
+        : `Reply with one result number for each item, in order (for example “1, 2, 1”), or “cancel”. Nothing has been saved to the ${label} list yet.`;
+    }
+    this.#db.prepare("DELETE FROM pending_list_selections WHERE member_id = ?").run(memberId);
+    const lines = pending.requests.map((request, index) => {
+      const product = results[index]!.products[numbers![index]! - 1]!;
+      const cents = this.#currentPrice(product);
+      const outcome = this.#upsertListItem(pending.listKey, memberId, {
+        productId: `kroger:${product.productId}`,
+        name: product.description,
+        quantity: request.quantity,
+        unitPriceCents: cents,
+        priceSource: "kroger",
+        upc: product.upc,
+        size: product.size,
+      });
+      const price = cents === null ? "no current store price (I’ll re-quote when the list is loaded)" : `${money(cents * request.quantity)} Kroger quote`;
+      return `• ${request.quantity} × ${product.description}${product.size ? ` · ${product.size}` : ""} — ${price}${outcome === "updated" ? " (updated the existing entry)" : ""}`;
+    });
+    return this.#listSavedReply(pending.listKey, lines);
+  }
+
+  #upsertListItem(list: ListKey, memberId: string, item: {
+    productId: string; name: string; quantity: number; unitPriceCents: number | null;
+    priceSource: "sample" | "kroger"; upc: string | null; size: string | null;
+  }): "added" | "updated" {
+    const now = this.#now().toISOString();
+    const existing = this.#db.prepare(
+      "SELECT id FROM recurring_list_items WHERE household_id = ? AND list_key = ? AND product_id = ?",
+    ).get(this.#householdId, list, item.productId) as { id: string } | undefined;
+    if (existing) {
+      this.#db.prepare(
+        "UPDATE recurring_list_items SET quantity = ?, product_name = ?, unit_price_cents = ?, price_source = ?, upc = ?, size = ?, quoted_at = ? WHERE id = ?",
+      ).run(item.quantity, item.name, item.unitPriceCents, item.priceSource, item.upc, item.size, now, existing.id);
+    } else {
+      this.#db.prepare(
+        "INSERT INTO recurring_list_items (id, household_id, list_key, product_id, product_name, quantity, unit_price_cents, price_source, upc, size, added_by, created_at, quoted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(randomUUID(), this.#householdId, list, item.productId, item.name, item.quantity, item.unitPriceCents,
+        item.priceSource, item.upc, item.size, memberId, now, now);
+    }
+    this.#db.prepare("UPDATE recurring_lists SET revision = revision + 1 WHERE household_id = ? AND list_key = ?")
+      .run(this.#householdId, list);
+    return existing ? "updated" : "added";
+  }
+
+  /** Mark a list active (reminders start at the next cycle). Returns a note when newly activated. */
+  #activateList(list: ListKey): string {
+    const row = this.#listRow(list);
+    if (row.active_since) return "";
+    const now = this.#now();
+    const anchorDate = list === "biweekly" && !row.anchor_date
+      ? localDateKey(nextWeekdayAfter(now, row.anchor_weekday))
+      : row.anchor_date;
+    this.#db.prepare("UPDATE recurring_lists SET active_since = ?, anchor_date = ? WHERE household_id = ? AND list_key = ?")
+      .run(now.toISOString(), anchorDate, this.#householdId, list);
+    const updated = this.#listRow(list);
+    const next = this.#listDueInfo(updated, now).nextReminderAt;
+    const schedule = describeSchedule(list, this.#listSchedule(updated));
+    return next && updated.reminders_enabled === 1
+      ? `I’ll check in with the group about the ${LIST_LABELS[list]} list ${schedule}, starting ${friendlyDate(next)}.`
+      : "";
+  }
+
+  #listSavedReply(list: ListKey, lines: string[]): string {
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const activation = this.#activateList(list);
+    const items = this.#listItems(list);
+    const estimate = this.#listEstimate(items);
+    return [
+      `Saved to the household’s ${label} list:`,
+      ...lines,
+      `The ${label} list now has ${items.length} item${items.length === 1 ? "" : "s"} (about ${money(estimate.cents)}${estimate.unpriced ? `, plus ${estimate.unpriced} unpriced` : ""}).${activation ? ` ${activation}` : ""}`,
+      `Text “${command} list” to review it or “load ${command} list” to add it to the cart.`,
+    ].join("\n");
+  }
+
+  #matchListItems(list: ListKey, itemText: string): { items: ListItemRow[]; matches: ListItemRow[] } {
+    const items = this.#listItems(list);
+    const trimmed = itemText.trim();
+    if (/^#?\d{1,2}$/.test(trimmed)) {
+      const item = items[Number(trimmed.replace("#", "")) - 1];
+      return { items, matches: item ? [item] : [] };
+    }
+    const tokens = this.#retailerQuery(trimmed)
+      .replace(/\b(?:the|my|our|some|a|an|all|of)\b/gi, " ")
+      .split(/\s+/)
+      .filter(Boolean);
+    if (!tokens.length) return { items, matches: [] };
+    const contains = (name: string, token: string): boolean => name.includes(token)
+      || (token.length > 3 && token.endsWith("s") && name.includes(token.slice(0, -1)));
+    const matches = items.filter((item) => {
+      const name = this.#listItemName(item).toLocaleLowerCase();
+      return tokens.every((token) => contains(name, token.toLocaleLowerCase()));
+    });
+    return { items, matches };
+  }
+
+  #ambiguousListMatch(list: ListKey, itemText: string, matches: ListItemRow[], items: ListItemRow[], verb: string): string {
+    const command = LIST_COMMAND_NAMES[list];
+    const options = matches.map((item) => `${items.indexOf(item) + 1}) ${item.quantity} × ${this.#listItemName(item)}`).join("\n");
+    return `More than one ${LIST_LABELS[list]} list item matches “${itemText}”:\n${options}\nSay which one by number, for example “${verb === "remove" ? `remove ${items.indexOf(matches[0]!) + 1} from ${command} list` : `set ${items.indexOf(matches[0]!) + 1} on ${command} list to 2`}”. Nothing was changed.`;
+  }
+
+  #removeFromList(list: ListKey, itemText: string): string {
+    const label = LIST_LABELS[list];
+    const { items, matches } = this.#matchListItems(list, itemText);
+    if (!matches.length) {
+      return `I couldn’t find “${itemText}” on the ${label} list, so nothing was removed. Text “${LIST_COMMAND_NAMES[list]} list” to see it.`;
+    }
+    if (matches.length > 1) return this.#ambiguousListMatch(list, itemText, matches, items, "remove");
+    const item = matches[0]!;
+    this.#db.prepare("DELETE FROM recurring_list_items WHERE id = ?").run(item.id);
+    this.#db.prepare("UPDATE recurring_lists SET revision = revision + 1 WHERE household_id = ? AND list_key = ?")
+      .run(this.#householdId, list);
+    const remaining = items.length - 1;
+    return `Removed ${this.#listItemName(item)} from the ${label} list. It now has ${remaining} item${remaining === 1 ? "" : "s"}. The cart was not changed.`;
+  }
+
+  #setListQuantity(list: ListKey, itemText: string, quantity: number): string {
+    if (quantity === 0) return this.#removeFromList(list, itemText);
+    const label = LIST_LABELS[list];
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) return "Quantities must be between 1 and 99.";
+    const { items, matches } = this.#matchListItems(list, itemText);
+    if (!matches.length) return `I couldn’t find “${itemText}” on the ${label} list, so nothing was changed.`;
+    if (matches.length > 1) return this.#ambiguousListMatch(list, itemText, matches, items, "quantity");
+    const item = matches[0]!;
+    this.#db.prepare("UPDATE recurring_list_items SET quantity = ? WHERE id = ?").run(quantity, item.id);
+    this.#db.prepare("UPDATE recurring_lists SET revision = revision + 1 WHERE household_id = ? AND list_key = ?")
+      .run(this.#householdId, list);
+    return `Set ${this.#listItemName(item)} on the ${label} list to ${quantity}. The cart was not changed.`;
+  }
+
+  #requestListClear(memberId: string, list: ListKey): string {
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const items = this.#listItems(list);
+    if (!items.length) return `The ${label} list is already empty.`;
+    this.#db.prepare(
+      "INSERT INTO pending_list_clears (member_id, list_key, list_revision, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET list_key = excluded.list_key, list_revision = excluded.list_revision, created_at = excluded.created_at",
+    ).run(memberId, list, this.#listRow(list).revision, new Date().toISOString());
+    return `This will remove all ${items.length} item${items.length === 1 ? "" : "s"} from the household’s ${label} list for everyone (the cart is not affected, and this can’t be undone). Reply “confirm clear ${command} list” to proceed, or “cancel clear ${command} list”.`;
+  }
+
+  #confirmListClear(memberId: string, list?: ListKey): string {
+    const pending = this.#db.prepare("SELECT list_key, list_revision FROM pending_list_clears WHERE member_id = ?")
+      .get(memberId) as { list_key: ListKey; list_revision: number } | undefined;
+    if (!pending || (list && pending.list_key !== list)) {
+      const name = list ? LIST_COMMAND_NAMES[list] : "weekly";
+      return `There isn’t a pending request from you to clear ${list ? `the ${LIST_LABELS[list]}` : "a"} list. Text “clear ${name} list” first.`;
+    }
+    const key = pending.list_key;
+    const label = LIST_LABELS[key];
+    const command = LIST_COMMAND_NAMES[key];
+    const row = this.#listRow(key);
+    const items = this.#listItems(key);
+    if (row.revision !== pending.list_revision) {
+      this.#db.prepare("UPDATE pending_list_clears SET list_revision = ?, created_at = ? WHERE member_id = ?")
+        .run(row.revision, new Date().toISOString(), memberId);
+      return `The ${label} list changed since you asked. It now has ${items.length} item${items.length === 1 ? "" : "s"}. Reply “confirm clear ${command} list” again to clear it, or “cancel clear ${command} list”.`;
+    }
+    this.#db.prepare("DELETE FROM pending_list_clears WHERE member_id = ?").run(memberId);
+    this.#db.prepare("DELETE FROM recurring_list_items WHERE household_id = ? AND list_key = ?").run(this.#householdId, key);
+    this.#db.prepare("UPDATE recurring_lists SET revision = revision + 1 WHERE household_id = ? AND list_key = ?")
+      .run(this.#householdId, key);
+    return `Cleared the ${label} list (${items.length} item${items.length === 1 ? "" : "s"} removed). The cart was not changed. Add new items with “${command}: …”.`;
+  }
+
+  #cancelListClear(memberId: string, list?: ListKey): string {
+    const pending = this.#db.prepare("SELECT list_key FROM pending_list_clears WHERE member_id = ?")
+      .get(memberId) as { list_key: ListKey } | undefined;
+    if (!pending || (list && pending.list_key !== list)) return "There isn’t a pending list clear to cancel.";
+    this.#db.prepare("DELETE FROM pending_list_clears WHERE member_id = ?").run(memberId);
+    return `Okay, I left the ${LIST_LABELS[pending.list_key]} list unchanged.`;
+  }
+
+  /** Why a load can’t proceed (empty list or already loaded this cycle), if anything. */
+  #listLoadBlocker(list: ListKey, force: boolean): string | undefined {
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    if (!this.#listItems(list).length) {
+      return `The ${label} list is empty, so nothing was added to the cart. Add items with “${command}: milk, eggs”.`;
+    }
+    if (force) return undefined;
+    const row = this.#listRow(list);
+    if (row.last_loaded_at && this.#listDueInfo(row, this.#now()).loadedThisCycle) {
+      const by = row.last_loaded_by ? this.getMembers().find((member) => member.id === row.last_loaded_by)?.name : undefined;
+      return `The ${label} list was already loaded into the cart on ${friendlyDate(new Date(row.last_loaded_at))}${by ? ` by ${by}` : ""}, so I didn’t add it again. Text “load ${command} list again” if you really want another copy.`;
+    }
+    return undefined;
+  }
+
+  /** Called when a cart undo entry is reverted: if it was a list load, restore the previous load state. */
+  #revertListLoad(undoId: string): void {
+    const load = this.#db.prepare(
+      "SELECT list_key, prev_loaded_at, prev_loaded_by FROM recurring_list_loads WHERE household_id = ? AND undo_id = ?",
+    ).get(this.#householdId, undoId) as { list_key: ListKey; prev_loaded_at: string | null; prev_loaded_by: string | null } | undefined;
+    if (!load) return;
+    this.#db.prepare("UPDATE recurring_lists SET last_loaded_at = ?, last_loaded_by = ? WHERE household_id = ? AND list_key = ?")
+      .run(load.prev_loaded_at, load.prev_loaded_by, this.#householdId, load.list_key);
+    this.#db.prepare("DELETE FROM recurring_list_loads WHERE undo_id = ?").run(undoId);
+  }
+
+  async #quoteListItems(list: ListKey, quoteProduct: ProductQuoter): Promise<Map<string, ProductQuote>> {
+    const krogerItems = this.#listItems(list).filter((item) => item.price_source === "kroger" && item.product_id.startsWith("kroger:"));
+    const entries = await Promise.all(krogerItems.map(async (item): Promise<[string, ProductQuote]> => {
+      try {
+        return [item.product_id, { product: await quoteProduct(item.product_id.slice("kroger:".length)) }];
+      } catch (error) {
+        return [item.product_id, { product: null, error: error instanceof Error ? error.message : "Kroger request failed" }];
+      }
+    }));
+    return new Map(entries);
+  }
+
+  /**
+   * Copy a list into the cart as ordinary cart lines owned by the sender, as one
+   * cart revision and one undo step. Kroger items use a fresh store quote when
+   * one is available; otherwise the last saved quote is used and flagged.
+   * Products already in the cart are skipped unless forced (“again”).
+   */
+  #loadListIntoCart(memberId: string, list: ListKey, force: boolean, quotes: Map<string, ProductQuote> | undefined, liveQuotes: boolean): string {
+    const blocker = this.#listLoadBlocker(list, force);
+    if (blocker) return blocker;
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const items = this.#listItems(list);
+    const inCart = new Set((this.#db.prepare("SELECT product_id FROM cart_items WHERE household_id = ?")
+      .all(this.#householdId) as Array<{ product_id: string }>).map((row) => row.product_id));
+    const undoSnapshot = this.#captureCartItems();
+    const createdAt = new Date().toISOString();
+    const nowIso = this.#now().toISOString();
+    const insertSample = this.#db.prepare(
+      "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    const insertKroger = this.#db.prepare(
+      "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    );
+    const participants = JSON.stringify([memberId]);
+    const added: string[] = [];
+    const flagged: string[] = [];
+    const alreadyInCart: string[] = [];
+    const unpriced: string[] = [];
+    for (const item of items) {
+      const name = this.#listItemName(item);
+      if (!force && inCart.has(item.product_id)) {
+        alreadyInCart.push(name);
+        continue;
+      }
+      const catalogProduct = item.price_source === "sample" ? CATALOG.find((product) => product.id === item.product_id) : undefined;
+      if (catalogProduct) {
+        insertSample.run(randomUUID(), this.#householdId, item.product_id, item.quantity, memberId, participants, createdAt);
+        added.push(`• ${item.quantity} × ${catalogProduct.name} — ${money(catalogProduct.priceCents * item.quantity)} (sample estimate)`);
+        continue;
+      }
+      const quote = quotes?.get(item.product_id);
+      const quotedPrice = quote?.product ? this.#currentPrice(quote.product) : null;
+      const price = quotedPrice ?? item.unit_price_cents;
+      if (price === null) {
+        unpriced.push(name);
+        continue;
+      }
+      const finalName = quote?.product && quotedPrice !== null ? quote.product.description : name;
+      const upc = quote?.product && quotedPrice !== null ? quote.product.upc ?? item.upc : item.upc;
+      insertKroger.run(randomUUID(), this.#householdId, item.product_id, item.quantity, memberId, participants, createdAt,
+        finalName, price, "kroger", upc);
+      if (quotedPrice !== null) {
+        this.#db.prepare("UPDATE recurring_list_items SET product_name = ?, unit_price_cents = ?, upc = ?, quoted_at = ? WHERE id = ?")
+          .run(finalName, quotedPrice, upc, nowIso, item.id);
+        added.push(`• ${item.quantity} × ${finalName} — ${money(price * item.quantity)} (Kroger quote, re-checked now)`);
+      } else {
+        const savedOn = item.quoted_at ? ` from ${friendlyDate(new Date(item.quoted_at))}` : "";
+        const reason = !liveQuotes
+          ? "live re-quote isn’t available here"
+          : quote?.error
+            ? "Kroger’s price lookup failed"
+            : quote?.product
+              ? "Kroger returned no current price at this store"
+              : "Kroger didn’t return this product for the configured store";
+        added.push(`• ${item.quantity} × ${finalName} — ${money(price * item.quantity)} (last saved Kroger quote${savedOn}; not re-quoted)`);
+        flagged.push(`${finalName}: ${reason}`);
+      }
+    }
+    const notes: string[] = [];
+    if (flagged.length) {
+      notes.push(`Price not refreshed for ${flagged.join("; ")}. Kroger’s availability precheck at checkout will catch anything the store no longer carries.`);
+    }
+    if (alreadyInCart.length) {
+      notes.push(`Already in the cart, so not duplicated: ${alreadyInCart.join(", ")}. Text “load ${command} list again” to add copies anyway.`);
+    }
+    if (unpriced.length) {
+      notes.push(`Skipped (no Kroger price available yet): ${unpriced.join(", ")}.`);
+    }
+    if (!added.length) {
+      return [`Nothing from the ${label} list was added to the cart.`, ...notes].join("\n");
+    }
+    this.#db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?")
+      .run(this.#householdId);
+    this.#recordUndo(memberId, `load the ${label} list (${added.length} item${added.length === 1 ? "" : "s"})`, undoSnapshot);
+    const undoEntry = this.#db.prepare("SELECT id FROM cart_undo_history WHERE household_id = ? ORDER BY rowid DESC LIMIT 1")
+      .get(this.#householdId) as { id: string } | undefined;
+    // Remember the previous load state per undo entry so undoing this load also
+    // restores the list's “already loaded this cycle” state.
+    const previous = this.#listRow(list);
+    this.#db.prepare(
+      "DELETE FROM recurring_list_loads WHERE household_id = ? AND undo_id NOT IN (SELECT id FROM cart_undo_history WHERE household_id = ?)",
+    ).run(this.#householdId, this.#householdId);
+    if (undoEntry) {
+      this.#db.prepare(
+        "INSERT OR REPLACE INTO recurring_list_loads (undo_id, household_id, list_key, prev_loaded_at, prev_loaded_by) VALUES (?, ?, ?, ?, ?)",
+      ).run(undoEntry.id, this.#householdId, list, previous.last_loaded_at, previous.last_loaded_by);
+    }
+    this.#db.prepare("UPDATE recurring_lists SET last_loaded_at = ?, last_loaded_by = ? WHERE household_id = ? AND list_key = ?")
+      .run(nowIso, memberId, this.#householdId, list);
+    const memberName = this.getMembers().find((member) => member.id === memberId)?.name ?? "you";
+    return [
+      `Loaded ${added.length} item${added.length === 1 ? "" : "s"} from the ${label} list into the cart for ${memberName} (one change — “undo” reverts it):`,
+      ...added,
+      ...notes,
+      this.formatSummary(memberId),
+    ].join("\n");
+  }
+
+  #startList(list: ListKey): string {
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const activation = this.#activateList(list);
+    const items = this.#listItems(list);
+    const ask = items.length
+      ? `It already has ${items.length} item${items.length === 1 ? "" : "s"}; text “${command} list” to review. What else should be on it?`
+      : "What should be on it?";
+    const status = activation || (this.#listRow(list).reminders_enabled === 1
+      ? `It’s already active; next check-in ${this.#nextReminderText(list)}.`
+      : `Reminders are paused; text “resume ${command} reminders” to turn them back on.`);
+    return `The household’s ${label} list is ready. ${ask} Reply like “${command}: milk, eggs, bread” (up to 5 items per message). ${status}`;
+  }
+
+  #nextReminderText(list: ListKey): string {
+    const next = this.#listDueInfo(this.#listRow(list), this.#now()).nextReminderAt;
+    if (!next) return "not scheduled";
+    return next <= this.#now() ? "due now" : `${friendlyDate(next)}`;
+  }
+
+  #setListWeekday(list: ListKey, weekday: number): string {
+    if (list === "monthly") return "The monthly list uses a day of the month, for example “monthly list on the 1st”.";
+    if (weekday < 0 || weekday > 6) return "I didn’t recognize that day. Try “weekly list on sundays”.";
+    const now = this.#now();
+    const anchorDate = list === "biweekly" ? localDateKey(nextWeekdayAfter(now, weekday)) : this.#listRow(list).anchor_date;
+    this.#db.prepare("UPDATE recurring_lists SET anchor_weekday = ?, anchor_date = ? WHERE household_id = ? AND list_key = ?")
+      .run(weekday, anchorDate, this.#householdId, list);
+    return this.#afterScheduleChange(list);
+  }
+
+  #setListMonthDay(list: ListKey, dayOfMonth: number): string {
+    if (list !== "monthly") {
+      return `The ${LIST_LABELS[list]} list uses a weekday, for example “${LIST_COMMAND_NAMES[list]} list on sundays”.`;
+    }
+    if (!Number.isInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 31) return "Choose a day from 1 to 31, for example “monthly list on the 15th”.";
+    this.#db.prepare("UPDATE recurring_lists SET day_of_month = ? WHERE household_id = ? AND list_key = ?")
+      .run(dayOfMonth, this.#householdId, list);
+    return this.#afterScheduleChange(list);
+  }
+
+  /** A new anchor never triggers an immediate reminder for a cycle that has already started. */
+  #afterScheduleChange(list: ListKey): string {
+    const now = this.#now();
+    const row = this.#listRow(list);
+    const info = this.#listDueInfo(row, now);
+    if (row.active_since && info.cycleStart <= now && row.last_reminded_cycle !== info.cycleKey) {
+      this.#db.prepare("UPDATE recurring_lists SET last_reminded_cycle = ? WHERE household_id = ? AND list_key = ?")
+        .run(info.cycleKey, this.#householdId, list);
+    }
+    const schedule = describeSchedule(list, this.#listSchedule(row));
+    const status = !row.active_since
+      ? ` The list isn’t active yet; it starts when someone adds an item or texts “start ${LIST_COMMAND_NAMES[list]} list”.`
+      : row.reminders_enabled !== 1
+        ? " Reminders are currently paused."
+        : ` Next check-in: ${this.#nextReminderText(list)}.`;
+    return `Okay — the ${LIST_LABELS[list]} list is now due ${schedule}. I check in around ${this.#reminderHourText()} that day.${status}`;
+  }
+
+  #setListReminders(list: ListKey, enabled: boolean): string {
+    this.#db.prepare("UPDATE recurring_lists SET reminders_enabled = ? WHERE household_id = ? AND list_key = ?")
+      .run(enabled ? 1 : 0, this.#householdId, list);
+    const label = LIST_LABELS[list];
+    if (!enabled) {
+      return `Paused reminders for the ${label} list. The list is kept; text “resume ${LIST_COMMAND_NAMES[list]} reminders” to turn them back on.`;
+    }
+    const row = this.#listRow(list);
+    return row.active_since
+      ? `Reminders for the ${label} list are on. Next check-in: ${this.#nextReminderText(list)}.`
+      : `Reminders for the ${label} list are on. They start once someone adds an item or texts “start ${LIST_COMMAND_NAMES[list]} list”.`;
+  }
+
+  #reminderHourText(): string {
+    const hour = this.#reminderHour % 12 === 0 ? 12 : this.#reminderHour % 12;
+    return `${hour}:00 ${this.#reminderHour < 12 ? "AM" : "PM"}`;
+  }
+
+  #reminderText(list: ListKey): string {
+    const title = LIST_TITLES[list];
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const items = this.#listItems(list);
+    if (!items.length) {
+      return `${title} groceries are due, but the ${label} list is empty. What should be on it? Add items with “${command}: milk, eggs”.`;
+    }
+    const estimate = this.#listEstimate(items);
+    const names = items.slice(0, 6).map((item) => `${item.quantity > 1 ? `${item.quantity} × ` : ""}${this.#listItemName(item)}`);
+    const more = items.length > 6 ? `, and ${items.length - 6} more` : "";
+    return `${title} groceries are due. The ${label} list has ${items.length} item${items.length === 1 ? "" : "s"} (about ${money(estimate.cents)} estimated): ${names.join(", ")}${more}. Reply “load ${command} list” to add them to the cart, or add items with “${command}: …”.`;
+  }
+
+  #formatListView(list: ListKey): string {
+    const row = this.#listRow(list);
+    const label = LIST_LABELS[list];
+    const command = LIST_COMMAND_NAMES[list];
+    const items = this.#listItems(list);
+    const schedule = describeSchedule(list, this.#listSchedule(row));
+    const header = `${LIST_TITLES[list]} list (shared by the household · due ${schedule})`;
+    const lines = items.map((item, index) => {
+      const unit = this.#listItemUnitPrice(item);
+      const price = unit === null
+        ? "no saved price"
+        : item.price_source === "kroger"
+          ? `${money(unit * item.quantity)} Kroger quote${item.quoted_at ? ` from ${friendlyDate(new Date(item.quoted_at))}` : ""}`
+          : `${money(unit * item.quantity)} sample estimate`;
+      return `${index + 1}) ${item.quantity} × ${this.#listItemName(item)}${item.size ? ` · ${item.size}` : ""} — ${price}`;
+    });
+    const estimate = this.#listEstimate(items);
+    const body = items.length
+      ? `${lines.join("\n")}\nEstimated total: ${money(estimate.cents)}${estimate.unpriced ? ` (+${estimate.unpriced} unpriced)` : ""}. Kroger prices are re-quoted when the list is loaded.`
+      : `The list is empty. Add items with “${command}: milk, eggs, bread”.`;
+    const statusParts: string[] = [];
+    if (!row.active_since) statusParts.push(`Not started yet — reminders begin once it has items (or text “start ${command} list”).`);
+    else if (row.reminders_enabled !== 1) statusParts.push(`Reminders paused (“resume ${command} reminders”).`);
+    else statusParts.push(`Next check-in: ${this.#nextReminderText(list)}.`);
+    if (row.last_loaded_at) {
+      const by = row.last_loaded_by ? this.getMembers().find((member) => member.id === row.last_loaded_by)?.name : undefined;
+      statusParts.push(`Last loaded ${friendlyDate(new Date(row.last_loaded_at))}${by ? ` by ${by}` : ""}.`);
+    }
+    return `${header}\n${body}\n${statusParts.join(" ")}\nLoad into the cart: “load ${command} list”. Remove: “remove eggs from ${command} list”. Change amount: “set eggs on ${command} list to 2”.`;
+  }
+
+  #formatListsOverview(): string {
+    const lines = LIST_KEYS.map((list) => {
+      const row = this.#listRow(list);
+      const items = this.#listItems(list);
+      const estimate = this.#listEstimate(items);
+      const size = items.length ? `${items.length} item${items.length === 1 ? "" : "s"}, about ${money(estimate.cents)}` : "empty";
+      const status = !row.active_since
+        ? "not started"
+        : row.reminders_enabled !== 1
+          ? "reminders paused"
+          : `next check-in ${this.#nextReminderText(list)}`;
+      return `• ${LIST_TITLES[list]} (“${LIST_COMMAND_NAMES[list]} list”) — ${size} · due ${describeSchedule(list, this.#listSchedule(row))} · ${status}`;
+    });
+    return `Household recurring lists:\n${lines.join("\n")}\nAdd: “weekly: milk, eggs” · View: “monthly list” · Use: “load weekly list” · Timing: “weekly list on saturdays” or “monthly list on the 15th”.`;
+  }
+
+  #listSetupPrompt(mode: "catalog" | "live"): string {
+    const describe = (list: ListKey): string => describeSchedule(list, this.#listSchedule(this.#listRow(list)));
+    const lookup = mode === "live"
+      ? "I’ll search Kroger and ask you to pick each product, just like adding to the cart."
+      : "In this demo I match items to the sample catalog.";
+    return [
+      "Let’s set up the household’s recurring grocery lists. What should go on each one?",
+      `• Weekly (${describe("weekly")}): reply like “weekly: milk, eggs, bread”`,
+      `• Every two weeks (${describe("biweekly")}): “biweekly: paper towels, coffee”`,
+      `• Monthly (${describe("monthly")}): “monthly: olive oil, rice”`,
+      `${lookup} Each list belongs to the whole group. When a list is due I’ll ask the group whether to load it into the cart; change timing with “weekly list on saturdays” or “monthly list on the 15th”. Text “lists” anytime to review.`,
+    ].join("\n");
   }
 }

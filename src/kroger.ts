@@ -193,24 +193,48 @@ export class KrogerClient {
     }
 
     const body = await response.json() as KrogerProductResponse;
-    const products = (body.data ?? []).map((product): KrogerProduct => {
-      const item = product.items?.[0];
-      return {
-        productId: product.productId ?? product.upc ?? "unknown",
-        description: product.description ?? "Unnamed product",
-        brand: product.brand ?? null,
-        upc: product.upc ?? null,
-        size: item?.size ?? null,
-        regularPriceCents: this.#cents(item?.price?.regular),
-        promoPriceCents: this.#cents(item?.price?.promo),
-        promoEffectiveAt: item?.price?.effectiveDate?.value ?? null,
-        promoExpiresAt: item?.price?.expirationDate?.value ?? null,
-        curbsideAvailable: item?.fulfillment?.curbside,
-        deliveryAvailable: item?.fulfillment?.delivery,
-      };
-    });
+    const products = (body.data ?? []).map((product) => this.#toProduct(product));
 
     return { total: body.meta?.pagination?.total ?? products.length, products };
+  }
+
+  /** Fetch one product by Kroger product ID at the configured store; null when Kroger has no such product there. */
+  async getProduct(productId: string): Promise<KrogerProduct | null> {
+    const params = new URLSearchParams();
+    if (this.locationId) params.set("filter.locationId", this.locationId);
+    const query = params.toString();
+    const response = await fetch(`https://api.kroger.com/v1/products/${encodeURIComponent(productId)}${query ? `?${query}` : ""}`, {
+      headers: { Authorization: `Bearer ${await this.#getAccessToken()}`, Accept: "application/json" },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`Kroger product lookup failed (${response.status}): ${detail.slice(0, 240)}`);
+    }
+    const body = await response.json() as { data?: NonNullable<KrogerProductResponse["data"]>[number] };
+    if (!body.data) return null;
+    // Like the availability check, tolerate `items` arriving as nested arrays.
+    const items = (body.data.items ?? []) as unknown[];
+    const flatItems = items.flatMap((entry) => Array.isArray(entry) ? entry : [entry]) as NonNullable<typeof body.data.items>;
+    return this.#toProduct({ ...body.data, items: flatItems });
+  }
+
+  #toProduct(product: NonNullable<KrogerProductResponse["data"]>[number]): KrogerProduct {
+    const item = product.items?.[0];
+    return {
+      productId: product.productId ?? product.upc ?? "unknown",
+      description: product.description ?? "Unnamed product",
+      brand: product.brand ?? null,
+      upc: product.upc ?? null,
+      size: item?.size ?? null,
+      regularPriceCents: this.#cents(item?.price?.regular),
+      promoPriceCents: this.#cents(item?.price?.promo),
+      promoEffectiveAt: item?.price?.effectiveDate?.value ?? null,
+      promoExpiresAt: item?.price?.expirationDate?.value ?? null,
+      curbsideAvailable: item?.fulfillment?.curbside,
+      deliveryAvailable: item?.fulfillment?.delivery,
+    };
   }
 
   async #availableAlternatives(name: string, unavailableUpc: string): Promise<KrogerProduct[]> {
