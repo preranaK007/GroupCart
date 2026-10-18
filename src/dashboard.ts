@@ -41,6 +41,8 @@ const html = `<!doctype html>
     .share-track { grid-column:1/-1; height:5px; }
     .avatar { width:30px; height:30px; border-radius:50%; display:grid; place-items:center; background:#e9eee8; color:#39584a; font-size:12px; font-weight:700; }
     .approval { color:var(--muted); font-size:11px; }
+    .sessions { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); display:grid; gap:6px; font-size:13px; }
+    .session { padding:8px 10px; border-radius:10px; background:var(--mint); color:#234a35; }
     button { border:0; border-radius:11px; padding:11px 14px; background:var(--green); color:white; font:inherit; font-weight:700; cursor:pointer; }
     button.secondary { background:#edf2ed; color:var(--ink); }
     button:disabled { opacity:.45; cursor:not-allowed; }
@@ -82,7 +84,7 @@ const html = `<!doctype html>
           <div class="card-title"><h2>Send a sample request</h2><span class="sub">Local demo</span></div>
           <div class="demo">
             <select id="member" aria-label="Choose who is sending"></select>
-            <div class="demo-row"><input id="request" placeholder="e.g. 2 bananas, pasta for everyone" /><button id="send">Add</button></div>
+            <div class="demo-row"><input id="request" placeholder="e.g. 2 bananas, or start sharing with Maya" /><button id="send">Add</button></div>
           </div>
           <p class="status" id="status" role="status" aria-live="polite"></p>
         </div>
@@ -98,6 +100,7 @@ const html = `<!doctype html>
         <div class="card" id="approvalsPanel">
           <div class="card-title"><h2>Cost split</h2><span class="sub">Pre-tax estimate</span></div>
           <div class="people" id="people"></div>
+          <div class="sessions" id="sessions"></div>
           <div class="actions"><button class="secondary" id="approve">Approve my share</button><button id="checkout">Mock checkout</button></div>
           <p class="status" id="approvalStatus" role="status" aria-live="polite"></p>
           <p class="footer" id="approvalFooter">Every cart edit creates a new revision and resets approvals. Checkout is simulated; no payment is taken.</p>
@@ -138,6 +141,10 @@ const html = `<!doctype html>
       }).join("") : '<p class="empty">Your shared basket is empty. Add an item in the iMessage group chat.</p>';
       const memberMax = Math.max(1, ...latest.members.map((member) => member.shareCents));
       document.getElementById("people").innerHTML = latest.members.map((member) => '<div class="person"><div class="person-left"><span class="avatar">' + esc(member.name.slice(0,1).toUpperCase()) + '</span><div><strong>' + esc(member.name) + '</strong><div class="approval">' + (member.approved ? "Approved revision " + latest.revision : "Awaiting approval") + '</div></div></div><strong>' + dollars(member.shareCents) + '</strong><div class="share-track"><div class="share-fill" style="width:' + Math.round(member.shareCents / memberMax * 100) + '%"></div></div></div>').join("") || '<p class="empty">Add members to GROUP_CART_MEMBERS.</p>';
+      const sessions = latest.sharingSessions || [];
+      document.getElementById("sessions").innerHTML = sessions.length
+        ? '<strong>Active sharing sessions</strong>' + sessions.map((session) => '<div class="session">' + esc(session.participantNames.join(", ")) + ' · since ' + esc(new Date(session.startedAt).toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})) + '</div>').join("")
+        : '<span class="muted">No sharing session. Text “start sharing with” and member names to split new items.</span>';
       const select = document.getElementById("member");
       const selected = select.value;
       select.innerHTML = latest.members.map((member) => '<option value="' + esc(member.id) + '">' + esc(member.name) + '</option>').join("");

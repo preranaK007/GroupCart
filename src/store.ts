@@ -6,7 +6,6 @@ import {
   CATALOG,
   extractCartRequests,
   isGenericMilkRequest,
-  isSharedRequest,
   money,
   resolveMilkChoice,
   unsupportedBrandedRequest,
@@ -31,18 +30,17 @@ type ItemRow = {
 type PendingRetailerChoice = {
   query: string;
   quantity: number;
-  participantIds: string[];
   products: KrogerProduct[];
 };
 
 type BatchRequest = {
   query: string;
   quantity: number;
-  participantIds: string[];
   maxPriceCents?: number;
   maxPriceInclusive?: boolean;
 };
 type BatchProductResult = { total: number; products: KrogerProduct[] };
+type SharingSession = { id: string; participantIds: string[]; startedBy: string; startedAt: string };
 
 export type CartSnapshot = {
   householdId: string;
@@ -64,6 +62,7 @@ export type CartSnapshot = {
     participantNames: string[];
   }>;
   members: Array<{ id: string; name: string; handle: string; shareCents: number; approved: boolean }>;
+  sharingSessions: Array<{ id: string; participantIds: string[]; participantNames: string[]; startedAt: string }>;
   checkedOutRevision: number | null;
 };
 
@@ -178,7 +177,22 @@ export class CartStore {
         results_json TEXT,
         created_at TEXT NOT NULL
       );
+      -- A sharing session splits every item any participant adds among all
+      -- participants until someone stops it. Ended sessions keep ended_at.
+      CREATE TABLE IF NOT EXISTS sharing_sessions (
+        id TEXT PRIMARY KEY,
+        household_id TEXT NOT NULL REFERENCES households(id),
+        participant_ids_json TEXT NOT NULL,
+        started_by TEXT NOT NULL REFERENCES members(id),
+        started_at TEXT NOT NULL,
+        ended_by TEXT REFERENCES members(id),
+        ended_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS sharing_sessions_active ON sharing_sessions(household_id, ended_at);
     `);
+    // Per-item sharing was removed; a pending legacy "milk-shared" question now
+    // resolves like any other milk clarification (sharing comes from sessions).
+    this.#db.prepare("UPDATE pending_clarifications SET kind = 'milk' WHERE kind = 'milk-shared'").run();
   }
 
   registerMembers(configuredMembers: MemberConfig[]): Member[] {
@@ -213,8 +227,13 @@ export class CartStore {
     try {
       const normalized = text.trim();
       let reply: string | null;
+      const sharingCommand = this.#parseSharingCommand(normalized);
 
-      if (/^(dashboard|open dashboard|cart page)$/i.test(normalized)) {
+      if (sharingCommand) {
+        reply = sharingCommand.action === "start"
+          ? this.#startSharing(memberId, sharingCommand.names)
+          : this.#stopSharing(memberId, sharingCommand.names);
+      } else if (/^(dashboard|open dashboard|cart page)$/i.test(normalized)) {
         reply = this.#dashboardMessage();
       } else if (this.#isHelpRequest(normalized)) {
         reply = this.#helpMessage();
@@ -239,7 +258,7 @@ export class CartStore {
         const pending = this.#db.prepare(
           "SELECT kind, original_text FROM pending_clarifications WHERE member_id = ?",
         ).get(memberId) as { kind: string; original_text: string } | undefined;
-        if (pending?.kind === "milk" || pending?.kind === "milk-shared") {
+        if (pending?.kind === "milk") {
           if (/^(cancel|never mind|nevermind)$/i.test(normalized)) {
             this.#clearClarification(memberId);
             reply = "Okay, I didn’t add any milk.";
@@ -253,11 +272,10 @@ export class CartStore {
               reply = "Which kind? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond milk. You can also say “cancel”. After you choose, I’ll look up matching store products if live search is configured.";
             } else {
               this.#clearClarification(memberId);
-              const shared = pending.kind === "milk-shared" || isSharedRequest(normalized);
               const companionRequests = extractCartRequests(pending.original_text);
               const requests = [{ product, quantity: 1 }, ...companionRequests];
-              this.#addRequests(memberId, requests, shared);
-              reply = this.formatSummary(memberId, requests.map(({ product: added }) => added.name), shared);
+              const participantIds = this.#addRequests(memberId, requests);
+              reply = this.formatSummary(memberId, requests.map(({ product: added }) => added.name), participantIds);
             }
           }
         } else if (unsupportedBrandedRequest(normalized)) {
@@ -266,19 +284,15 @@ export class CartStore {
         } else if (isGenericMilkRequest(normalized)) {
           this.#db.prepare(
             "INSERT INTO pending_clarifications (member_id, kind, original_text, created_at) VALUES (?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET kind = excluded.kind, original_text = excluded.original_text, created_at = excluded.created_at",
-          ).run(memberId, isSharedRequest(normalized) ? "milk-shared" : "milk", normalized, new Date().toISOString());
+          ).run(memberId, "milk", normalized, new Date().toISOString());
           reply = "What kind of milk? Reply 1 for whole, 2 for 2%, 3 for oat, or 4 for almond. You can also type the kind you want, and I’ll look up matching store products.";
         } else {
           const requests = extractCartRequests(normalized);
           if (requests.length === 0) {
             reply = `I couldn’t match that to our sample catalog. Try milk, oat milk, eggs, bananas, pasta, tomato sauce, parmesan, bread, apples, or peanut butter. Text “help” to see examples and commands, or “cart” to review your basket.`;
-          } else if (isSharedRequest(normalized)) {
-            const participants = this.#shareParticipants(normalized, memberId);
-            const details = this.#shareRequests(memberId, requests, participants);
-            reply = `${details}\n${this.formatSummary(memberId)}`;
           } else {
-            this.#addRequests(memberId, requests, false);
-            reply = this.formatSummary(memberId, requests.map(({ product }) => product.name), false);
+            const participantIds = this.#addRequests(memberId, requests);
+            reply = `${this.formatSummary(memberId, requests.map(({ product }) => product.name), participantIds)}${this.#legacyShareHint(normalized, memberId)}`;
           }
         }
       }
@@ -307,7 +321,11 @@ export class CartStore {
     if (existing !== undefined) return existing;
 
     const normalized = text.trim();
+    // Sharing-session commands never touch the cart or Kroger, so they are
+    // handled before any pending checkout, choice, or clarification state.
+    if (this.#parseSharingCommand(normalized)) return this.processIncomingText(messageId, memberId, normalized);
     const isCommand = /^(cart|show cart|review cart|dashboard|open dashboard|cart page|approve|approve cart|confirm cart|checkout|finish checkout|cancel checkout|clear mine|clear my items|clear my stuff|clear my groceries|clear everything for me|clear all|clear everything|clear cart|clear entire cart|empty cart|clear shared list|clear entire shared list|confirm clear all|cancel clear all|yes clear all|undo|undo last|revert|revert last change)$/i.test(normalized)
+      || this.#parseSharingCommand(normalized) !== undefined
       || this.#isHelpRequest(normalized)
       || (/^yes$/i.test(normalized) && this.#hasPendingClearAll(memberId));
     if (/^(checkout|finish checkout)$/i.test(normalized)) {
@@ -426,7 +444,7 @@ export class CartStore {
     }
 
     if (!isCommand) {
-      const batchRequests = this.#multiItemRequests(normalized, memberId);
+      const batchRequests = this.#multiItemRequests(normalized);
       if (batchRequests.length > 1) {
         if (batchRequests.length > 5) {
           const reply = "I can search up to 5 grocery items from one message. Nothing was added; split the list into smaller batches or text “help”.";
@@ -446,16 +464,15 @@ export class CartStore {
             return reply;
           } catch (error) { this.#db.exec("ROLLBACK"); throw error; }
         }
-        return this.#searchBatchAndPrompt(messageId, memberId, batchRequests, searchProducts, locationId);
+        return this.#searchBatchAndPrompt(messageId, memberId, batchRequests, searchProducts, locationId, normalized);
       }
     }
 
     const pendingChoiceRow = this.#db.prepare(
-      "SELECT query, quantity, participant_ids_json, products_json FROM pending_product_choices WHERE member_id = ?",
+      "SELECT query, quantity, products_json FROM pending_product_choices WHERE member_id = ?",
     ).get(memberId) as {
       query: string;
       quantity: number;
-      participant_ids_json: string;
       products_json: string;
     } | undefined;
     if (pendingChoiceRow && !isCommand) {
@@ -471,7 +488,6 @@ export class CartStore {
       const pending: PendingRetailerChoice = {
         query: pendingChoiceRow.query,
         quantity: pendingChoiceRow.quantity,
-        participantIds: JSON.parse(pendingChoiceRow.participant_ids_json) as string[],
         products: JSON.parse(pendingChoiceRow.products_json) as KrogerProduct[],
       };
       const selection = normalized.match(/^\s*(\d{1,2})\s*$/);
@@ -489,28 +505,20 @@ export class CartStore {
         this.#db.prepare("DELETE FROM pending_product_choices WHERE member_id = ?").run(memberId);
         const undoSnapshot = this.#captureCartItems();
         const itemId = `kroger:${chosen.productId}`;
-        const participantIds = [...new Set(pending.participantIds)].sort();
-        const shared = participantIds.length > 1;
-        const existingItem = shared ? this.#db.prepare(
-          "SELECT id, participants_json FROM cart_items WHERE household_id = ? AND product_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-        ).get(this.#householdId, itemId) as { id: string; participants_json: string } | undefined : undefined;
-        if (existingItem) {
-          this.#db.prepare("UPDATE cart_items SET participants_json = ? WHERE id = ?")
-            .run(JSON.stringify(participantIds), existingItem.id);
-        } else {
-          this.#db.prepare(
-            "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          ).run(
-            randomUUID(), this.#householdId, itemId, pending.quantity, memberId,
-            JSON.stringify(participantIds), new Date().toISOString(), chosen.description,
-            priceCents, "kroger", chosen.upc,
-          );
-        }
+        // Sharing is decided when the item is actually added: whatever session
+        // the sender is in at choice time, not at search time.
+        const participantIds = this.#participantsFor(memberId);
+        this.#db.prepare(
+          "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(
+          randomUUID(), this.#householdId, itemId, pending.quantity, memberId,
+          JSON.stringify(participantIds), new Date().toISOString(), chosen.description,
+          priceCents, "kroger", chosen.upc,
+        );
         this.#db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?")
           .run(this.#householdId);
         this.#recordUndo(memberId, `add ${chosen.description}`, undoSnapshot);
-        const participantNames = this.getMembers().filter((member) => participantIds.includes(member.id)).map((member) => member.name);
-        const reply = `${existingItem ? `Updated the existing ${chosen.description} line to share` : `Added ${chosen.description}`} ${shared ? `for ${participantNames.join(" and ")}` : `for ${this.getMembers().find((member) => member.id === memberId)?.name ?? "you"}`} at ${money(priceCents)}${chosen.size ? ` (${chosen.size})` : ""}.\n${this.formatSummary(memberId, [], false)}`;
+        const reply = `Added ${chosen.description} ${this.#assignmentPhrase(participantIds)} at ${money(priceCents)}${chosen.size ? ` (${chosen.size})` : ""}.\n${this.formatSummary(memberId)}`;
         this.#recordReply(messageId, reply);
         this.#db.exec("COMMIT");
         return reply;
@@ -530,7 +538,7 @@ export class CartStore {
     let maxPriceCents: number | undefined;
     let maxPriceInclusive = false;
 
-    if (pendingMilk && (pendingMilk.kind === "milk" || pendingMilk.kind === "milk-shared")) {
+    if (pendingMilk?.kind === "milk") {
       if (/^(cancel|never mind|nevermind)$/i.test(normalized)) {
         return this.processIncomingText(messageId, memberId, normalized);
       }
@@ -565,7 +573,8 @@ export class CartStore {
       maxPriceInclusive = priceLimit?.inclusive ?? false;
     }
 
-    if (!query || query.length < 2) return this.processIncomingText(messageId, memberId, normalized);
+    // A bare number list (e.g. a stray “1, 1” with nothing pending) is not a product search.
+    if (!query || query.length < 2 || !/\p{L}/u.test(query)) return this.processIncomingText(messageId, memberId, normalized);
 
     let result: { total: number; products: KrogerProduct[] };
     try {
@@ -589,9 +598,9 @@ export class CartStore {
         return reply;
       }
 
-      const participantIds = isSharedRequest(contextText) || pendingMilk?.kind === "milk-shared"
-        ? this.#shareParticipants(contextText, memberId)
-        : [memberId];
+      // participant_ids_json is an informational snapshot only; the add uses
+      // the sender's sharing session at the moment they pick a number.
+      const participantIds = this.#participantsFor(memberId);
       this.#db.prepare(
         "INSERT INTO pending_product_choices (member_id, query, quantity, participant_ids_json, products_json, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(member_id) DO UPDATE SET query = excluded.query, quantity = excluded.quantity, participant_ids_json = excluded.participant_ids_json, products_json = excluded.products_json, created_at = excluded.created_at",
       ).run(memberId, query, quantity, JSON.stringify(participantIds), JSON.stringify(products), new Date().toISOString());
@@ -604,7 +613,7 @@ export class CartStore {
       });
       const storeNote = locationId ? ` at the selected Kroger store (${locationId})` : "; choose a store to get local prices";
       const cap = maxPriceCents === undefined ? "" : ` (showing options ${maxPriceInclusive ? "up to" : "under"} ${money(maxPriceCents)} each)`;
-      const reply = `Kroger found ${products.length} matching options${cap} for “${query}”${storeNote}:\n${lines.join("\n")}\nReply 1-${products.length} to add your choice to GroupCart, or “cancel”.${participantIds.length > 1 ? ` The chosen item will be shared by ${this.getMembers().filter((member) => participantIds.includes(member.id)).map((member) => member.name).join(" and ")}.` : ""}`;
+      const reply = `Kroger found ${products.length} matching options${cap} for “${query}”${storeNote}:\n${lines.join("\n")}\nReply 1-${products.length} to add your choice to GroupCart, or “cancel”.${this.#sharingNote(participantIds)}${this.#legacyShareHint(contextText, memberId)}`;
       this.#recordReply(messageId, reply);
       this.#db.exec("COMMIT");
       return reply;
@@ -744,7 +753,8 @@ export class CartStore {
         ownerId: row.owner_id,
         ownerName: memberNames.get(row.owner_id) ?? "Member",
         participantIds,
-        participantNames: participantIds.map((id) => memberNames.get(id) ?? "Member"),
+        participantNames: participantIds.map((id) => memberNames.get(id) ?? "Member")
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
       }];
     });
     const approved = new Set((this.#db.prepare(
@@ -761,6 +771,13 @@ export class CartStore {
         ...member,
         shareCents: shares.get(member.id) ?? 0,
         approved: approved.has(member.id),
+      })),
+      sharingSessions: this.#activeSessions().map((session) => ({
+        id: session.id,
+        participantIds: session.participantIds,
+        participantNames: session.participantIds.map((id) => memberNames.get(id) ?? "Member")
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })),
+        startedAt: session.startedAt,
       })),
       checkedOutRevision: household.checked_out_revision,
     };
@@ -830,8 +847,11 @@ export class CartStore {
     query = query.replace(/\b(?:that\s+)?i\s+(?:also\s+)?want\s+to\s+share\b.*$/i, " ");
     query = query.replace(/\b(?:can|could)\s+i\s+(?:please\s+)?get\b|\bi\s+(?:would\s+like|want)\b|\bwe\s+need\b|\bplease\s+(?:get|add)\b|\badd\b/gi, " ");
     query = query.replace(/\b(?:under|below|less than|at most|no more than|up to)\s+\$?\s*\d+(?:\.\d{1,2})?\s*(?:dollars?)?\b/gi, " ");
+    // Old per-item sharing phrases no longer change the split, but they would
+    // still pollute product searches. Only strip “with …” after a share verb so
+    // descriptions like “pasta with pesto” keep their meaning.
+    query = query.replace(/\b(?:shared?|split)\s+(?:with|between|among)\b.*$/i, " ");
     query = query.replace(/\b(?:for everyone|for all of us|for us|for me|shared|share|please|thanks|thx)\b/gi, " ");
-    query = query.replace(/\bwith\s+(?:(?:and|me)\s+)?[\p{L}'-]+(?:\s+(?:and|&)\s+[\p{L}'-]+)*\s*$/iu, " ");
     for (const member of this.getMembers()) {
       const names = new Set([member.name, member.name.split(/\s+/)[0] ?? member.name]);
       for (const name of names) {
@@ -839,6 +859,7 @@ export class CartStore {
         query = query.replace(new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{N}])`, "giu"), " ");
       }
     }
+    query = query.replace(/\bfor\s*$/i, " ");
     query = query.replace(/^\s*\d+(?!\s*(?:%|percent\b))\s*(?:(?:x|×)\s*|\s+)/i, " ").replace(/\b(?:and|with|to)\b/gi, " ");
     return query.replace(/[.,!?;:]+/g, " ").replace(/\s+/g, " ").trim();
   }
@@ -1118,7 +1139,7 @@ export class CartStore {
       "Welcome to GroupCart! Tell me what groceries your group needs. I can search Kroger products and prices for your selected store, build a shared list, and split estimated costs.",
       "Add/search: send one item such as “Vital Farms organic eggs,” or up to 5 separated by commas/and, like “bread, bananas, and eggs.” Choose a numbered Kroger result for each item in order. For plain “milk,” I’ll ask what kind first.",
       "Item budgets: add a per-item unit-price limit, like “pasta under $5” or “pasta under $5, bread up to $3.” Under is strict; “up to” includes the limit. Options without a live price are excluded when a limit is set.",
-      "Share: add sharing to the specific item, like “eggs shared with Anu and Prerana.” In a list, sharing applies only to the item next to that phrase.",
+      "Share: text “start sharing with Maya and Jordan” (household member names). From then on, every item any of you adds is split evenly among you until someone texts “stop sharing”. Items already in the cart keep their split.",
       "Review: “cart” shows items, total, budget, and each person’s share.",
       this.#dashboardMessage(),
       "Remove: say “remove bread” or “I don’t want bread anymore.” For all your items, say “clear mine.”",
@@ -1135,36 +1156,27 @@ export class CartStore {
     return `Dashboard: ${this.#dashboardUrl} (open this on the computer running GroupCart; it is local-only and not reachable from other devices).`;
   }
 
-  #multiItemRequests(text: string, memberId: string): BatchRequest[] {
+  #multiItemRequests(text: string): BatchRequest[] {
     let body = text.trim().replace(/^[\s,;]*(?:hi|hello|hey)[,:\s]+/i, "");
     body = body.replace(/^\s*(?:(?:can|could|may)\s+i\s+(?:please\s+)?(?:get|have|add)|(?:i|we)\s+(?:would\s+like|want|need)|please\s+(?:add|get)|add)\s+/i, "");
+    // Drop old per-item sharing phrases (they no longer share) before splitting,
+    // so “bread shared with Maya and Jordan” doesn't turn “Jordan” into an item.
+    body = body.replace(/\s*\b(?:shared?|split)\s+(?:with|between|among)\b[^,;\n]*/gi, "");
     const segments = body.split(/\s*(?:,|;|\n)\s*|\s+and\s+/i)
       .map((segment) => segment.trim().replace(/^[,;\s]+|[.!?]+$/g, ""))
       .filter(Boolean);
     if (segments.length < 2) return [];
     const requests = segments.map((segment) => {
-      const explicitlyShared = /\b(?:shared|share)\s+with\b/i.test(segment);
-      const allShared = /\b(?:for everyone|for all of us|for us|family size)\b/i.test(text);
       const priceLimit = this.#priceLimit(segment);
       const itemText = segment
-        .replace(/\s+\b(?:shared|share)\s+with\s+.+$/i, "")
-        .replace(/\s+for\s+(?:everyone|all\s+of\s+us|us)\s*$/i, "")
         .replace(/\b(?:under|below|less than|at most|no more than|up to)\s+\$?\s*\d+(?:\.\d{1,2})?\s*(?:dollars?)?\b/gi, " ")
         .trim();
       const extracted = extractCartRequests(itemText);
-      const mentionedOtherMember = this.getMembers().some((member) => member.id !== memberId && [member.name, member.name.split(/\s+/)[0] ?? member.name].some((name) => {
-        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, "iu").test(segment);
-      }));
-      const itemIsShared = explicitlyShared || isSharedRequest(itemText) || mentionedOtherMember;
       return {
         query: this.#retailerQuery(itemText),
         quantity: extracted.length === 1 ? extracted[0]!.quantity : this.#quantityFromText(itemText),
         maxPriceCents: priceLimit?.cents,
         maxPriceInclusive: priceLimit?.inclusive,
-        participantIds: itemIsShared
-          ? this.#shareParticipants(segment, memberId)
-          : allShared ? this.#shareParticipants(text, memberId) : [memberId],
       };
     });
     return requests.every((request) => request.query.length >= 2) ? requests : [];
@@ -1176,6 +1188,7 @@ export class CartStore {
     requests: BatchRequest[],
     searchProducts: (query: string) => Promise<{ total: number; products: KrogerProduct[] }>,
     locationId?: string,
+    sourceText = "",
   ): Promise<string> {
     let results: BatchProductResult[];
     try {
@@ -1215,15 +1228,13 @@ export class CartStore {
           const price = cents === null ? "price unavailable" : money(cents);
           return `   ${optionIndex + 1}) ${product.description}${product.size ? ` · ${product.size}` : ""} — ${price}`;
         });
-        const sharedNames = this.getMembers().filter((member) => request.participantIds.includes(member.id)).map((member) => member.name);
-        const sharing = sharedNames.length > 1 ? ` · shared: ${sharedNames.join(", ")}` : "";
         const priceLimit = request.maxPriceCents === undefined
           ? ""
           : ` · ${request.maxPriceInclusive ? "up to" : "under"} ${money(request.maxPriceCents)} each`;
-        return `${index + 1}. ${request.quantity > 1 ? `${request.quantity} × ` : ""}${request.query}${priceLimit}${sharing} (${result.total} options)\n${options.join("\n")}`;
+        return `${index + 1}. ${request.quantity > 1 ? `${request.quantity} × ` : ""}${request.query}${priceLimit} (${result.total} options)\n${options.join("\n")}`;
       });
       const storeNote = locationId ? ` at selected store ${locationId}` : " at the configured Kroger-family store";
-      const reply = `I found options for your ${requests.length} items${storeNote}:\n${sections.join("\n")}\nReply with one choice number per item in order, separated by commas (for example “1, 2, 1”). Nothing is added until all choices are selected. Reply “cancel” to discard this search.`;
+      const reply = `I found options for your ${requests.length} items${storeNote}:\n${sections.join("\n")}\nReply with one choice number per item in order, separated by commas (for example “1, 2, 1”). Nothing is added until all choices are selected. Reply “cancel” to discard this search.${this.#sharingNote(this.#participantsFor(memberId))}${this.#legacyShareHint(sourceText, memberId)}`;
       this.#recordReply(messageId, reply);
       this.#db.exec("COMMIT");
       return reply;
@@ -1249,32 +1260,23 @@ export class CartStore {
       this.#db.prepare("DELETE FROM pending_product_batches WHERE member_id = ?").run(memberId);
       const undoSnapshot = this.#captureCartItems();
       const chosenLines: string[] = [];
+      const participantIds = this.#participantsFor(memberId);
       for (let index = 0; index < chosen.length; index += 1) {
         const product = chosen[index]!;
         const request = requests[index]!;
         const price = this.#currentPrice(product)!;
         const productId = `kroger:${product.productId}`;
-        const participantIds = [...new Set(request.participantIds)].sort();
-        const shared = participantIds.length > 1;
-        const existingItem = shared ? this.#db.prepare(
-          "SELECT id FROM cart_items WHERE household_id = ? AND product_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-        ).get(this.#householdId, productId) as { id: string } | undefined : undefined;
-        if (existingItem) {
-          this.#db.prepare("UPDATE cart_items SET participants_json = ? WHERE id = ?")
-            .run(JSON.stringify(participantIds), existingItem.id);
-        } else {
-          this.#db.prepare(
-            "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          ).run(randomUUID(), this.#householdId, productId, request.quantity, memberId,
-            JSON.stringify(participantIds), new Date().toISOString(), product.description,
-            price, "kroger", product.upc);
-        }
+        this.#db.prepare(
+          "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at, product_name, unit_price_cents, price_source, upc) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).run(randomUUID(), this.#householdId, productId, request.quantity, memberId,
+          JSON.stringify(participantIds), new Date().toISOString(), product.description,
+          price, "kroger", product.upc);
         chosenLines.push(product.description);
       }
       this.#db.prepare("UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?")
         .run(this.#householdId);
       this.#recordUndo(memberId, `add ${chosenLines.join(", ")}`, undoSnapshot);
-      const reply = `Added all ${chosenLines.length} selected items to GroupCart.\n${this.formatSummary(memberId)}`;
+      const reply = `Added all ${chosenLines.length} selected items to GroupCart ${this.#assignmentPhrase(participantIds)}.\n${this.formatSummary(memberId)}`;
       this.#recordReply(messageId, reply);
       this.#db.exec("COMMIT");
       return reply;
@@ -1478,16 +1480,14 @@ export class CartStore {
     return createHash("sha256").update(`${this.#householdId}:${handle}`).digest("hex").slice(0, 20);
   }
 
-  #addRequests(memberId: string, requests: Array<{ product: Product; quantity: number }>, shared: boolean): void {
+  #addRequests(memberId: string, requests: Array<{ product: Product; quantity: number }>): string[] {
     const member = this.#db.prepare(
       "SELECT id FROM members WHERE household_id = ? AND id = ?",
     ).get(this.#householdId, memberId);
     if (!member) throw new Error("Sender is not a configured household member.");
 
     const undoSnapshot = this.#captureCartItems();
-    const participantIds = shared
-      ? this.getMembers().map((candidate) => candidate.id)
-      : [memberId];
+    const participantIds = this.#participantsFor(memberId);
     const newRevision = this.snapshot().revision + 1;
     const insert = this.#db.prepare(
       "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -1499,62 +1499,164 @@ export class CartStore {
       "UPDATE households SET revision = ?, checked_out_revision = NULL WHERE id = ?",
     ).run(newRevision, this.#householdId);
     this.#recordUndo(memberId, `add ${requests.map(({ product }) => product.name).join(", ")}`, undoSnapshot);
+    return participantIds;
   }
 
-  #shareParticipants(text: string, memberId: string): string[] {
+  #activeSessions(): SharingSession[] {
+    const rows = this.#db.prepare(
+      "SELECT id, participant_ids_json, started_by, started_at FROM sharing_sessions WHERE household_id = ? AND ended_at IS NULL ORDER BY started_at, rowid",
+    ).all(this.#householdId) as Array<{ id: string; participant_ids_json: string; started_by: string; started_at: string }>;
+    return rows.map((row) => ({
+      id: row.id,
+      participantIds: JSON.parse(row.participant_ids_json) as string[],
+      startedBy: row.started_by,
+      startedAt: row.started_at,
+    }));
+  }
+
+  #activeSessionFor(memberId: string): SharingSession | undefined {
+    return this.#activeSessions().find((session) => session.participantIds.includes(memberId));
+  }
+
+  /** Who a newly added item is split among: the sender's active session, or just the sender. */
+  #participantsFor(memberId: string): string[] {
+    return this.#activeSessionFor(memberId)?.participantIds ?? [memberId];
+  }
+
+  #memberNames(ids: string[]): string[] {
+    return this.getMembers().filter((member) => ids.includes(member.id)).map((member) => member.name);
+  }
+
+  #joinNames(names: string[]): string {
+    if (names.length <= 1) return names.join("");
+    return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  }
+
+  #assignmentPhrase(participantIds: string[]): string {
+    const names = this.#memberNames(participantIds);
+    return participantIds.length > 1 ? `shared by ${this.#joinNames(names)}` : `for ${names[0] ?? "you"}`;
+  }
+
+  #sharingNote(participantIds: string[]): string {
+    return participantIds.length > 1
+      ? ` Your sharing session is on, so anything you add now is split among ${this.#joinNames(this.#memberNames(participantIds))}.`
+      : "";
+  }
+
+  /** Point people still using the removed per-item phrases at sharing sessions. */
+  #legacyShareHint(text: string, memberId: string): string {
+    if (this.#activeSessionFor(memberId)) return "";
+    if (!/\b(?:shared?|split)\s+(?:with|between|among)\b|\bfor\s+(?:everyone|all\s+of\s+us)\b/i.test(text)) return "";
+    return "\nNote: sharing phrases on one item no longer split it. To split new items, first text “start sharing with” plus member names.";
+  }
+
+  #parseSharingCommand(text: string): { action: "start" | "stop"; names: string } | undefined {
+    const match = text.trim().match(/^(start|stop)\s+sharing\b([\s\S]*)$/i);
+    if (!match) return undefined;
+    const rest = match[2]!.trim().replace(/[.!?]+$/, "").trim();
+    return {
+      action: match[1]!.toLocaleLowerCase() === "start" ? "start" : "stop",
+      names: rest.replace(/^with\b/i, "").trim(),
+    };
+  }
+
+  #resolveMemberNames(list: string, memberId: string): { ids: string[]; includesSelf: boolean } | { error: string } {
     const members = this.getMembers();
-    const normalizedText = text.toLocaleLowerCase();
-    const mentioned = members.filter((member) => {
-      const firstName = member.name.split(/\s+/)[0] ?? member.name;
-      return [member.name, firstName].some((name) => {
-        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, "iu").test(normalizedText);
-      });
-    });
-    const participants = new Set(mentioned.map((member) => member.id));
-    participants.add(memberId);
-    if (participants.size < 2) return members.map((member) => member.id);
-    return [...participants];
-  }
-
-  #shareRequests(
-    memberId: string,
-    requests: Array<{ product: Product; quantity: number }>,
-    participantIds: string[],
-  ): string {
-    const now = new Date().toISOString();
-    const undoSnapshot = this.#captureCartItems();
-    const participantJson = JSON.stringify([...new Set(participantIds)].sort());
-    let changed = false;
-    const sharedNames: string[] = [];
-
-    for (const request of requests) {
-      const existing = this.#db.prepare(
-        "SELECT id, participants_json FROM cart_items WHERE household_id = ? AND product_id = ? ORDER BY created_at DESC, id DESC LIMIT 1",
-      ).get(this.#householdId, request.product.id) as { id: string; participants_json: string } | undefined;
-      if (existing) {
-        this.#db.prepare("UPDATE cart_items SET participants_json = ? WHERE id = ?").run(participantJson, existing.id);
-        sharedNames.push(request.product.name);
-        changed ||= existing.participants_json !== participantJson;
+    const tokens = list.split(/\s*(?:,|&|\+|\band\b)\s*/i)
+      .map((token) => token.trim().replace(/^[.!?;:]+|[.!?;:]+$/g, "").trim())
+      .filter(Boolean);
+    const ids = new Set<string>();
+    const unknown: string[] = [];
+    const ambiguous: string[] = [];
+    let includesSelf = false;
+    for (const token of tokens) {
+      const lower = token.toLocaleLowerCase();
+      if (/^(?:me|myself|i)$/.test(lower)) { includesSelf = true; continue; }
+      const exact = members.filter((member) => member.name.toLocaleLowerCase() === lower);
+      const candidates = exact.length
+        ? exact
+        : members.filter((member) => (member.name.split(/\s+/)[0] ?? member.name).toLocaleLowerCase() === lower);
+      if (candidates.length === 1) {
+        if (candidates[0]!.id === memberId) includesSelf = true;
+        else ids.add(candidates[0]!.id);
+      } else if (candidates.length > 1) {
+        ambiguous.push(token);
       } else {
-        this.#db.prepare(
-          "INSERT INTO cart_items (id, household_id, product_id, quantity, owner_id, participants_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ).run(randomUUID(), this.#householdId, request.product.id, request.quantity, memberId, participantJson, now);
-        sharedNames.push(request.product.name);
-        changed = true;
+        unknown.push(token);
       }
     }
-
-    if (changed) {
-      this.#db.prepare(
-        "UPDATE households SET revision = revision + 1, checked_out_revision = NULL WHERE id = ?",
-      ).run(this.#householdId);
-      this.#recordUndo(memberId, `share ${sharedNames.join(", ")}`, undoSnapshot);
+    const roster = this.#joinNames(members.filter((member) => member.id !== memberId).map((member) => member.name));
+    if (unknown.length) {
+      return { error: `I don’t recognize ${this.#joinNames(unknown.map((name) => `“${name}”`))} as ${unknown.length === 1 ? "a household member" : "household members"}. You can share with ${roster || "no other configured members"}. Nothing changed.` };
     }
-    const names = this.getMembers().filter((member) => participantIds.includes(member.id)).map((member) => member.name);
-    return changed
-      ? `Updated ${sharedNames.join(" and ")} to share between ${names.join(" and ")}.`
-      : `${sharedNames.join(" and ")} is already shared between ${names.join(" and ")}.`;
+    if (ambiguous.length) {
+      return { error: `${this.#joinNames(ambiguous.map((name) => `“${name}”`))} matches more than one household member; use the full name. Nothing changed.` };
+    }
+    return { ids: [...ids], includesSelf };
+  }
+
+  #startSharing(memberId: string, list: string): string {
+    const others = this.getMembers().filter((member) => member.id !== memberId).map((member) => member.name);
+    const example = `“start sharing with ${others.slice(0, 2).join(" and ") || "Maya"}”`;
+    if (!list) return `Who should share with you? Text ${example}. Nothing changed.`;
+    const resolved = this.#resolveMemberNames(list, memberId);
+    if ("error" in resolved) return resolved.error;
+    if (resolved.includesSelf) {
+      return `You’re included automatically, so name only the other members, like ${example}. Nothing changed.`;
+    }
+    if (!resolved.ids.length) return `Who should share with you? Text ${example}. Nothing changed.`;
+    const participantIds = [...new Set([memberId, ...resolved.ids])].sort();
+    const current = this.#activeSessionFor(memberId);
+    if (current) {
+      const sameSet = current.participantIds.length === participantIds.length
+        && current.participantIds.every((id) => participantIds.includes(id));
+      if (sameSet) {
+        return `You’re already sharing: new items from ${this.#joinNames(this.#memberNames(participantIds))} are split among all of you. Text “stop sharing” to end it.`;
+      }
+      const currentOthers = this.#memberNames(current.participantIds.filter((id) => id !== memberId));
+      return `You’re already sharing with ${this.#joinNames(currentOthers)}. Text “stop sharing” to end that session before starting a new one. Nothing changed.`;
+    }
+    const busy = resolved.ids.flatMap((id) => {
+      const session = this.#activeSessionFor(id);
+      return session ? [{ id, session }] : [];
+    });
+    if (busy.length) {
+      const details = busy.map(({ id, session }) => {
+        const name = this.#memberNames([id])[0] ?? "A member";
+        const partners = this.#memberNames(session.participantIds.filter((other) => other !== id));
+        return `${name} is already sharing with ${this.#joinNames(partners)}`;
+      });
+      return `${details.join("; ")}. Someone in that session needs to text “stop sharing” first. Nothing changed.`;
+    }
+    this.#db.prepare(
+      "INSERT INTO sharing_sessions (id, household_id, participant_ids_json, started_by, started_at) VALUES (?, ?, ?, ?, ?)",
+    ).run(randomUUID(), this.#householdId, JSON.stringify(participantIds), memberId, new Date().toISOString());
+    return `Started sharing for ${this.#joinNames(this.#memberNames(participantIds))}. From now on, every item any of you adds is split evenly among you until someone texts “stop sharing”. Items already in the cart keep their current split.`;
+  }
+
+  #stopSharing(memberId: string, list: string): string {
+    const current = this.#activeSessionFor(memberId);
+    if (!current) {
+      return "You aren’t in a sharing session, so nothing changed. Start one with “start sharing with” plus member names.";
+    }
+    let namedSubset = false;
+    if (list) {
+      const resolved = this.#resolveMemberNames(list, memberId);
+      if ("error" in resolved) return resolved.error;
+      const outside = resolved.ids.filter((id) => !current.participantIds.includes(id));
+      if (outside.length) {
+        const currentOthers = this.#memberNames(current.participantIds.filter((id) => id !== memberId));
+        return `${this.#joinNames(this.#memberNames(outside))} ${outside.length === 1 ? "isn’t" : "aren’t"} in your sharing session (you’re sharing with ${this.#joinNames(currentOthers)}). Text “stop sharing” to end it. Nothing changed.`;
+      }
+      namedSubset = resolved.ids.length > 0 && resolved.ids.length < current.participantIds.length - 1;
+    }
+    this.#db.prepare("UPDATE sharing_sessions SET ended_by = ?, ended_at = ? WHERE id = ? AND ended_at IS NULL")
+      .run(memberId, new Date().toISOString(), current.id);
+    const names = this.#joinNames(this.#memberNames(current.participantIds));
+    const restartHint = namedSubset
+      ? " The whole session ended for everyone in it; start a new one with anyone you still want to share with."
+      : "";
+    return `Stopped sharing for ${names}. New items each of you adds are yours alone again; items added during the session stay split as they were.${restartHint}`;
   }
 
   #clearClarification(memberId: string): void {
@@ -1606,7 +1708,7 @@ export class CartStore {
     return result;
   }
 
-  private formatSummary(memberId: string, addedNames: string[] = [], shared = false): string {
+  private formatSummary(memberId: string, addedNames: string[] = [], participantIds: string[] = [memberId]): string {
     const snapshot = this.snapshot();
     const mine = snapshot.members.find((member) => member.id === memberId);
     const lines = snapshot.items.slice(-8).map((item) =>
@@ -1614,7 +1716,11 @@ export class CartStore {
     );
     const shares = snapshot.members.map((member) => `${member.name}: ${money(member.shareCents)}`).join(" · ");
     const prefix = addedNames.length
-      ? `Added ${addedNames.join(", ")} for ${shared ? "the household" : mine?.name ?? "you"}.\n`
+      ? `Added ${addedNames.join(", ")} ${participantIds.length > 1 ? this.#assignmentPhrase(participantIds) : `for ${mine?.name ?? "you"}`}.\n`
+      : "";
+    const session = this.#activeSessionFor(memberId);
+    const sessionNote = session
+      ? `\nSharing session on: ${this.#joinNames(this.#memberNames(session.participantIds))}. Text “stop sharing” to end it.`
       : "";
     const budgetNote = snapshot.totalCents > snapshot.budgetCents
       ? `\nOver the ${money(snapshot.budgetCents)} sample budget by ${money(snapshot.totalCents - snapshot.budgetCents)}.`
@@ -1622,6 +1728,6 @@ export class CartStore {
     const priceNote = snapshot.items.some((item) => item.priceSource === "kroger")
       ? "Kroger prices are store-specific when a location is configured; sample items are marked."
       : "sample catalog prices";
-    return `${prefix}Cart revision ${snapshot.revision} · ${priceNote}\n${lines.join("\n")}\nTotal: ${money(snapshot.totalCents)}\n${shares}${budgetNote}\nText “cart”, “approve”, or “checkout”.`;
+    return `${prefix}Cart revision ${snapshot.revision} · ${priceNote}\n${lines.join("\n")}\nTotal: ${money(snapshot.totalCents)}\n${shares}${budgetNote}${sessionNote}\nText “cart”, “approve”, or “checkout”.`;
   }
 }

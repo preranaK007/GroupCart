@@ -68,10 +68,6 @@ export function extractCartRequests(text: string): CartRequest[] {
   return [...totals.values()];
 }
 
-export function isSharedRequest(text: string): boolean {
-  return /\b(for everyone|for all of us|for us|shared|share|family size)\b/i.test(text);
-}
-
 export function isGenericMilkRequest(text: string): boolean {
   return /\bmilk\b/i.test(text) && !/(?:\bwhole\b|\b2\s*%|\btwo percent\b|\breduced fat\b|\boat\b|\balmond\b|\bsoy\b|\bskim\b|\b1\s*%|\bnonfat\b|\blactose[- ]free\b|\bdarigold\b)/i.test(text);
 }
