@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
+    "ical.js": "2.2.1",
     "spectrum-ts": "^12.11.0"
   },
   "devDependencies": {

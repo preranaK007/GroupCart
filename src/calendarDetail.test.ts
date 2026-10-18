@@ -199,7 +199,7 @@ test("demo mode: the file replaces matching members' samples; others keep titled
   writeFileSync(path, JSON.stringify(sampleFile));
   const store = new CartStore(join(directory, "demo.sqlite"), "household-demo", 5000);
   store.registerMembers([{ handle: "demo:alex", name: "Alex" }, { handle: "demo:maya", name: "Maya" }]);
-  const service = new CalendarService(store, "http://127.0.0.1:3999", undefined, { demoCalendarFile: path });
+  const service = new CalendarService(store, "http://127.0.0.1:3999", undefined, { demoMode: true, demoCalendarFile: path });
   const week = await service.week({ week: "2026-03-04", timeZone: TZ, now: at("2026-03-01T12:00:00Z") });
   const alex = week.members.find((member) => member.name === "Alex")!;
   const maya = week.members.find((member) => member.name === "Maya")!;
@@ -263,7 +263,7 @@ test("Google: opting in asks for event access, reads events.list, and keeps the 
   const store = new CartStore(join(directory, "google.sqlite"), "household-google", 5000);
   const [alex] = store.registerMembers([{ handle: "demo:alex", name: "Alex" }, { handle: "demo:maya", name: "Maya" }]);
   const client = new GoogleCalendarClient("client-id", "client-secret", "http://127.0.0.1:3999/api/google/oauth/callback", google.fetch);
-  const service = new CalendarService(store, "http://127.0.0.1:3999", client);
+  const service = new CalendarService(store, "http://127.0.0.1:3999", client, { demoMode: false });
   store.saveGoogleCalendarAccount(alex!.id, "refresh-busy", GOOGLE_FREEBUSY_SCOPE);
 
   // Busy-only first: freeBusy, untitled entries.
@@ -314,7 +314,7 @@ test("Google: if event access disappears, the member falls back to busy times", 
   const store = new CartStore(join(directory, "google-403.sqlite"), "household-google-403", 5000);
   const [alex] = store.registerMembers([{ handle: "demo:alex", name: "Alex" }]);
   const client = new GoogleCalendarClient("client-id", "client-secret", "http://127.0.0.1:3999/api/google/oauth/callback", google.fetch);
-  const service = new CalendarService(store, "http://127.0.0.1:3999", client);
+  const service = new CalendarService(store, "http://127.0.0.1:3999", client, { demoMode: false });
   store.saveGoogleCalendarAccount(alex!.id, "refresh-titles", `${GOOGLE_FREEBUSY_SCOPE} ${GOOGLE_EVENTS_SCOPE}`);
   const week = await service.week({ week: "2026-03-02", timeZone: TZ, now: at("2026-03-01T00:00:00Z") });
   const member = week.members[0]!;

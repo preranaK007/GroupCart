@@ -247,7 +247,7 @@ export class EventsService {
     return polls.reduce<string | null>((latest, poll) => !latest || poll.createdAt > latest ? poll.createdAt : latest, null);
   }
 
-  get calendarMode(): "demo" | "google" | "none" {
+  get calendarMode(): "demo" | "live" | "none" {
     return this.#calendar ? this.#calendar.mode : "none";
   }
 
@@ -524,22 +524,24 @@ export class EventsService {
    * using each member's busy time from the calendar service plus existing
    * household events.
    */
-  async suggest(shape: PlanShape, options: { dates?: string[] | null; days?: number; count?: number; durationMin?: number | null } = {}): Promise<{ slots: Slot[]; included: number; total: number; mode: "demo" | "google" | "none" }> {
+  async suggest(shape: PlanShape, options: { dates?: string[] | null; days?: number; count?: number; durationMin?: number | null } = {}): Promise<{ slots: Slot[]; included: number; total: number; missing: string[]; mode: "demo" | "live" | "none" }> {
     const now = this.#now();
     const today = this.today();
     const durationMin = Math.max(15, Math.min(12 * 60, options.durationMin ?? shape.minutes));
     const horizon = Math.max(1, Math.min(14, options.days ?? 7));
     const dates = (options.dates?.length ? options.dates : Array.from({ length: horizon }, (_, offset) => addDays(today, offset)))
       .filter((date) => date >= today && daysBetween(today, date) < 14);
-    if (!dates.length) return { slots: [], included: 0, total: this.members().length, mode: this.calendarMode };
+    if (!dates.length) return { slots: [], included: 0, total: this.members().length, missing: [], mode: this.calendarMode };
     const busy = new Map<string, Interval[]>();
     let included = 0;
     let total = this.members().length;
+    let missing = this.#calendar ? [] as string[] : this.members().map((member) => member.name);
     if (this.#calendar) {
       for (const week of [...new Set(dates.map(mondayOf))]) {
         const data = await this.#calendar.week({ week, timeZone: this.timeZone, now });
         total = data.members.length;
         const counted = data.members.filter((member) => member.status === "sample" || member.status === "connected");
+        if (counted.length >= included) missing = data.members.filter((member) => !counted.includes(member)).map((member) => member.name);
         included = Math.max(included, counted.length);
         for (const member of counted) busy.set(member.id, [...(busy.get(member.id) ?? []), ...member.busy]);
       }
@@ -570,7 +572,7 @@ export class EventsService {
       }
       slots.sort((a, b) => a.start - b.start);
     }
-    return { slots, included, total, mode: this.calendarMode };
+    return { slots, included, total, missing, mode: this.calendarMode };
   }
 
   // --- Polls -------------------------------------------------------------
@@ -685,7 +687,10 @@ export class EventsService {
 
   /** Chat text for a new poll: a poll card in the web chat, numbered options in iMessage (cardReply). */
   pollText(poll: PollView, basis?: { included: number; total: number; mode: string }): string {
-    const note = basis && basis.mode === "google" && basis.included < basis.total ? `Based on ${basis.included} of ${basis.total} calendars.` : "";
+    // Live calendars only (demo samples cover everyone). With none connected, the times only avoid household events.
+    const note = !basis || basis.mode !== "live" || basis.included >= basis.total ? ""
+      : basis.included === 0 ? "No calendars are connected yet, so these times only avoid household events."
+        : `Based on ${basis.included} of ${basis.total} calendars.`;
     return cardReply(note, this.pollCard(poll));
   }
 

@@ -746,8 +746,10 @@ document.addEventListener("DOMContentLoaded", () => {
           + (going.length ? '<span class="gc-avatars">' + going.map((m) => GC.avatar(m, allIds, 24)).join("") + '</span>' : "") + '</a></li>');
       }
       if (d.nextFree) {
+        // Free time counts only connected calendars; don't call it "everyone" when some are missing.
+        const partial = d.freeBasis && d.freeBasis.included < d.freeBasis.total;
         rows.push('<li class="gc-list-item"><a class="hu-row" href="/calendar"><span class="hu-tile is-free">' + GC.icon("checkCircle") + '</span>'
-          + '<div class="gc-list-main"><div class="gc-list-title">Everyone free</div><div class="gc-list-sub"><span>' + esc(d.nextFree.label) + '</span></div></div></a></li>');
+          + '<div class="gc-list-main"><div class="gc-list-title">' + (partial ? "Free (" + d.freeBasis.included + " of " + d.freeBasis.total + " calendars)" : "Everyone free") + '</div><div class="gc-list-sub"><span>' + esc(d.nextFree.label) + '</span></div></div></a></li>');
       }
       list.innerHTML = rows.length ? rows.join("") : '<li class="gc-empty">' + GC.icon("calendar") + '<p class="gc-empty-title">Nothing planned</p><p class="gc-empty-text">Try “game night this week?” in the group.</p><a class="gc-btn gc-btn-tonal gc-btn-sm" href="/calendar?create=1">Plan something</a></li>';
     } catch (error) { /* keep the last view */ }

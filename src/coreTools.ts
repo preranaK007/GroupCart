@@ -248,7 +248,7 @@ export function registerCoreTools(deps: CoreToolDeps): void {
     },
     {
       name: "free_times",
-      description: "Finds upcoming times when everyone in the household is free (8 AM to 9 PM, at least 30 minutes), from connected Google Calendars (free/busy only) or sample schedules in the demo.",
+      description: "Finds upcoming times when everyone in the household is free (8 AM to 9 PM, at least 30 minutes), from members' connected calendars (Google Calendar or a calendar link; busy times only). Members without a connected calendar are left out and listed in notIncluded; the demo uses sample schedules for them.",
       inputSchema: {
         type: "object",
         properties: {
@@ -260,11 +260,12 @@ export function registerCoreTools(deps: CoreToolDeps): void {
         if (!calendar) throw new Error("The household calendar isn't set up in this GroupCart.");
         const days = intArg(args, "days", 1, 14, 7);
         const count = intArg(args, "count", 1, 10, 3);
-        const { times, included, total, timeZone } = await calendar.upcomingFreeTimes(Date.now(), days, count);
+        const { times, included, total, missing, timeZone } = await calendar.upcomingFreeTimes(Date.now(), days, count);
         const format = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
         return {
           timeZone,
-          source: calendar.mode === "demo" ? "sample schedules (Google Calendar not configured)" : `${included} of ${total} members' Google Calendars`,
+          source: calendar.mode === "demo" ? "demo mode: sample schedules for members without a connected calendar" : `${included} of ${total} members' connected calendars`,
+          ...(missing.length ? { notIncluded: missing } : {}),
           times: times.map((time) => ({
             start: new Date(time.start).toISOString(),
             end: new Date(time.end).toISOString(),

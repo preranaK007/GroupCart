@@ -1,7 +1,10 @@
 // Google Calendar integration: per-member OAuth 2.0 (authorization code flow with
 // offline access), access-token refresh, the freeBusy API, and the CalendarService
-// that assembles the week view for /calendar and the iMessage "calendar" command.
-// Without GOOGLE_CLIENT_ID/SECRET it serves sample schedules.
+// that assembles the week view for /calendar, the iMessage "calendar" command, and the
+// free-time tools. Each member's calendar comes from Google (when GOOGLE_CLIENT_ID/SECRET
+// are set and they signed in) or from a calendar link they pasted (src/calendarLinks.ts,
+// no Google setup needed). Demo mode shows sample schedules for everyone else; live mode
+// never does: an unconnected member is "Not connected" and is left out of free time.
 //
 // Free/busy is the default. A member can opt in to "Show event titles": GroupCart then
 // asks Google again for calendar.events.readonly as well, stores the granted scope, and
@@ -14,7 +17,8 @@ import {
 } from "./availability.js";
 import { DemoCalendarFile, demoCalendarEvents, demoEvents } from "./calendarDemo.js";
 import { busyFromItems, itemsFromBusy, normalizeGoogleEvents, overlapsWindow, type CalendarItem } from "./calendarItems.js";
-import type { CartStore, Member } from "./store.js";
+import { CalendarLinkError, CalendarLinkService, type CalendarLinkInfo, type FetchCalendar } from "./calendarLinks.js";
+import type { CartStore, GoogleCalendarAccount, Member } from "./store.js";
 
 export const GOOGLE_FREEBUSY_SCOPE = "https://www.googleapis.com/auth/calendar.freebusy";
 /** Opt-in, per member: read-only events, so the page can show titles, times, and locations. */
@@ -251,7 +255,10 @@ function expiresInMs(value: unknown): number {
 export type CalendarMemberStatus = "sample" | "connected" | "not_connected" | "needs_reconnect" | "error";
 
 export type CalendarWeek = {
-  mode: "demo" | "google";
+  /** "demo": members without a connected calendar show sample schedules; "live": they show as not connected. */
+  mode: "demo" | "live";
+  /** Google sign-in is configured (otherwise members connect with a calendar link). */
+  googleAvailable: boolean;
   timeZone: string;
   now: number;
   today: string;
@@ -268,10 +275,10 @@ export type CalendarWeek = {
 };
 
 /**
- * Where a member's calendar comes from: generated samples, the GROUP_CART_DEMO_CALENDAR
- * file, Google (titles or busy-only), or nothing yet.
+ * Where a member's calendar comes from: generated samples or the GROUP_CART_DEMO_CALENDAR
+ * file (demo mode only), Google (titles or busy-only), a calendar link, or nothing yet.
  */
-export type CalendarSource = "generated" | "file" | "google" | null;
+export type CalendarSource = "generated" | "file" | "google" | "link" | null;
 
 export type CalendarWeekMember = {
   id: string;
@@ -282,8 +289,10 @@ export type CalendarWeekMember = {
   source: CalendarSource;
   /** Entries carry titles (samples, the demo file, or a member who opted in to event titles). */
   titles: boolean;
-  /** The member's Google grant includes event access (drives the "Show event titles" switch). */
+  /** The member opted in to event titles (their Google grant includes event access, or their link's setting); drives the "Show event titles" switch. */
   titlesGranted: boolean;
+  /** Host name of the member's calendar link ("calendar.google.com"); the address itself is never sent. */
+  linkHost: string | null;
   /** Busy time used for overlaps and free time ("show as available" entries excluded). */
   busy: Interval[];
   /** What the page draws: titled entries, or untitled busy blocks for free/busy-only calendars. */
@@ -291,22 +300,41 @@ export type CalendarWeekMember = {
 };
 
 type GoogleFetch = { events: CalendarItem[]; titles: boolean; detail: string | null };
+type MemberBase = Pick<CalendarWeekMember, "id" | "name" | "colorIndex" | "titlesGranted" | "linkHost">;
+
+export type CalendarServiceOptions = {
+  /** Local demo (no Spectrum credentials): unconnected members get sample schedules. Live mode never shows samples. */
+  demoMode: boolean;
+  /** GROUP_CART_DEMO_CALENDAR: titled showcase events by member name (demo mode only). */
+  demoCalendarFile?: string;
+  /** Loads a calendar link's .ics text (tests); defaults to the guarded https fetch in calendarLinks.ts. */
+  fetchCalendar?: FetchCalendar;
+};
 
 export class CalendarService {
   readonly #googleCache = new Map<string, { at: number; value: GoogleFetch }>();
   readonly #demoFile: DemoCalendarFile | undefined;
+  readonly #links: CalendarLinkService;
+  readonly #demoMode: boolean;
 
   constructor(
     private readonly store: CartStore,
     private readonly publicUrl: string,
-    private readonly client?: GoogleCalendarClient,
-    options: { demoCalendarFile?: string } = {},
+    private readonly client: GoogleCalendarClient | undefined,
+    options: CalendarServiceOptions,
   ) {
-    this.#demoFile = options.demoCalendarFile ? new DemoCalendarFile(options.demoCalendarFile, CalendarService.serverTimeZone) : undefined;
+    this.#demoMode = options.demoMode;
+    if (options.demoCalendarFile && !options.demoMode) console.warn("GROUP_CART_DEMO_CALENDAR is ignored in live mode: the calendar shows only real, connected calendars.");
+    this.#demoFile = options.demoCalendarFile && options.demoMode ? new DemoCalendarFile(options.demoCalendarFile, CalendarService.serverTimeZone) : undefined;
+    this.#links = new CalendarLinkService(store.database, { fetchCalendar: options.fetchCalendar });
   }
 
-  get mode(): "demo" | "google" {
-    return this.client ? "google" : "demo";
+  get mode(): "demo" | "live" {
+    return this.#demoMode ? "demo" : "live";
+  }
+
+  get googleAvailable(): boolean {
+    return Boolean(this.client);
   }
 
   get pageUrl(): string {
@@ -334,6 +362,7 @@ export class CalendarService {
     const everyoneFree = freeWindowsInDays(busy, days.map((day) => this.#freeHours(day.date, timeZone)), 30);
     return {
       mode: this.mode,
+      googleAvailable: this.googleAvailable,
       timeZone,
       now,
       today,
@@ -350,8 +379,12 @@ export class CalendarService {
     };
   }
 
-  /** Free windows for everyone over the next `days` days (used by the iMessage command). */
-  async upcomingFreeTimes(now = Date.now(), days = 7, count = 3): Promise<{ times: Interval[]; included: number; total: number; timeZone: string }> {
+  /**
+   * Free windows for everyone whose calendar is included, over the next `days` days (the iMessage command,
+   * Home, and the free_times tool). `missing` names the members left out (not connected or not loading);
+   * with nobody included there are no times, never "everyone is free".
+   */
+  async upcomingFreeTimes(now = Date.now(), days = 7, count = 3): Promise<{ times: Interval[]; included: number; total: number; missing: string[]; timeZone: string }> {
     const timeZone = CalendarService.serverTimeZone();
     const today = localDate(now, timeZone);
     const dates = Array.from({ length: days + 1 }, (_, offset) => addDays(today, offset));
@@ -364,7 +397,8 @@ export class CalendarService {
       dates.map((date) => this.#freeHours(date, timeZone)),
       30,
     );
-    return { times: nextFreeTimes(windows, roundUpToQuarterHour(now), count, 30), included: included.length, total: members.length, timeZone };
+    const missing = members.filter((member) => !included.includes(member)).map((member) => member.name);
+    return { times: nextFreeTimes(windows, roundUpToQuarterHour(now), count, 30), included: included.length, total: members.length, missing, timeZone };
   }
 
   /** Replies to "calendar"-style group commands; returns null for anything else. Idempotent by message ID. */
@@ -372,11 +406,11 @@ export class CalendarService {
     if (!isCalendarCommand(text)) return null;
     const existing = this.store.recordedReply(messageId);
     if (existing !== undefined) return existing;
-    const { times, included, total, timeZone } = await this.upcomingFreeTimes();
+    const { times, included, total, missing, timeZone } = await this.upcomingFreeTimes();
     const local = /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?/i.test(this.publicUrl);
     const lines = [`Household calendar: ${this.pageUrl}${local ? " (opens on the computer running GroupCart)" : ""}`];
     if (included === 0) {
-      lines.push("No one has connected Google Calendar yet. Open the page and press “Connect Google Calendar” to share when you’re busy (no event details).");
+      lines.push("No one has connected a calendar yet. Open the page and press “Connect” to share when you’re busy (no event details).");
     } else if (!times.length) {
       lines.push("I couldn’t find a 30-minute window in the next week (8 AM–9 PM) when everyone is free.");
     } else {
@@ -384,8 +418,8 @@ export class CalendarService {
       lines.push("Next times everyone is free:");
       for (const time of times) lines.push(`• ${format.formatRange(new Date(time.start), new Date(time.end))}`);
     }
-    if (this.mode === "demo") lines.push("These are sample schedules for the demo; connect Google Calendar to use real availability.");
-    else if (included > 0 && included < total) lines.push(`Based on ${included} of ${total} calendars; others haven’t connected yet.`);
+    if (this.mode === "demo") lines.push("Demo mode: calendars that aren’t connected are sample schedules.");
+    else if (included > 0 && missing.length) lines.push(`Based on ${included} of ${total} calendars (not included: ${missing.join(", ")}).`);
     const reply = lines.join("\n");
     this.store.recordCommandReply(messageId, reply);
     return reply;
@@ -406,6 +440,7 @@ export class CalendarService {
     if (!member) throw new GoogleCalendarError("That household member no longer exists.");
     const previous = this.store.googleCalendarAccount(member.id);
     this.store.saveGoogleCalendarAccount(member.id, result.refreshToken, result.scope);
+    this.#links.disconnect(member.id); // one calendar per member: Google replaces a calendar link
     // Adding event access extends the same Google grant; revoking the old token there could
     // revoke the new one with it, so only a plain reconnect revokes the previous token.
     if (previous && previous.refreshToken !== result.refreshToken && !result.titlesRequested) void this.client.revoke(previous.refreshToken);
@@ -438,41 +473,74 @@ export class CalendarService {
     return true;
   }
 
+  // --- Calendar links (src/calendarLinks.ts): set, changed, and removed only by their owner (see calendarPage.ts) ---
+
+  /** Saves `memberId`'s calendar link after loading it once. A link replaces that member's Google connection. */
+  async connectLink(memberId: string, url: string): Promise<{ ok: true; host: string } | { ok: false; status: number; error: string }> {
+    if (!this.store.getMembers().some((member) => member.id === memberId)) return { ok: false, status: 404, error: "That household member was not found." };
+    const result = await this.#links.connect(memberId, url);
+    if (!result.ok) return { ok: false, status: 400, error: result.error };
+    if (this.store.googleCalendarAccount(memberId)) await this.disconnect(memberId);
+    return { ok: true, host: result.info.host };
+  }
+
+  /** The member's "Show event titles" choice for their link; false when they have no link. */
+  setLinkTitles(memberId: string, enabled: boolean): boolean {
+    return this.#links.setTitles(memberId, enabled);
+  }
+
+  disconnectLink(memberId: string): boolean {
+    return this.#links.disconnect(memberId);
+  }
+
   async #collect(window: Interval, weekStarts: string[], timeZone: string): Promise<CalendarWeekMember[]> {
     const members = this.store.getMembers();
     const file = this.#demoFile?.get() ?? null;
     return Promise.all(members.map(async (member, colorIndex): Promise<CalendarWeekMember> => {
-      const base = { id: member.id, name: member.name, colorIndex, titlesGranted: false };
-      const empty = { source: null, titles: false, busy: [], events: [] };
-      // GROUP_CART_DEMO_CALENDAR replaces the sample schedule (demo) or fills in for a member without Google.
-      const fromFile = (): CalendarWeekMember | null => {
-        const events = demoCalendarEvents(file, member.name, window);
-        return events ? { ...base, status: "sample", detail: "Demo calendar file", source: "file", titles: true, events, busy: busyFromItems(events) } : null;
-      };
-      if (!this.client) {
-        const listed = fromFile();
-        if (listed) return listed;
-        const events = weekStarts.flatMap((weekStart) => demoEvents(member.id, colorIndex, weekStart, timeZone))
-          .filter((item) => overlapsWindow(item, window));
-        return { ...base, status: "sample", detail: "Sample schedule", source: "generated", titles: true, events, busy: busyFromItems(events) };
-      }
-      const account = this.store.googleCalendarAccount(member.id);
-      if (!account) return fromFile() ?? { ...base, ...empty, status: "not_connected", detail: null };
-      const titlesGranted = hasEventTitlesScope(account.scope);
-      if (account.status === "needs_reconnect") return { ...base, ...empty, titlesGranted, status: "needs_reconnect", detail: account.lastError };
-      try {
-        const fetched = await this.#cachedGoogle(member.id, account.refreshToken, window, timeZone, titlesGranted);
-        return { ...base, titlesGranted, status: "connected", detail: fetched.detail, source: "google", titles: fetched.titles, events: fetched.events, busy: busyFromItems(fetched.events) };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Google Calendar request failed.";
-        if (error instanceof GoogleCalendarError && error.needsReconnect) {
-          this.store.markGoogleCalendarNeedsReconnect(member.id, message);
-          this.client.forget(member.id);
-          return { ...base, ...empty, titlesGranted, status: "needs_reconnect", detail: message };
-        }
-        return { ...base, ...empty, titlesGranted, status: "error", detail: message };
-      }
+      const base: MemberBase = { id: member.id, name: member.name, colorIndex, titlesGranted: false, linkHost: null };
+      const account = this.client ? this.store.googleCalendarAccount(member.id) : undefined;
+      if (account) return this.#googleMember(base, account, window, timeZone);
+      const link = this.#links.info(member.id);
+      if (link) return this.#linkMember(base, link, window, timeZone);
+      if (!this.#demoMode) return { ...base, status: "not_connected", detail: null, source: null, titles: false, busy: [], events: [] };
+      // Demo mode: GROUP_CART_DEMO_CALENDAR replaces the generated sample schedule for members it names.
+      const listed = demoCalendarEvents(file, member.name, window);
+      if (listed) return { ...base, status: "sample", detail: "Demo calendar file", source: "file", titles: true, events: listed, busy: busyFromItems(listed) };
+      const events = weekStarts.flatMap((weekStart) => demoEvents(member.id, colorIndex, weekStart, timeZone))
+        .filter((item) => overlapsWindow(item, window));
+      return { ...base, status: "sample", detail: "Sample schedule", source: "generated", titles: true, events, busy: busyFromItems(events) };
     }));
+  }
+
+  async #googleMember(base: MemberBase, account: GoogleCalendarAccount, window: Interval, timeZone: string): Promise<CalendarWeekMember> {
+    const titlesGranted = hasEventTitlesScope(account.scope);
+    const failed = { ...base, titlesGranted, source: "google" as const, titles: false, busy: [], events: [] };
+    if (account.status === "needs_reconnect") return { ...failed, status: "needs_reconnect", detail: account.lastError };
+    try {
+      const fetched = await this.#cachedGoogle(base.id, account.refreshToken, window, timeZone, titlesGranted);
+      return { ...base, titlesGranted, status: "connected", detail: fetched.detail, source: "google", titles: fetched.titles, events: fetched.events, busy: busyFromItems(fetched.events) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Google Calendar request failed.";
+      if (error instanceof GoogleCalendarError && error.needsReconnect) {
+        this.store.markGoogleCalendarNeedsReconnect(base.id, message);
+        this.client?.forget(base.id);
+        return { ...failed, status: "needs_reconnect", detail: message };
+      }
+      return { ...failed, status: "error", detail: message };
+    }
+  }
+
+  async #linkMember(base: MemberBase, link: CalendarLinkInfo, window: Interval, timeZone: string): Promise<CalendarWeekMember> {
+    const known = { ...base, titlesGranted: link.titles, linkHost: link.host, source: "link" as const };
+    try {
+      const events = await this.#links.items(base.id, window, timeZone);
+      return { ...known, status: "connected", detail: null, titles: link.titles, events, busy: busyFromItems(events) };
+    } catch (error) {
+      if (!(error instanceof CalendarLinkError)) console.warn(`Calendar link for ${base.name} failed:`, error instanceof Error ? error.message : error);
+      const status = error instanceof CalendarLinkError && error.kind === "needs_reconnect" ? "needs_reconnect" : "error";
+      const detail = error instanceof CalendarLinkError ? error.message : "Couldn’t load this calendar.";
+      return { ...known, status, detail, titles: false, busy: [], events: [] };
+    }
   }
 
   /** events.list for members who opted in to titles (falls back to busy times if that access is gone), else freeBusy. */

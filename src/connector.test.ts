@@ -76,7 +76,7 @@ before(async () => {
   const members = store.registerMembers([{ handle: "demo:alex", name: "Alex" }, { handle: "demo:maya", name: "Maya" }]);
   alex = members.find((member) => member.name === "Alex")!;
   maya = members.find((member) => member.name === "Maya")!;
-  setupConnector({ store, demoMode: true, calendar: new CalendarService(store, "http://127.0.0.1:3999"), port: 3999, publicUrl: `https://${TUNNEL_HOST}` });
+  setupConnector({ store, demoMode: true, calendar: new CalendarService(store, "http://127.0.0.1:3999", undefined, { demoMode: true }), port: 3999, publicUrl: `https://${TUNNEL_HOST}` });
   registerTools([{
     name: "list_bill_images_to_read",
     description: "Test tool returning an image for Claude to read.",

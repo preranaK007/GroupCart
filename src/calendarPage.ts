@@ -10,10 +10,14 @@
 // Clicking an entry opens a small popover (title, who, time, place). After every
 // grid render the page dispatches `gc:calendar-rendered` (see afterGrid below);
 // src/ui/eventsPanel.ts uses it to draw household events and plans.
-import { icon, renderNotice, renderPage } from "./ui/shell.js";
+// Calendars panel: each member connects their own calendar, with Google sign-in (when
+// configured) or by pasting a calendar link in the "secret address" dialog
+// (src/calendarLinks.ts); a link is set, changed, or removed only by its owner.
+import { dialog, icon, renderNotice, renderPage } from "./ui/shell.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { GoogleCalendarError, type CalendarService } from "./googleCalendar.js";
 import { CALENDAR_STATE_SCRIPT } from "./calendarView.js"; // [calendar-detail] ?view=day&date=… helpers
+import { requestMember } from "./platform.js";
 
 const styles = String.raw`
 .cal { --cal-hour-px: 44px; --cal-gutter: 52px; --cal-col-min: 96px; --cal-house-min: 96px;
@@ -102,6 +106,13 @@ const styles = String.raw`
 .cal-status.warn { color:var(--cal-warn); } .cal-status.warn::before { background:var(--cal-warn); }
 .cal-status.bad { color:var(--cal-danger); } .cal-status.bad::before { background:var(--cal-danger); }
 .cal-person-actions { grid-column:3; display:flex; flex-wrap:wrap; align-items:center; gap:6px 10px; margin-top:4px; }
+.cal-person-actions:empty { display:none; }
+.cal-person-actions .cal-btn.quiet { padding:0 8px; }
+.cal-person-via { color:var(--gc-muted); font-size:11.5px; margin-top:1px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cal-link-form { display:grid; gap:10px; }
+.cal-link-help, .cal-link-note { color:var(--gc-muted); font-size:13px; line-height:1.45; }
+.cal-link-error { color:var(--cal-danger, var(--gc-danger)); font-size:13px; }
+.cal-link-error[hidden] { display:none; }
 .cal-person-actions .cal-btn { height:30px; font-size:13px; padding:0 12px; }
 
 .cal-best { display:grid; gap:4px; }
@@ -206,6 +217,8 @@ const styles = String.raw`
 
 .cal-grid.is-day { grid-template-columns:var(--cal-gutter) repeat(var(--cal-cols, 1), minmax(var(--cal-col-min), 1fr)) minmax(var(--cal-house-min), .7fr); }
 .cal-dayrow { grid-column:2 / -1; position:relative; display:grid; grid-template-columns:repeat(var(--cal-cols, 1), minmax(var(--cal-col-min), 1fr)) minmax(var(--cal-house-min), .7fr); grid-template-columns:subgrid; }
+.cal-grid.is-day.no-members { grid-template-columns:var(--cal-gutter) minmax(var(--cal-house-min), 1fr); }
+.cal-grid.is-day.no-members .cal-dayrow { grid-template-columns:minmax(var(--cal-house-min), 1fr); grid-template-columns:subgrid; }
 .cal-col.is-off { background-color:color-mix(in srgb, var(--gc-text) 2.5%, transparent); }
 .cal-col-house { background-color:color-mix(in srgb, var(--gc-accent) 3%, transparent); }
 .cal-bands { position:absolute; inset:0; z-index:1; pointer-events:none; }
@@ -304,6 +317,17 @@ const body = String.raw`
     <div class="cal-pop-rows" id="calPopRows"></div>
     <p class="cal-pop-note" id="calPopNote" hidden></p>
   </div>
+  ${dialog({
+    id: "calLinkDialog",
+    title: "Paste your calendar’s secret address",
+    body: `<form class="cal-link-form" id="calLinkForm" novalidate>
+      <input class="gc-input" id="calLinkUrl" name="url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Calendar address" placeholder="https://calendar.google.com/calendar/ical/…" />
+      <p class="cal-link-help">In Google Calendar, open Settings, pick your calendar, and copy “Secret address in iCal format”; on iPhone or Mac, share an iCloud calendar as a Public Calendar and copy its link.</p>
+      <p class="cal-link-note">Housemates see only when you’re busy unless you turn on event titles. GroupCart keeps the address private.</p>
+      <p class="cal-link-error" id="calLinkError" role="alert" hidden></p>
+    </form>`,
+    actions: '<button type="button" class="gc-btn gc-btn-text" data-gc-close>Cancel</button><button type="submit" class="gc-btn" form="calLinkForm" id="calLinkSubmit">Connect</button>',
+  })}
 </div>
 `;
 
@@ -550,8 +574,8 @@ const script = String.raw`
       button.setAttribute("aria-pressed", String(on));
       button.classList.toggle("primary", on);
     });
-    const titled = data.members.some((m) => m.status === "connected" && m.titles);
-    $("calMode").textContent = data.mode === "demo" ? "Sample schedules" : titled ? "Google Calendar" : "Google Calendar · busy times only";
+    const connected = data.members.filter((m) => m.status === "connected").length;
+    $("calMode").textContent = data.mode === "demo" ? "Sample schedules" : connected ? connected + " of " + data.members.length + " connected" : "No calendars connected";
   }
 
   // Day view: a row of the week's days to jump between (dot = time when everyone is free).
@@ -580,40 +604,61 @@ const script = String.raw`
       needs_reconnect: ["warn", "Reconnect needed"],
       error: ["bad", "Couldn’t load"],
     };
+    const titlesSwitch = (member, attr) => '<label class="hv-switch cal-titles"><input type="checkbox" role="switch" ' + attr + '="' + esc(member.id) + '"' + (member.titlesGranted ? " checked" : "") + ' /><span class="hv-track" aria-hidden="true"></span>Show event titles</label>';
     $("calPeople").innerHTML = data.members.map((member) => {
       let [cls, label] = statuses[member.status] || ["", member.status];
+      const mine = member.id === data.viewerId;
       if (member.status === "sample" && member.source === "file") label = "Demo calendar";
       if (member.status === "connected") {
-        if (member.detail) { cls = "warn"; label = "Connected · busy times only"; }
+        if (member.source === "google" && member.detail) { cls = "warn"; label = "Connected · busy times only"; }
         else label = member.titles ? "Connected · event titles" : "Connected · busy times only";
       }
       const startUrl = "/api/google/oauth/start?memberId=" + encodeURIComponent(member.id);
       let actions = "";
-      if (demo) actions = '<span class="cal-btn" aria-disabled="true" title="Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to connect">Connect Google Calendar</span>';
-      else if (member.status === "not_connected") actions = '<a class="cal-btn primary" href="' + startUrl + '">Connect Google Calendar</a>';
-      else if (member.status === "needs_reconnect") actions = '<a class="cal-btn primary" href="' + startUrl + (member.titlesGranted ? "&titles=1" : "") + '">Reconnect</a><button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
-      else if (member.status === "error") actions = '<button class="cal-btn" type="button" data-retry>Retry</button><button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
-      else actions = '<button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
-      // [calendar-detail] per-member opt-in to event titles (Google only).
-      if (!demo && (member.status === "connected" || member.status === "error")) {
-        actions = '<label class="hv-switch cal-titles"><input type="checkbox" role="switch" data-titles="' + esc(member.id) + '"' + (member.titlesGranted ? " checked" : "") + ' /><span class="hv-track" aria-hidden="true"></span>Show event titles</label>' + actions;
+      if (member.source === "link") {
+        // Only the owner can see the switch or change the link (the server checks this too).
+        if (mine && member.status === "connected") actions = titlesSwitch(member, "data-link-titles") + '<button class="cal-btn quiet" type="button" data-link-open>Change link</button><button class="cal-btn quiet" type="button" data-link-disconnect>Disconnect</button>';
+        else if (mine) actions = '<button class="cal-btn primary" type="button" data-link-open>Update link</button>' + (member.status === "error" ? '<button class="cal-btn" type="button" data-retry>Retry</button>' : "") + '<button class="cal-btn quiet" type="button" data-link-disconnect>Disconnect</button>';
+      } else if (member.source === "google") {
+        if (member.status === "needs_reconnect") actions = '<a class="cal-btn primary" href="' + startUrl + (member.titlesGranted ? "&titles=1" : "") + '">Reconnect</a><button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
+        else if (member.status === "error") actions = '<button class="cal-btn" type="button" data-retry>Retry</button><button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
+        else actions = '<button class="cal-btn quiet" type="button" data-disconnect="' + esc(member.id) + '">Disconnect</button>';
+        // [calendar-detail] per-member opt-in to event titles.
+        if (member.status === "connected" || member.status === "error") actions = titlesSwitch(member, "data-titles") + actions;
+      } else if (mine) {
+        actions = data.googleAvailable
+          ? '<a class="cal-btn primary" href="' + startUrl + '">Connect Google Calendar</a><button class="cal-btn quiet" type="button" data-link-open>Use a calendar link</button>'
+          : '<button class="cal-btn primary" type="button" data-link-open>Connect</button>';
+      } else if (data.googleAvailable && !demo) {
+        actions = '<a class="cal-btn" href="' + startUrl + '">Connect Google Calendar</a>';
       }
+      const via = member.source === "link" && member.linkHost ? '<div class="cal-person-via" title="Calendar link">via ' + esc(member.linkHost) + '</div>' : "";
       const detail = member.detail && member.status !== "sample" ? ' title="' + esc(member.detail) + '"' : "";
       const check = '<button type="button" class="cal-check" data-toggle-member="' + esc(member.id) + '" aria-pressed="' + shown(member) + '" aria-label="Show ' + esc(member.name) + '’s calendar" title="' + (shown(member) ? "Hide " : "Show ") + esc(member.name) + '’s calendar">' + CHECK + '</button>';
       return '<li class="cal-person ' + colorClass(member) + '">' + check + '<span class="cal-avatar" aria-hidden="true">' + esc(member.name.slice(0, 1).toUpperCase()) + '</span>'
-        + '<div><div class="cal-person-name">' + esc(member.name) + '</div><div class="cal-status ' + cls + '"' + detail + '>' + esc(label) + '</div></div>'
+        + '<div><div class="cal-person-name">' + esc(member.name) + (mine ? ' <span class="gc-muted">(you)</span>' : "") + '</div><div class="cal-status ' + cls + '"' + detail + '>' + esc(label) + '</div>' + via + '</div>'
         + '<div class="cal-person-actions">' + actions + '</div></li>';
     }).join("") || '<li class="cal-empty">No household members yet.</li>';
+    const how = data.googleAvailable ? "with Google or a calendar link" : "by pasting its secret link";
     $("calPeopleFoot").textContent = demo
-      ? "Demo mode: calendars are samples. Add Google OAuth credentials to connect real ones."
-      : "Each person signs in with their own Google account. Only busy times are shared unless someone turns on event titles (title, time, and place; never descriptions or guests).";
+      ? "Demo mode: anyone without a connected calendar shows a sample schedule."
+      : "Everyone connects their own calendar " + how + ". Housemates see busy times only, unless that person turns on event titles (title, time, and place; never descriptions, guests, or links).";
   }
 
+  // Free time counts only included calendars; when some are missing, say whose times these are.
+  const missingReason = { not_connected: "not connected", needs_reconnect: "needs reconnecting", error: "couldn’t load" };
+  function freeBasis() {
+    const missing = data.members.filter((m) => !included(m));
+    if (!data.included || !missing.length) return "";
+    const names = data.members.filter(included).map((m) => m.name);
+    return " Based on " + names.join(", ") + ". Not included: " + missing.map((m) => m.name + " (" + (missingReason[m.status] || "no calendar") + ")").join(", ") + ".";
+  }
+  const freeWord = () => (data.included < data.members.length ? "Free (" + data.included + " of " + data.members.length + ")" : "Everyone free");
   function renderBest() {
     const list = $("calBest");
-    const total = data.members.length;
+    $("calBestTitle").textContent = data.included && data.included < data.members.length ? "Best times for connected calendars" : "Best times everyone is free";
     if (!data.included) {
-      list.innerHTML = '<li class="cal-empty">Connect at least one calendar to find shared free time.</li>';
+      list.innerHTML = '<li class="cal-empty">Connect calendars to find shared free time.</li>';
     } else if (!data.bestTimes.length) {
       list.innerHTML = '<li class="cal-empty">No shared hour-long gaps left this week. Try next week.</li>';
     } else {
@@ -623,8 +668,7 @@ const script = String.raw`
         + '<span class="cal-best-time">' + esc(timeRange(slot.start, slot.end)) + '</span></button></li>').join("");
     }
     const hours = hourLabel(data.freeHours.startMinutes / 60) + "–" + hourLabel(data.freeHours.endMinutes / 60);
-    const basis = data.included && data.included < total ? " Based on " + data.included + " of " + total + " calendars." : "";
-    $("calBestFoot").textContent = "Windows of 1 hour or more between " + hours + ", good for a pickup or delivery slot." + basis;
+    $("calBestFoot").textContent = data.included ? "Windows of 1 hour or more between " + hours + ", good for a pickup or delivery slot." + freeBasis() : "";
   }
 
   // ---- Grid helpers ---------------------------------------------------------
@@ -745,7 +789,7 @@ const script = String.raw`
       return '<button type="button" class="cal-adchip ' + colorClass(e.member) + (e.item.free ? " is-free" : "") + '" data-ev="' + e.memberIndex + ':' + e.itemIndex + '" aria-label="' + esc(title + ", all day, " + e.member.name) + '">' + esc(title) + '</button>';
     }).join("") + (more > 0 ? '<button type="button" class="cal-adchip is-more" data-goto-day="' + date + '">+' + more + ' more</button>' : "") + '</div>';
   }
-  function freeLabel(w) { return "Everyone free · " + compactRange(w.start, w.end); }
+  function freeLabel(w) { return freeWord() + " · " + compactRange(w.start, w.end); }
   function shortZone() {
     try {
       const part = new Intl.DateTimeFormat(undefined, { timeZone: data.timeZone, timeZoneName: "short" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName");
@@ -789,7 +833,7 @@ const script = String.raw`
       for (const w of freeByDay[index]) {
         const a = minutesInDay(w.start, day), b = minutesInDay(w.end, day);
         html += '<div class="cal-free" data-start="' + w.start + '" data-end="' + w.end + '" style="top:' + topPx(geo, a) + ';height:' + heightPx(geo, a, b) + '" title="' + esc(freeLabel(w)) + '">'
-          + (b - a >= 45 ? '<span>Everyone free</span>' : '') + '</div>';
+          + (b - a >= 45 ? '<span>' + esc(freeWord()) + '</span>' : '') + '</div>';
       }
       html += overlapHtml(day, geo);
       const entries = members.flatMap((member, memberIndex) => shown(member) ? placed(member, memberIndex, day, geo) : []);
@@ -845,7 +889,8 @@ const script = String.raw`
     const geo = makeGeometry();
     const grid = $("calGrid");
     columns.clear();
-    grid.className = "cal-grid is-day";
+    // With nobody ticked, the grid is just the hour gutter and the House lane (no empty member column).
+    grid.className = "cal-grid is-day" + (members.length ? "" : " no-members");
     grid.style.setProperty("--cal-hours", String(geo.endHour - geo.startHour));
     grid.style.setProperty("--cal-cols", String(Math.max(1, members.length)));
     const now = Date.now();
@@ -933,7 +978,7 @@ const script = String.raw`
     const someShown = data.members.some(shown);
     const avail = someShown && data.members.some((m) => shown(m) && m.events.some((item) => item.free)) ? '<span><i class="k-avail"></i>Available (not busy)</span>' : "";
     const overlap = data.members.filter(shown).length >= 2 ? '<span><i class="k-ovl2"></i>2 busy at once</span><span><i class="k-ovl3"></i>3+ busy</span>' : "";
-    $("calKey").innerHTML = '<span><i class="k-free"></i>Everyone free</span>' + overlap + avail
+    $("calKey").innerHTML = (data.included ? '<span><i class="k-free"></i>' + esc(data.included < data.members.length ? "Free in all connected calendars" : "Everyone free") + '</span>' : "") + overlap + avail
       + '<span class="cal-key-people">' + (someShown ? "Showing:" : "Show a calendar:") + people + '</span>';
   }
 
@@ -1117,6 +1162,67 @@ const script = String.raw`
     } catch (error) { showNotice(error.message, true); input.checked = !enabled; input.disabled = false; }
   });
 
+  // ---- Calendar link (the viewer's own calendar) ------------------------------
+  async function postJson(path, body) {
+    const response = await fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body || {}) });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Something went wrong. Try again.");
+    return result;
+  }
+  function linkError(text) {
+    $("calLinkError").textContent = text || "";
+    $("calLinkError").hidden = !text;
+  }
+  function openLinkDialog() {
+    $("calLinkUrl").value = "";
+    linkError("");
+    if (window.GC && GC.openDialog) GC.openDialog("calLinkDialog"); else $("calLinkDialog").showModal();
+    setTimeout(() => $("calLinkUrl").focus(), 0);
+  }
+  $("calLinkForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const url = $("calLinkUrl").value.trim();
+    if (!url) { linkError("Paste your calendar’s secret address."); return; }
+    const submit = $("calLinkSubmit");
+    submit.disabled = true; submit.textContent = "Connecting…"; linkError("");
+    try {
+      const result = await postJson("/api/calendar/link", { url });
+      $("calLinkDialog").close();
+      showNotice("Your calendar is connected (" + result.host + "). Housemates see busy times only unless you turn on event titles.");
+      cache.clear();
+      await load({ force: true });
+    } catch (error) { linkError(error.message); }
+    finally { submit.disabled = false; submit.textContent = "Connect"; }
+  });
+  $("calPeople").addEventListener("click", async (event) => {
+    if (event.target.closest("[data-link-open]")) { openLinkDialog(); return; }
+    const button = event.target.closest("[data-link-disconnect]");
+    if (!button || !confirm("Disconnect your calendar? GroupCart will forget its address.")) return;
+    button.disabled = true;
+    try {
+      await postJson("/api/calendar/link/disconnect");
+      showNotice("Your calendar was disconnected.");
+      cache.clear();
+      await load({ force: true });
+    } catch (error) { showNotice(error.message, true); button.disabled = false; }
+  });
+  $("calPeople").addEventListener("change", async (event) => {
+    const input = event.target.closest("[data-link-titles]");
+    if (!input) return;
+    const enabled = input.checked;
+    const question = enabled
+      ? "Show your event titles to the household?\n\nHousemates see titles, times, and places, never descriptions or guests. Events marked private stay “Busy”."
+      : "Go back to sharing busy times only?";
+    if (!confirm(question)) { input.checked = !enabled; return; }
+    input.disabled = true;
+    try {
+      await postJson("/api/calendar/link/titles", { enabled });
+      showNotice(enabled ? "Your event titles are on." : "Housemates now see only when you’re busy.");
+      cache.clear();
+      await load({ force: true });
+    } catch (error) { showNotice(error.message, true); input.checked = !enabled; input.disabled = false; }
+  });
+
   const connected = startParams.get("connected");
   const titles = startParams.get("titles");
   load({}).then(() => {
@@ -1232,7 +1338,7 @@ function isSameOriginJson(request: IncomingMessage): boolean {
   try { return new URL(origin).host === request.headers.host; } catch { return false; }
 }
 
-/** Handles /calendar, /api/calendar, the Google OAuth routes, and /api/google/titles. Returns false for any other path. */
+/** Handles /calendar, /api/calendar, the Google OAuth routes, /api/google/titles, and /api/calendar/link*. Returns false for any other path. */
 export async function handleCalendarRequest(
   service: CalendarService,
   request: IncomingMessage,
@@ -1247,7 +1353,9 @@ export async function handleCalendarRequest(
   }
   if (request.method === "GET" && pathname === "/api/calendar") {
     try {
-      sendJson(response, 200, await service.week({ week: url.searchParams.get("week"), timeZone: url.searchParams.get("tz") }));
+      // viewerId: whose calendar this browser may connect, change, or disconnect (see the link routes below).
+      const viewerId = requestMember(request)?.memberId ?? null;
+      sendJson(response, 200, { ...await service.week({ week: url.searchParams.get("week"), timeZone: url.searchParams.get("tz") }), viewerId });
     } catch (error) {
       sendJson(response, 500, { error: error instanceof Error ? error.message : "Could not build the calendar." });
     }
@@ -1299,6 +1407,30 @@ export async function handleCalendarRequest(
     return true;
   }
   // --- end [calendar-detail] ---
+  // --- Calendar links: always the requester's own calendar (signed-in member, or "Viewing as" on the host computer) ---
+  if (request.method === "POST" && (pathname === "/api/calendar/link" || pathname === "/api/calendar/link/titles" || pathname === "/api/calendar/link/disconnect")) {
+    if (!isSameOriginJson(request)) { sendJson(response, 403, { error: "Change your calendar from the GroupCart calendar page." }); return true; }
+    const viewerId = requestMember(request)?.memberId;
+    if (!viewerId) { sendJson(response, 401, { error: "Sign in to GroupCart to connect your calendar." }); return true; }
+    try {
+      const body = await readJsonBody(request);
+      if (pathname === "/api/calendar/link") {
+        if (typeof body.url !== "string") { sendJson(response, 400, { error: "Paste your calendar’s secret address." }); return true; }
+        const result = await service.connectLink(viewerId, body.url);
+        sendJson(response, result.ok ? 200 : result.status, result.ok ? { ok: true, host: result.host } : { error: result.error });
+      } else if (pathname === "/api/calendar/link/titles") {
+        if (typeof body.enabled !== "boolean") { sendJson(response, 400, { error: "Choose whether to show event titles." }); return true; }
+        const changed = service.setLinkTitles(viewerId, body.enabled);
+        sendJson(response, changed ? 200 : 404, changed ? { ok: true } : { error: "You haven’t connected a calendar link." });
+      } else {
+        const removed = service.disconnectLink(viewerId);
+        sendJson(response, removed ? 200 : 404, removed ? { ok: true } : { error: "You haven’t connected a calendar link." });
+      }
+    } catch (error) {
+      sendJson(response, 400, { error: error instanceof Error ? error.message : "Request failed." });
+    }
+    return true;
+  }
   if (request.method === "POST" && pathname === "/api/google/disconnect") {
     if (!isSameOriginJson(request)) { sendJson(response, 403, { error: "Disconnect from the GroupCart calendar page." }); return true; }
     try {

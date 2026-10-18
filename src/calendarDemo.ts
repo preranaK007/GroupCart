@@ -1,5 +1,5 @@
-// Sample calendars for the /calendar page when Google OAuth is not configured
-// (or a member has not connected Google):
+// Sample calendars for the /calendar page in demo mode, for members who have not
+// connected a calendar (live mode never shows them; see CalendarService):
 //   - demoEvents(): deterministic titled schedules. The same member + week always
 //     produces the same events ("Lecture", "Gym", "Work shift", ...).
 //   - DemoCalendarFile: GROUP_CART_DEMO_CALENDAR, a local JSON file whose events

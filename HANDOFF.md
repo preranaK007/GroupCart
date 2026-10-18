@@ -66,7 +66,7 @@ See `.env.example`. Never commit `.env`.
 
 - **Spectrum (iMessage):** `PROJECT_ID`, `PROJECT_SECRET` and `GROUP_CART_MEMBERS` (`+1555…|apple-id@icloud.com=Name`, comma-separated). Join events need the dedicated Business line.
 - **Kroger:** `KROGER_CLIENT_ID`, `KROGER_CLIENT_SECRET`, `KROGER_LOCATION_ID`, `KROGER_REDIRECT_URI`, `KROGER_CART_MODALITY`.
-- **Google Calendar:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`. Each member connects on `/calendar`; titles need the per-member opt-in.
+- **Google Calendar:** `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` (optional: without them each member connects on `/calendar` by pasting their calendar's secret iCal link). Titles need the per-member opt-in.
 - **Splitwise:** `SPLITWISE_API_KEY`, `SPLITWISE_GROUP_ID`, `SPLITWISE_MEMBERS`.
 - **Optional:**
   - `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` for server-side bill reading.

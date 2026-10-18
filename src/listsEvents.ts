@@ -753,7 +753,11 @@ function buildTools(lists: NamedListsService, events: EventsService) {
       handler: async (args: Record<string, unknown>) => {
         const kind = typeof args.activity === "string" && activityByKey(args.activity) ? args.activity as EventKind : "house";
         const found = await events.suggest(planShape(kind), { durationMin: int(args.durationMinutes) ?? (kind === "house" ? 60 : null), days: int(args.days) ?? 7, count: Math.min(5, Math.max(1, int(args.count) ?? 3)) });
-        return { timeZone: events.timeZone, calendarsIncluded: found.included, members: found.total, slots: found.slots.map((slot) => ({ start: iso(slot.start), end: iso(slot.end), label: formatSlot(slot.start, slot.end, events.timeZone, today()) })) };
+        return {
+          timeZone: events.timeZone, calendarsIncluded: found.included, members: found.total,
+          ...(found.missing.length ? { notIncluded: found.missing, note: found.included ? "Members in notIncluded have no connected calendar, so these times don't account for them." : "No calendars are connected, so these times only avoid household events." } : {}),
+          slots: found.slots.map((slot) => ({ start: iso(slot.start), end: iso(slot.end), label: formatSlot(slot.start, slot.end, events.timeZone, today()) })),
+        };
       },
     },
     {
