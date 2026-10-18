@@ -633,3 +633,20 @@ export function formatOccurrence(occurrence: Occurrence, allDay: boolean, timeZo
   if (occurrence.endDate === occurrence.date) return first;
   return `${first}–${formatDay(occurrence.endDate, today)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Members
+
+/** "Maya and Jordan", "me, Alex" → member ids (first names work, case-insensitive). */
+export function resolveMemberNames(text: string, members: Array<{ id: string; name: string }>, senderId: string): string[] {
+  const ids = new Set<string>();
+  for (const raw of text.split(/\s*(?:,|&|\+|\band\b)\s*/i)) {
+    const word = raw.trim().toLowerCase();
+    if (!word) continue;
+    if (word === "me" || word === "myself") { ids.add(senderId); continue; }
+    const member = members.find((candidate) => candidate.name.toLowerCase() === word)
+      ?? members.find((candidate) => (candidate.name.split(/\s+/)[0] ?? "").toLowerCase() === word);
+    if (member) ids.add(member.id);
+  }
+  return [...ids];
+}

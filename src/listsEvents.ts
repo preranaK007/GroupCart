@@ -1,19 +1,19 @@
-// Wires grocery lists (staples + one-off lists) and household events/plans into the
-// app through src/platform.ts: group-chat commands, dashboard routes (/api/lists*,
-// /api/events*), Claude connector tools, background schedules, help lines, and the
-// demo seed. index.ts calls setupListsAndEvents(...) once.
+// Wires one-off named lists and household events/plans into the app through
+// src/platform.ts: group-chat commands, dashboard routes (/api/named-lists*, /api/events*),
+// Claude connector tools, the reminder schedule, help lines, and the demo seed.
+// index.ts calls setupListsAndEvents(...) once. Recurring weekly/biweekly/monthly
+// lists belong to the store; these handlers never claim their phrases ("lists",
+// "weekly list", "load weekly list", "start sharing", …).
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { addDays, localDate } from "./availability.js";
-import { EventsService, durationLabel, planShape, type EventKind, type EventRecord, type PollView } from "./events.js";
+import { EventsService, planShape, type EventKind, type EventRecord, type PollView } from "./events.js";
 import {
-  ACTIVITIES, activityByKey, detectActivity, formatDay, formatSlot, matchPlanningIntent, nextMonthDay, nextWeekdayDate, parseDayHint,
-  parseDuration, parseRsvp, parseVote, parseWhen, pickEmoji, splitEmoji, type RsvpStatus,
+  ACTIVITIES, activityByKey, detectActivity, formatSlot, matchPlanningIntent, nextMonthDay, nextWeekdayDate, parseDayHint,
+  parseDuration, parseRsvp, parseVote, parseWhen, pickEmoji, resolveMemberNames, splitEmoji, type RsvpStatus,
 } from "./eventsParse.js";
 import { CalendarService } from "./googleCalendar.js";
 import type { KrogerClient } from "./kroger.js";
-import {
-  ListsService, cadenceLabel, cartPromptAt, parseCadence, parseWho, resolveMemberNames, type CadenceUnit, type ListView, type StapleView, type Who,
-} from "./lists.js";
+import { NamedListsService, RECURRING_LIST_WORDS, cartPromptAt, type ListView } from "./namedLists.js";
 import { notifyGroup, registerCommand, registerHelp, registerRoute, registerTools, scheduleEvery, type CommandContext, type ToolCaller } from "./platform.js";
 import type { CartStore } from "./store.js";
 
@@ -25,22 +25,20 @@ export type ListsEventsOptions = {
   now?: () => number;
 };
 
-export function setupListsAndEvents(options: ListsEventsOptions): { lists: ListsService; events: EventsService } {
+export function setupListsAndEvents(options: ListsEventsOptions): { lists: NamedListsService; events: EventsService } {
   const { store, demoMode } = options;
   const timeZone = CalendarService.serverTimeZone();
-  const lists = new ListsService(store, { timeZone, kroger: options.kroger, notify: notifyGroup, now: options.now });
+  const lists = new NamedListsService(store, { timeZone, kroger: options.kroger, now: options.now });
   const events = new EventsService(store, { calendar: options.calendar, lists, timeZone, notify: notifyGroup, now: options.now });
   const chat = new ChatCommands(store, lists, events);
 
   registerCommand("events", (context) => chat.events(context));
-  registerCommand("lists", (context) => chat.lists(context));
+  registerCommand("one-off lists", (context) => chat.lists(context));
   registerRoute((request, response, url) => handleRoutes({ store, lists, events, demoMode }, request, response, url));
-  registerTools(buildTools(store, lists, events));
-  registerHelp("Staples: “add staple milk every week” (add “shared” or “for Maya”), “staples”, “remove staple milk”.");
-  registerHelp("Lists: “new list party run: chips, soda”, “add salsa to party run”, “party run to cart”, “lists”.");
+  registerTools(buildTools(lists, events));
+  registerHelp("One-off lists: “new list party run: chips, soda”, “add salsa to party run”, “party run to cart”, “one-off lists”.");
   registerHelp("Events: “add event house meeting Sunday 7pm”, “events”, “plan house meeting 1h” (reply 1–3 to book), “cancel event house meeting”.");
   registerHelp("Plans: say “we all want to watch a movie” or “game night this week?” and vote with numbers (“1 3”, “can’t do 2”); “book 2” decides. Movies: “add movie Dune”, “vote Dune”. RSVP: “I’m in” / “can’t make it”.");
-  scheduleEvery("staples", 60_000, async () => { await lists.runDueStaples(); });
   scheduleEvery("event reminders", 60_000, async () => { await events.runReminders(); });
   if (demoMode) void seedDemo(store, lists, events).catch((error) => console.warn("Lists/events demo seed failed:", error instanceof Error ? error.message : error));
   return { lists, events };
@@ -50,11 +48,12 @@ export function setupListsAndEvents(options: ListsEventsOptions): { lists: Lists
 // Group chat
 
 const normalize = (text: string) => text.trim().replace(/[’‘]/g, "'").replace(/\s+/g, " ");
-const lower = (text: string) => (/^(?:Today|Tomorrow)$/.test(text) ? text.toLowerCase() : text);
 const splitItems = (text: string) => text.split(/\s*(?:,|;|\n|\band\b)\s*/i).map((item) => item.trim()).filter(Boolean);
+/** Phrases owned by the store (recurring lists, sharing sessions). */
+const STORE_PHRASES = /^(?:(?:show|view|see|review)\s+)?(?:(?:all|our|the|my)\s+)?(?:recurring\s+|grocery\s+|shopping\s+)?lists[?!.]*$|\b(?:start|stop)\s+sharing\b|^(?:set\s*up|start|create|begin)\s+(?:the\s+|our\s+)?(?:recurring\s+|grocery\s+|shopping\s+)?lists\b/i;
 
 class ChatCommands {
-  constructor(private readonly store: CartStore, private readonly listsService: ListsService, private readonly eventsService: EventsService) {}
+  constructor(private readonly store: CartStore, private readonly listsService: NamedListsService, private readonly eventsService: EventsService) {}
 
   /** Replays a recorded reply for a redelivered message; otherwise runs `handler` and records its reply. */
   async #once(context: CommandContext, handler: () => Promise<string | null> | string | null): Promise<string | null> {
@@ -66,73 +65,27 @@ class ChatCommands {
     return reply;
   }
 
-  // --- Lists ---------------------------------------------------------------
+  // --- One-off lists ---------------------------------------------------------
 
   async lists(context: CommandContext): Promise<string | null> {
-    return this.#once(context, () => this.#lists(context));
+    const text = normalize(context.text);
+    if (STORE_PHRASES.test(text) || RECURRING_LIST_WORDS.test(text)) return null;
+    return this.#once(context, () => this.#lists(context, text));
   }
 
-  async #lists(context: CommandContext): Promise<string | null> {
-    const text = normalize(context.text);
+  async #lists(context: CommandContext, text: string): Promise<string | null> {
     const lists = this.listsService;
-    const members = lists.members();
     let match: RegExpMatchArray | null;
 
-    if (/^(?:staples|my staples|show staples|list staples|staple list|our staples)[?!.]*$/i.test(text)) return this.#staplesText();
-
-    if ((match = text.match(/^add (?:a |new )?staples?:?\s+(.+)$/i))) {
-      let body = match[1]!;
-      let startDate: string | null = null;
-      const start = body.match(/\b(?:starting|from|beginning)\s+(.+)$/i);
-      if (start) {
-        const when = parseWhen(start[1]!, lists.today(), 0);
-        if (when.date) { startDate = when.date; body = body.slice(0, start.index); }
-      }
-      const cadence = parseCadence(body);
-      const who = parseWho(cadence.rest, members, context.memberId);
-      const created = lists.addStaple({ name: who.rest.replace(/^(?:a|an|some)\s+/i, ""), cadence: cadence.cadence, who: who.who, createdBy: context.memberId, startDate });
-      if (!created.ok) return created.error;
-      const staple = created.staple;
-      const forText = staple.everyone ? "shared" : `for ${lists.whoLabel({ everyone: false, memberIds: staple.memberIds })}`;
-      const head = `🔁 ${staple.name} · ${staple.cadence.toLowerCase()} · ${forText}.`;
-      if (lists.isDue(staple)) {
-        const result = await lists.processStaple(staple);
-        const next = lists.getStaple(staple.id);
-        const nextText = next ? ` Next: ${formatDay(next.nextDate, lists.today())}.` : "";
-        if (result.kind === "added") return `${head} Added to the cart now.${nextText}`;
-        if (result.kind === "in_cart") return `${head} Already in the cart.${nextText}`;
-        if (result.kind === "deferred") return `${head} I’ll add it after ${lists.memberName(staple.requesterId)}’s open grocery question is answered.`;
-        return `${head}${result.line ? `\n${result.line}` : ""}`;
-      }
-      return `${head} First add: ${formatDay(staple.nextDate, lists.today())}.`;
-    }
-
-    if ((match = text.match(/^(?:remove|delete|stop|cancel|drop) (?:the |my |our )?staple:?\s+(.+?)[.!]*$/i)) || (match = text.match(/^(?:remove|delete|stop) (.+?) (?:from|off) (?:the |my |our )?staples[.!]*$/i))) {
-      const found = this.#pickStaple(match[1]!, context.memberId);
-      if (typeof found === "string") return found;
-      lists.removeStaple(found.id);
-      return `Removed the ${found.name.toLowerCase()} staple${found.everyone ? "" : ` for ${lists.whoLabel({ everyone: false, memberIds: found.memberIds })}`}.`;
-    }
-
-    if ((match = text.match(/^skip (?:the )?(?:next )?staple:?\s+(.+?)[.!]*$/i)) || (match = text.match(/^skip (.+?) (?:this|next) (?:week|time|month)[.!]*$/i))) {
-      const found = this.#pickStaple(match[1]!, context.memberId);
-      if (typeof found === "string") return found;
-      const skipped = lists.skipStaple(found.id);
-      return skipped ? `Skipped. ${skipped.name} is next added ${formatDay(skipped.nextDate, lists.today())}.` : null;
-    }
-
-    if ((match = text.match(/^(?:new|create|make|start) (?:a )?list:?\s+(.+)$/i))) {
+    if ((match = text.match(/^(?:new|create|make|start) (?:a |one-off |named )?list:?\s+(.+)$/i))) {
       const [rawName, rawItems] = splitOnce(match[1]!);
-      const personal = /\b(?:just for me|for me|just me|mine)\b/i.test(rawName);
-      const parsedWho = personal ? null : parseWho(rawName, members, context.memberId);
-      const who: Who = personal ? { everyone: false, memberIds: [context.memberId] } : parsedWho!.found ? parsedWho!.who : { everyone: true, memberIds: [] };
-      const name = (personal ? rawName.replace(/\b(?:just for me|for me|just me|mine)\b/gi, " ") : parsedWho!.rest).replace(/\b(?:called|named)\b/gi, " ").replace(/\s+/g, " ").trim();
-      const created = lists.createList({ name, items: rawItems ? splitItems(rawItems) : [], who, createdBy: context.memberId });
+      const name = rawName.replace(/\b(?:called|named)\b/gi, " ").replace(/\s+/g, " ").trim();
+      const created = lists.createList({ name, items: rawItems ? splitItems(rawItems) : [], createdBy: context.memberId });
       if (!created.ok) return created.error;
       return `📝 ${created.list.name}${created.list.items.length ? `: ${created.list.items.map((item) => item.name.toLowerCase()).join(", ")}` : " is ready"}. Add more with “add salsa to ${created.list.name.toLowerCase()}”; send it with “${created.list.name.toLowerCase()} to cart”.`;
     }
 
-    if (/^(?:lists|my lists|show lists|our lists|grocery lists|show my lists)[?!.]*$/i.test(text)) return this.#listsText();
+    if (/^(?:one-?off lists|named lists|party lists|other lists|event lists)[?!.]*$/i.test(text)) return this.#listsText();
 
     if ((match = text.match(/^(?:move |send |add |put )?(?:the |our |my )?(.+?)(?: list)? (?:to|in|into|on) (?:the )?cart[.!]*$/i))) {
       const list = lists.findList(match[1]!);
@@ -169,9 +122,9 @@ class ChatCommands {
       return `✓ ${items.map((item) => item.name.toLowerCase()).join(", ")}. ${lists.getList(list.id)!.remaining} left on ${list.name}.`;
     }
 
-    if ((match = text.match(/^(?:delete|remove|clear|archive) (?:the )?list:?\s+(.+?)[.!]*$/i))) {
+    if ((match = text.match(/^(?:delete|remove|archive) (?:the )?list:?\s+(.+?)[.!]*$/i))) {
       const list = lists.findList(match[1]!);
-      if (!list) return `I couldn’t find a list called “${match[1]}”.`;
+      if (!list) return null;
       lists.deleteList(list.id);
       return `Deleted ${list.name}.`;
     }
@@ -184,31 +137,6 @@ class ChatCommands {
     return null;
   }
 
-  /** Finds one staple by name ("coffee", "coffee for Maya"), preferring the sender's own. */
-  #pickStaple(query: string, memberId: string): StapleView | string {
-    const lists = this.listsService;
-    const who = parseWho(query, lists.members(), memberId);
-    let found = lists.findStaples(who.rest);
-    if (!found.length) return `I couldn’t find a staple called “${who.rest}”. Text “staples” to see them.`;
-    if (who.found) found = found.filter((staple) => staple.everyone === who.who.everyone && (staple.everyone || who.who.memberIds.every((id) => staple.memberIds.includes(id))));
-    else if (found.length > 1) {
-      const mine = found.filter((staple) => !staple.everyone && staple.memberIds.length === 1 && staple.memberIds[0] === memberId);
-      if (mine.length === 1) found = mine;
-    }
-    if (found.length === 1) return found[0]!;
-    if (!found.length) return `I couldn’t find that staple. Text “staples” to see them.`;
-    return `Which one? ${found.map((staple) => `${staple.name.toLowerCase()} ${staple.everyone ? "shared" : `for ${lists.whoLabel({ everyone: false, memberIds: staple.memberIds })}`}`).join(", ")}.`;
-  }
-
-  #staplesText(): string {
-    const lists = this.listsService;
-    const staples = lists.listStaples();
-    if (!staples.length) return "No staples yet. Add one: “add staple milk every week” (or “paper towels monthly shared”).";
-    const today = lists.today();
-    const lines = staples.map((staple) => `• ${staple.name} · ${staple.cadence.toLowerCase()} · ${staple.everyone ? "shared" : lists.whoLabel({ everyone: false, memberIds: staple.memberIds })} · next ${lower(formatDay(staple.nextDate, today))}`);
-    return `🔁 Staples:\n${lines.join("\n")}`;
-  }
-
   #listText(list: ListView): string {
     const open = list.items.filter((item) => !item.checked).map((item) => item.name.toLowerCase());
     const done = list.items.length - open.length;
@@ -217,8 +145,8 @@ class ChatCommands {
 
   #listsText(): string {
     const all = this.listsService.allLists();
-    if (!all.length) return "No lists yet. Start one: “new list party run: chips, soda, cups”.";
-    return `📝 Lists:\n${all.slice(0, 8).map((list) => `• ${list.emoji ? `${list.emoji} ` : ""}${list.name} · ${list.remaining ? `${list.remaining} left` : "done"}${list.remaining ? `: ${list.items.filter((item) => !item.checked).slice(0, 5).map((item) => item.name.toLowerCase()).join(", ")}` : ""}`).join("\n")}`;
+    if (!all.length) return "No one-off lists yet. Start one: “new list party run: chips, soda, cups”.";
+    return `📝 One-off lists:\n${all.slice(0, 8).map((list) => `• ${list.emoji ? `${list.emoji} ` : ""}${list.name} · ${list.remaining ? `${list.remaining} left` : "done"}${list.remaining ? `: ${list.items.filter((item) => !item.checked).slice(0, 5).map((item) => item.name.toLowerCase()).join(", ")}` : ""}`).join("\n")}`;
   }
 
   // --- Events and plans ------------------------------------------------------
@@ -429,7 +357,7 @@ function minutesNow(now: number, timeZone: string): number {
 // ---------------------------------------------------------------------------
 // HTTP routes (loopback dashboard). POSTs are JSON-only and same-origin.
 
-type RouteContext = { store: CartStore; lists: ListsService; events: EventsService; demoMode: boolean };
+type RouteContext = { store: CartStore; lists: NamedListsService; events: EventsService; demoMode: boolean };
 
 function sendJson(response: ServerResponse, status: number, value: unknown): true {
   response.writeHead(status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -466,11 +394,7 @@ const str = (value: unknown, max = 200): string | null => typeof value === "stri
 const int = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? Math.round(value) : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : null;
 const ids = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").slice(0, 20) : [];
 
-function stapleJson(lists: ListsService, staple: StapleView) {
-  return { ...staple, who: staple.everyone ? "Everyone" : lists.whoLabel({ everyone: false, memberIds: staple.memberIds }) };
-}
-
-function listJson(lists: ListsService, events: EventsService, list: ListView) {
+function listJson(events: EventsService, list: ListView) {
   const event = list.eventId ? events.getEvent(list.eventId) : undefined;
   const next = event ? events.nextOccurrence(event) : null;
   return { ...list, event: event ? { id: event.id, title: event.title, emoji: event.emoji, label: next?.label ?? null } : null };
@@ -482,17 +406,16 @@ function pollJson(poll: PollView, timeZone: string, today: string) {
 
 async function handleRoutes(context: RouteContext, request: IncomingMessage, response: ServerResponse, url: URL): Promise<boolean> {
   const path = url.pathname;
-  if (!path.startsWith("/api/lists") && !path.startsWith("/api/events")) return false;
+  if (!path.startsWith("/api/named-lists") && !path.startsWith("/api/events")) return false;
   const { lists, events, demoMode } = context;
   const members = lists.members();
   const today = events.today();
 
   if (request.method === "GET") {
-    if (path === "/api/lists") {
+    if (path === "/api/named-lists") {
       return sendJson(response, 200, {
         demoMode, mode: lists.mode, timeZone: lists.timeZone, today, members,
-        staples: lists.listStaples().map((staple) => stapleJson(lists, staple)),
-        lists: lists.allLists().map((list) => listJson(lists, events, list)),
+        lists: lists.allLists().map((list) => listJson(events, list)),
       });
     }
     if (path === "/api/events") {
@@ -532,7 +455,7 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
       const poll = detail.event.pollId ? events.getPoll(detail.event.pollId) : undefined;
       return sendJson(response, 200, {
         demoMode, members, timeZone: events.timeZone, ...detail,
-        list: detail.list ? listJson(lists, events, detail.list) : null,
+        list: detail.list ? listJson(events, detail.list) : null,
         range: detail.next ? (detail.event.allDay ? detail.next.label : formatSlot(detail.next.start, detail.next.end, events.timeZone, today)) : null,
         poll: poll ? pollJson(poll, events.timeZone, today) : null,
       });
@@ -562,44 +485,31 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
     const id = str(value, 64);
     return id && members.some((member) => member.id === id) ? id : fallback;
   };
-  const whoFrom = (value: Record<string, unknown>): Who => {
+  const whoFrom = (value: Record<string, unknown>): { everyone: boolean; memberIds: string[] } => {
     const chosen = ids(value.memberIds).filter((id) => members.some((member) => member.id === id));
-    return value.everyone === true || !chosen.length ? { everyone: true, memberIds: [] } : { everyone: chosen.length >= members.length, memberIds: chosen.length >= members.length ? [] : chosen };
+    return value.everyone === true || !chosen.length || chosen.length >= members.length ? { everyone: true, memberIds: [] } : { everyone: false, memberIds: chosen };
   };
 
   try {
     switch (path) {
-      case "/api/lists/staples": {
-        const unit = (["day", "week", "month"] as const).find((candidate) => candidate === body.unit) ?? "week";
-        const created = lists.addStaple({ name: str(body.name, 80) ?? "", cadence: { every: int(body.every) ?? 1, unit: unit as CadenceUnit }, who: whoFrom(body), createdBy: memberOr(body.createdBy, null), startDate: str(body.startDate, 10) });
-        if (!created.ok) return sendJson(response, 400, { error: created.error });
-        if (lists.isDue(created.staple)) await lists.runDueStaples();
-        return sendJson(response, 200, { ok: true, staple: stapleJson(lists, lists.getStaple(created.staple.id) ?? created.staple) });
-      }
-      case "/api/lists/staples/delete":
-        return sendJson(response, lists.removeStaple(str(body.id, 64) ?? "") ? 200 : 404, { ok: true });
-      case "/api/lists/staples/skip": {
-        const staple = lists.skipStaple(str(body.id, 64) ?? "");
-        return staple ? sendJson(response, 200, { ok: true, staple: stapleJson(lists, staple) }) : sendJson(response, 404, { error: "Staple not found." });
-      }
-      case "/api/lists/new": {
+      case "/api/named-lists/new": {
         const items = Array.isArray(body.items) ? ids(body.items) : splitItems(str(body.items, 1000) ?? "");
-        const created = lists.createList({ name: str(body.name, 80) ?? "", items, who: whoFrom(body), createdBy: memberOr(body.createdBy, null), emoji: str(body.emoji, 16) });
+        const created = lists.createList({ name: str(body.name, 80) ?? "", items, createdBy: memberOr(body.createdBy, null), emoji: str(body.emoji, 16) });
         return created.ok ? sendJson(response, 200, { ok: true, list: created.list }) : sendJson(response, 400, { error: created.error });
       }
-      case "/api/lists/items": {
+      case "/api/named-lists/items": {
         const listId = str(body.listId, 64) ?? "";
         if (!lists.getList(listId)) return sendJson(response, 404, { error: "List not found." });
         const names = Array.isArray(body.names) ? ids(body.names) : splitItems(str(body.name, 200) ?? "");
         return sendJson(response, 200, { ok: true, added: lists.addItems(listId, names, null) });
       }
-      case "/api/lists/items/toggle":
+      case "/api/named-lists/items/toggle":
         return sendJson(response, lists.setItemChecked(str(body.itemId, 64) ?? "", body.checked === true) ? 200 : 404, { ok: true });
-      case "/api/lists/items/delete":
+      case "/api/named-lists/items/delete":
         return sendJson(response, lists.deleteItem(str(body.itemId, 64) ?? "") ? 200 : 404, { ok: true });
-      case "/api/lists/delete":
+      case "/api/named-lists/delete":
         return sendJson(response, lists.deleteList(str(body.listId, 64) ?? "") ? 200 : 404, { ok: true });
-      case "/api/lists/to-cart": {
+      case "/api/named-lists/to-cart": {
         if (!demoMode) return demoOnly("text “<list> to cart”");
         const list = lists.getList(str(body.listId, 64) ?? "");
         if (!list) return sendJson(response, 404, { error: "List not found." });
@@ -685,17 +595,9 @@ async function handleRoutes(context: RouteContext, request: IncomingMessage, res
 // ---------------------------------------------------------------------------
 // Claude connector tools
 
-function buildTools(store: CartStore, lists: ListsService, events: EventsService) {
+function buildTools(lists: NamedListsService, events: EventsService) {
   const iso = (ms: number) => new Date(ms).toISOString();
   const today = () => events.today();
-  const whoFromNames = (value: unknown, caller: ToolCaller): Who => {
-    if (value === undefined || value === null || value === "me") return { everyone: false, memberIds: [caller.memberId] };
-    if (value === "everyone" || value === "shared" || value === "all") return { everyone: true, memberIds: [] };
-    const names = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join(",") : typeof value === "string" ? value : "";
-    const resolved = resolveMemberNames(names, lists.members(), caller.memberId);
-    if (!resolved.length) return { everyone: false, memberIds: [caller.memberId] };
-    return resolved.length >= lists.members().length ? { everyone: true, memberIds: [] } : { everyone: false, memberIds: resolved };
-  };
   const nameOf = (id: string) => lists.memberName(id);
   const pollOut = (poll: PollView) => ({
     pollId: poll.id, title: poll.title, emoji: poll.emoji, mode: poll.mode, status: poll.status, organizer: poll.organizerId ? nameOf(poll.organizerId) : null,
@@ -712,51 +614,17 @@ function buildTools(store: CartStore, lists: ListsService, events: EventsService
 
   return [
     {
-      name: "list_staples",
-      description: "List the household's recurring grocery staples (e.g. milk every week) with who each is for and the next date it will be added to the shared cart.",
-      inputSchema: { type: "object" as const, properties: {} },
-      handler: () => ({
-        timeZone: lists.timeZone,
-        staples: lists.listStaples().map((staple) => ({ id: staple.id, item: staple.name, cadence: staple.cadence, for: staple.everyone ? "everyone" : staple.memberIds.map(nameOf), nextAddDate: staple.nextDate, lastAdded: staple.lastDate, lastResult: staple.lastStatus })),
-      }),
-    },
-    {
-      name: "add_staple",
-      description: "Add a recurring grocery staple that GroupCart adds to the shared cart on a schedule, as if the member had requested it (e.g. coffee every 2 weeks for me, paper towels monthly for everyone).",
-      mutates: true,
-      inputSchema: {
-        type: "object" as const,
-        properties: {
-          item: { type: "string", description: "Item name, e.g. \"oat milk\" or \"2 bananas\"." },
-          every: { type: "integer", minimum: 1, maximum: 52, default: 1, description: "Repeat interval count." },
-          unit: { type: "string", enum: ["day", "week", "month"], default: "week" },
-          for: { description: "\"me\" (default), \"everyone\", or a list of member first names to share with.", oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }] },
-          startDate: { type: "string", description: "First add date YYYY-MM-DD (default today)." },
-        },
-        required: ["item"],
-      },
-      handler: async (args: Record<string, unknown>, caller: ToolCaller) => {
-        const unit = (["day", "week", "month"] as const).find((candidate) => candidate === args.unit) ?? "week";
-        const created = lists.addStaple({ name: String(args.item ?? ""), cadence: { every: int(args.every) ?? 1, unit }, who: whoFromNames(args.for, caller), createdBy: caller.memberId, startDate: typeof args.startDate === "string" ? args.startDate : null });
-        if (!created.ok) return { ok: false, error: created.error };
-        let note: string | null = null;
-        if (lists.isDue(created.staple)) note = (await lists.runDueStaples()) ?? null;
-        const staple = lists.getStaple(created.staple.id) ?? created.staple;
-        return { ok: true, staple: { id: staple.id, item: staple.name, cadence: staple.cadence, for: staple.everyone ? "everyone" : staple.memberIds.map(nameOf), nextAddDate: staple.nextDate }, groupNotice: note };
-      },
-    },
-    {
       name: "list_lists",
-      description: "List the household's one-off grocery lists (e.g. \"Party run\") with their items and which are checked off or already moved to the cart.",
+      description: "List the household's one-off named grocery lists (e.g. \"Party run\", \"Movie night snacks\"; not the recurring weekly/biweekly/monthly lists) with their items and which are checked off or already moved to the cart.",
       inputSchema: { type: "object" as const, properties: { name: { type: "string", description: "Optional list name to show just that list." } } },
       handler: (args: Record<string, unknown>) => {
         const all = typeof args.name === "string" && args.name.trim() ? [lists.findList(args.name)].filter((list): list is ListView => Boolean(list)) : lists.allLists();
-        return { lists: all.map((list) => ({ id: list.id, name: list.name, for: list.everyone ? "everyone" : list.memberIds.map(nameOf), remaining: list.remaining, items: list.items.map((item) => ({ name: item.name, done: item.checked, inCart: item.carted })) })) };
+        return { lists: all.map((list) => ({ id: list.id, name: list.name, remaining: list.remaining, items: list.items.map((item) => ({ name: item.name, done: item.checked, inCart: item.carted })) })) };
       },
     },
     {
       name: "add_to_list",
-      description: "Add items to a named one-off grocery list, creating the list (shared with everyone) if it doesn't exist yet.",
+      description: "Add items to a one-off named grocery list (e.g. \"Party run\"), creating the list if it doesn't exist yet. Not for the recurring weekly/biweekly/monthly lists.",
       mutates: true,
       inputSchema: {
         type: "object" as const,
@@ -784,7 +652,7 @@ function buildTools(store: CartStore, lists: ListsService, events: EventsService
     },
     {
       name: "move_list_to_cart",
-      description: "Move every unchecked item on a one-off list into the shared grocery cart as the calling member (demo: sample catalog; live: Kroger product choices the member then picks in the group chat).",
+      description: "Move every unchecked item on a one-off named list into the shared grocery cart as the calling member, exactly as if they had texted the items (demo: sample catalog; live: Kroger product choices the member then picks in the group chat).",
       mutates: true,
       inputSchema: { type: "object" as const, properties: { list: { type: "string", description: "List name." } }, required: ["list"] },
       handler: async (args: Record<string, unknown>, caller: ToolCaller) => {
@@ -975,10 +843,10 @@ function buildTools(store: CartStore, lists: ListsService, events: EventsService
 // ---------------------------------------------------------------------------
 // Demo seed (demo mode only, once per database)
 
-async function seedDemo(store: CartStore, lists: ListsService, events: EventsService): Promise<void> {
+async function seedDemo(store: CartStore, lists: NamedListsService, events: EventsService): Promise<void> {
   if (lists.meta("demo_seeded") || events.meta("demo_seeded")) return;
   const members = store.getMembers();
-  if (lists.listStaples().length || lists.allLists().length || events.activeEvents().length || members.length < 2) {
+  if (lists.allLists().length || events.activeEvents().length || members.length < 2) {
     lists.setMeta("demo_seeded", "skipped");
     events.setMeta("demo_seeded", "skipped");
     return;
@@ -990,16 +858,8 @@ async function seedDemo(store: CartStore, lists: ListsService, events: EventsSer
   const jordan = byName("jordan", 1);
   const maya = byName("maya", 2);
   const today = lists.today();
-  const just = (id: string): Who => ({ everyone: false, memberIds: [id] });
-  const everyone: Who = { everyone: true, memberIds: [] };
 
-  lists.addStaple({ name: "Bananas", cadence: { every: 1, unit: "week" }, who: just(jordan), createdBy: jordan, startDate: today });
-  lists.addStaple({ name: "Oat milk", cadence: { every: 1, unit: "week" }, who: just(maya), createdBy: maya, startDate: addDays(today, 2) });
-  lists.addStaple({ name: "Eggs", cadence: { every: 1, unit: "week" }, who: everyone, createdBy: alex, startDate: addDays(today, 3) });
-  lists.addStaple({ name: "Coffee", cadence: { every: 2, unit: "week" }, who: { everyone: false, memberIds: [alex, jordan] }, createdBy: alex, startDate: addDays(today, 5) });
-  lists.addStaple({ name: "Paper towels", cadence: { every: 1, unit: "month" }, who: everyone, createdBy: maya, startDate: nextMonthDay(addDays(today, 1), 1) });
-
-  const pasta = lists.createList({ name: "Pasta night", items: ["Pasta", "Tomato sauce", "Parmesan", "Garlic bread"], who: everyone, createdBy: maya, emoji: "🍝" });
+  const pasta = lists.createList({ name: "Pasta night", items: ["Pasta", "Tomato sauce", "Parmesan", "Garlic bread"], createdBy: maya, emoji: "🍝" });
   if (pasta.ok) {
     const parmesan = pasta.list.items.find((item) => item.name === "Parmesan");
     if (parmesan) lists.setItemChecked(parmesan.id, true);
@@ -1029,6 +889,6 @@ async function seedDemo(store: CartStore, lists: ListsService, events: EventsSer
   const spirited = events.addIdea("movie", "Spirited Away", jordan);
   const paddington = events.findIdea("movie", "Paddington 2");
   if (spirited.ok && paddington) events.voteIdea(paddington.id, jordan);
-  console.log("Seeded demo staples, lists, events, and a movie night vote.");
+  console.log("Seeded a demo one-off list, household events, a game night, and a movie night vote.");
 }
 

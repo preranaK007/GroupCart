@@ -23,7 +23,7 @@ export const CATALOG: Product[] = [
   { id: "bread", name: "Bread", priceCents: 299, aliases: ["bread", "loaf"] },
   { id: "peanut-butter", name: "Peanut butter", priceCents: 349, aliases: ["peanut butter"] },
   { id: "apples", name: "Apples", priceCents: 299, aliases: ["apples", "apple"] },
-  // --- Lists & events: household staples and party snacks (src/lists.ts, src/eventsParse.ts) ---
+  // --- Lists & events: party snacks and household basics for one-off lists (src/namedLists.ts, src/eventsParse.ts) ---
   { id: "coffee", name: "Coffee", priceCents: 899, aliases: ["coffee", "ground coffee", "coffee beans"] },
   { id: "paper-towels", name: "Paper towels", priceCents: 799, aliases: ["paper towels", "paper towel"] },
   { id: "popcorn", name: "Popcorn", priceCents: 399, aliases: ["popcorn"] },

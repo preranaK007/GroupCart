@@ -12,7 +12,7 @@ import {
   type Recurrence, type RsvpStatus,
 } from "./eventsParse.js";
 import type { CalendarService } from "./googleCalendar.js";
-import { normalizeName, type ListView, type ListsService } from "./lists.js";
+import { normalizeName, type ListView, type NamedListsService } from "./namedLists.js";
 import type { CartStore } from "./store.js";
 
 export type EventKind = ActivityKey | "house";
@@ -133,12 +133,12 @@ export class EventsService {
   readonly #store: CartStore;
   readonly #db: DatabaseSync;
   readonly #calendar: CalendarService | undefined;
-  readonly #lists: ListsService;
+  readonly #lists: NamedListsService;
   readonly #notify: (text: string) => Promise<void>;
   readonly #now: () => number;
   readonly timeZone: string;
 
-  constructor(store: CartStore, options: { calendar?: CalendarService; lists: ListsService; timeZone: string; notify: (text: string) => Promise<void>; now?: () => number }) {
+  constructor(store: CartStore, options: { calendar?: CalendarService; lists: NamedListsService; timeZone: string; notify: (text: string) => Promise<void>; now?: () => number }) {
     this.#store = store;
     this.#db = store.database;
     this.#calendar = options.calendar;
@@ -340,7 +340,7 @@ export class EventsService {
     if (activity && options.extras !== false) {
       this.#assignTasks(id, activity.tasks, event.attendeeIds);
       const listName = detected && detected.activity.key === activity.key && detected.label !== activity.label ? `${detected.label} snacks` : activity.listName;
-      this.#lists.createList({ name: listName, items: activity.listItems, who: { everyone: true, memberIds: [] }, createdBy: actorId, emoji, eventId: id, nameSuffix: formatDay(input.date, "0000-01-01").replace(/^\w+ /, "") });
+      this.#lists.createList({ name: listName, items: activity.listItems, createdBy: actorId, emoji, eventId: id, nameSuffix: formatDay(input.date, "0000-01-01").replace(/^\w+ /, "") });
     }
     return { ok: true, event };
   }

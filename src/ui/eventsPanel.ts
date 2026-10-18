@@ -605,7 +605,7 @@ const calendarScript = String.raw`
     const cart = event.target.closest("[data-list-cart]");
     if (cart) {
       cart.disabled = true;
-      try { const result = await post("/api/lists/to-cart", { listId: cart.dataset.listCart }); toast(result.message); openEvent(currentEvent.event.id); } catch (error) { toast(error.message); cart.disabled = false; }
+      try { const result = await post("/api/named-lists/to-cart", { listId: cart.dataset.listCart }); toast(result.message); openEvent(currentEvent.event.id); } catch (error) { toast(error.message); cart.disabled = false; }
     }
   });
   $("hvDelete").addEventListener("click", async () => {
